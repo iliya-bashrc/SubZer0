@@ -2,131 +2,123 @@
 <html lang="en" dir="ltr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Sub Zero — Zero-Day Radar // Root Access Club</title>
-<meta name="description" content="Live zero-day & CVE radar. Cold, precise, real-time. Root Access Club.">
+<meta name="description" content="Live zero-day & CVE radar — 30 days of vulnerabilities, real-time updates. Root Access Club.">
+<meta property="og:title" content="❄️ Sub Zero — Zero-Day Radar">
+<meta property="og:description" content="Live CVE & zero-day radar by Root Access Club. Cold. Precise. Real-time.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#030712">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 4 42 14v20L24 44 6 34V14z' fill='none' stroke='%2300f0ff' stroke-width='2'/%3E%3Ccircle cx='24' cy='24' r='5' fill='%2300f0ff'/%3E%3C/svg%3E">
 <style>
 :root{
-  --bg:#030712; --navy:#0a1628; --ice:#00f0ff; --frost:#e0f7ff;
-  --crit1:#ff3b3b; --crit2:#ff7a00; --high:#ff5e00; --med:#f59e0b; --low:#22d3ee;
-  --glass:rgba(10,22,40,.55); --line:rgba(0,240,255,.14);
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --sans:Inter,-apple-system,'Segoe UI',sans-serif;
-  --head:'Inter Tight',Inter,sans-serif;
+  --bg:#030712;--navy:#0a1628;--ice:#00f0ff;--frost:#e0f7ff;
+  --c1:#ff3b3b;--c2:#ff7a00;--high:#ff5e00;--med:#f59e0b;--low:#22d3ee;
+  --glass:rgba(10,22,40,.55);--line:rgba(0,240,255,.14);
+  --mono:ui-monospace,'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;
+  --sans:Inter,-apple-system,'Segoe UI',Roboto,sans-serif;
 }
-*{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
 body{background:var(--bg);color:var(--frost);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 ::selection{background:rgba(0,240,255,.3)}
-/* ---------- ambient background ---------- */
-#bgfx{position:fixed;inset:0;z-index:0;pointer-events:none}
-#bgfx canvas{position:absolute;inset:0;width:100%;height:100%}
+#bgfx{position:fixed;inset:0;z-index:0;pointer-events:none;contain:strict}
+#bgfx canvas{width:100%;height:100%;display:block}
+@media(max-width:640px){#bgfx{display:none}} /* perf: no canvas particles on phones */
 .aurora{position:fixed;top:-30vh;left:-10vw;width:120vw;height:80vh;z-index:0;pointer-events:none;
-  background:radial-gradient(ellipse at 30% 40%,rgba(0,240,255,.07),transparent 60%),
-             radial-gradient(ellipse at 70% 60%,rgba(10,22,40,.6),transparent 70%);
-  animation:aurora 18s ease-in-out infinite alternate}
-@keyframes aurora{to{transform:translateY(4vh) scale(1.06)}}
-/* ---------- loader ---------- */
+  background:radial-gradient(ellipse at 30% 40%,rgba(0,240,255,.07),transparent 60%);will-change:transform}
+@media(max-width:640px){.aurora{background:radial-gradient(ellipse at 50% 0%,rgba(0,240,255,.06),transparent 60%)}}
 #loader{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:1.2rem;transition:opacity .8s ease,visibility .8s}
+  align-items:center;justify-content:center;gap:1.1rem;transition:opacity .7s,visibility .7s}
 #loader.done{opacity:0;visibility:hidden}
-#temp{font-family:var(--mono);font-size:clamp(3rem,9vw,5.5rem);font-weight:700;color:var(--ice);
-  text-shadow:0 0 40px rgba(0,240,255,.55)}
-#loadlogo{font-family:var(--head);font-weight:800;font-size:clamp(1.6rem,5vw,2.4rem);letter-spacing:.35em;
-  color:var(--frost);opacity:0;animation:frostIn 1.6s .8s forwards}
-@keyframes frostIn{0%{opacity:0;filter:blur(14px);letter-spacing:.8em}100%{opacity:1;filter:blur(0);letter-spacing:.35em}}
-#loadtag{font-family:var(--mono);font-size:.75rem;letter-spacing:.25em;color:rgba(224,247,255,.5);opacity:0;animation:frostIn 1.4s 1.5s forwards}
+#temp{font-family:var(--mono);font-size:clamp(2.6rem,10vw,5rem);font-weight:700;color:var(--ice);text-shadow:0 0 40px rgba(0,240,255,.5)}
+#loadlogo{font-weight:800;font-size:clamp(1.4rem,5vw,2.2rem);letter-spacing:.35em;opacity:0;animation:frostIn 1.6s .7s forwards}
+@keyframes frostIn{0%{opacity:0;filter:blur(12px)}100%{opacity:1;filter:blur(0)}}
+#loadtag{font-family:var(--mono);font-size:.7rem;letter-spacing:.22em;color:rgba(224,247,255,.5);opacity:0;animation:frostIn 1.4s 1.4s forwards}
 .frost-ring{position:absolute;border:1px solid rgba(0,240,255,.12);border-radius:50%;animation:spread 3s ease-out forwards}
-@keyframes spread{from{transform:scale(.1);opacity:.9}to{transform:scale(3.2);opacity:0}}
-.fog{position:absolute;bottom:0;left:0;right:0;height:40vh;pointer-events:none;
-  background:linear-gradient(to top,rgba(224,247,255,.05),transparent);animation:breath 4s ease-in-out infinite}
-@keyframes breath{50%{opacity:.4;transform:translateY(-3vh)}}
-/* ---------- shell ---------- */
-.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 clamp(1rem,3vw,2rem)}
-header{padding:clamp(1.4rem,4vw,2.6rem) 0 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
-.logo{display:flex;align-items:center;gap:.8rem}
-.logo-mark{width:44px;height:44px;flex:0 0 auto}
-h1{font-family:var(--head);font-size:clamp(1.25rem,3.5vw,1.7rem);font-weight:800;letter-spacing:.06em;
+@keyframes spread{from{transform:scale(.1);opacity:.9}to{transform:scale(3);opacity:0}}
+.fog{position:absolute;bottom:0;left:0;right:0;height:35vh;background:linear-gradient(to top,rgba(224,247,255,.05),transparent);animation:breath 4s ease-in-out infinite}
+@keyframes breath{50%{opacity:.4}}
+.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 clamp(.8rem,3vw,2rem)}
+header{padding:clamp(1.1rem,4vw,2.4rem) 0 .9rem;display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:.7rem}
+.logo-mark{width:38px;height:38px;flex:0 0 auto}
+h1{font-size:clamp(1.1rem,3.6vw,1.6rem);font-weight:800;letter-spacing:.05em;
   background:linear-gradient(90deg,var(--frost),var(--ice));-webkit-background-clip:text;background-clip:text;color:transparent}
-.sub{font-family:var(--mono);font-size:.68rem;letter-spacing:.28em;color:rgba(224,247,255,.45);margin-top:.15rem}
-.live{margin-left:auto;display:flex;align-items:center;gap:.5rem;font-family:var(--mono);font-size:.72rem;
-  color:var(--ice);border:1px solid var(--line);padding:.45rem .9rem;border-radius:999px;background:var(--glass);backdrop-filter:blur(12px)}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--ice);box-shadow:0 0 10px var(--ice);animation:pulse 1.6s infinite}
-@keyframes pulse{50%{opacity:.35;transform:scale(.8)}}
-/* stats */
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.8rem;margin:1.2rem 0}
-.stat{background:var(--glass);border:1px solid var(--line);border-radius:14px;padding:.9rem 1rem;backdrop-filter:blur(14px)}
-.stat .n{font-family:var(--mono);font-size:1.5rem;font-weight:700;color:var(--frost)}
-.stat .l{font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:rgba(224,247,255,.45);margin-top:.2rem}
-.stat.hot .n{color:var(--crit1);text-shadow:0 0 18px rgba(255,59,59,.5)}
-/* filters */
-.filters{display:flex;gap:.6rem;flex-wrap:wrap;margin:.4rem 0 1.4rem;align-items:center}
-.fbtn{font-family:var(--mono);font-size:.72rem;letter-spacing:.06em;padding:.5rem .95rem;border-radius:999px;
-  border:1px solid var(--line);background:var(--glass);color:rgba(224,247,255,.75);cursor:pointer;
-  transition:.25s;backdrop-filter:blur(10px)}
-.fbtn:hover{transform:translateY(-1px);border-color:rgba(0,240,255,.45);color:var(--ice)}
-.fbtn.on{background:rgba(0,240,255,.12);color:var(--ice);border-color:var(--ice);box-shadow:0 0 14px rgba(0,240,255,.18)}
-.search{flex:1 1 220px;min-width:180px;position:relative}
-.search input{width:100%;padding:.55rem .9rem .55rem 2.2rem;border-radius:999px;border:1px solid var(--line);
-  background:var(--glass);color:var(--frost);font-family:var(--mono);font-size:.78rem;outline:none;backdrop-filter:blur(10px)}
-.search input:focus{border-color:var(--ice);box-shadow:0 0 16px rgba(0,240,255,.15)}
-.search svg{position:absolute;left:.8rem;top:50%;transform:translateY(-50%);opacity:.5}
-/* cards */
-#feed{display:grid;gap:1rem;padding-bottom:2rem}
-.card{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:18px;
-  padding:1.15rem 1.25rem;backdrop-filter:blur(16px);overflow:hidden;
-  transition:transform .35s cubic-bezier(.2,.9,.3,1.4),box-shadow .35s,border-color .35s;
-  animation:slidein .6s cubic-bezier(.2,.9,.3,1.2) both}
-@keyframes slidein{from{opacity:0;transform:translateY(-22px) scale(.985)}to{opacity:1;transform:none}}
-.card:hover{transform:translateY(-3px) scale(1.006);border-color:rgba(0,240,255,.4);
-  box-shadow:0 14px 44px -14px rgba(0,240,255,.25)}
-.card .topline{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
-.cve{font-family:var(--mono);font-weight:700;font-size:.86rem;color:var(--ice);letter-spacing:.03em}
-.cve a{color:inherit;text-decoration:none}.cve a:hover{text-shadow:0 0 12px var(--ice)}
-.badge{font-family:var(--mono);font-size:.62rem;font-weight:700;letter-spacing:.12em;padding:.28rem .6rem;border-radius:6px;text-transform:uppercase}
-.badge.critical{background:linear-gradient(120deg,var(--crit1),var(--crit2));color:#fff;box-shadow:0 0 16px rgba(255,59,59,.45)}
+.sub{font-family:var(--mono);font-size:.64rem;letter-spacing:.26em;color:rgba(224,247,255,.45);margin-top:.12rem}
+.live{margin-left:auto;display:flex;align-items:center;gap:.45rem;font-family:var(--mono);font-size:.66rem;
+  color:var(--ice);border:1px solid var(--line);padding:.4rem .8rem;border-radius:999px;background:var(--glass)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ice);box-shadow:0 0 10px var(--ice);animation:pulse 1.6s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:.55rem;margin:1rem 0}
+@media(max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:.7rem .8rem}
+.stat .n{font-family:var(--mono);font-size:clamp(1.05rem,4vw,1.45rem);font-weight:700}
+.stat .l{font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;color:rgba(224,247,255,.45);margin-top:.15rem}
+.stat.hot .n{color:var(--c1);text-shadow:0 0 16px rgba(255,59,59,.45)}
+.toolbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.3rem 0 1.2rem;align-items:center}
+.fbtn{font-family:var(--mono);font-size:.68rem;padding:.45rem .8rem;border-radius:999px;border:1px solid var(--line);
+  background:var(--glass);color:rgba(224,247,255,.75);cursor:pointer;transition:.2s}
+.fbtn:active{transform:scale(.96)}
+.fbtn.on{background:rgba(0,240,255,.12);color:var(--ice);border-color:var(--ice)}
+.search{flex:1 1 100%;order:-1}
+@media(min-width:700px){.search{flex:1 1 200px;order:0}}
+.search input{width:100%;padding:.55rem .9rem;border-radius:999px;border:1px solid var(--line);
+  background:var(--glass);color:var(--frost);font-family:var(--mono);font-size:.76rem;outline:none}
+.search input:focus{border-color:var(--ice)}
+.sortbar{display:flex;gap:.5rem;margin-bottom:1rem}
+.sortbar .fbtn.on{border-color:var(--ice);box-shadow:0 0 10px rgba(0,240,255,.15)}
+#feed{display:grid;gap:.85rem;padding-bottom:1rem;contain:content}
+.card{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:16px;
+  padding:1rem 1.05rem;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transition:transform .25s,box-shadow .25s,border-color .25s;animation:slidein .45s both}
+@keyframes slidein{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+@media(hover:hover){.card:hover{transform:translateY(-2px);border-color:rgba(0,240,255,.4);box-shadow:0 12px 36px -12px rgba(0,240,255,.22)}}
+.topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.cve{font-family:var(--mono);font-weight:700;font-size:.82rem;color:var(--ice)}
+.cve a{color:inherit;text-decoration:none}
+.badge{font-family:var(--mono);font-size:.58rem;font-weight:700;letter-spacing:.1em;padding:.24rem .55rem;border-radius:6px;text-transform:uppercase}
+.badge.critical{background:linear-gradient(120deg,var(--c1),var(--c2));color:#fff}
 .badge.high{background:rgba(255,94,0,.16);color:var(--high);border:1px solid rgba(255,94,0,.5)}
 .badge.medium{background:rgba(245,158,11,.14);color:var(--med);border:1px solid rgba(245,158,11,.45)}
 .badge.low{background:rgba(34,211,238,.12);color:var(--low);border:1px solid rgba(34,211,238,.45)}
-.score{margin-left:auto;font-family:var(--mono);font-size:1.05rem;font-weight:700}
-.score.critical{color:var(--crit1)}.score.high{color:var(--high)}.score.medium{color:var(--med)}.score.low{color:var(--low)}
-.card h3{font-family:var(--head);font-size:1.02rem;font-weight:700;margin:.6rem 0 .35rem;color:var(--frost);line-height:1.4}
-.desc{font-size:.83rem;color:rgba(224,247,255,.66);line-height:1.55;max-width:70ch}
-.meta{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.7rem;align-items:center}
-.chip{font-family:var(--mono);font-size:.64rem;padding:.22rem .6rem;border-radius:999px;
-  border:1px solid rgba(224,247,255,.14);color:rgba(224,247,255,.55)}
+.badge.unknown{background:rgba(224,247,255,.08);color:rgba(224,247,255,.5);border:1px solid rgba(224,247,255,.2)}
+.score{margin-left:auto;font-family:var(--mono);font-size:.95rem;font-weight:700}
+.score.critical{color:var(--c1)}.score.high{color:var(--high)}.score.medium{color:var(--med)}.score.low{color:var(--low)}
+.card h3{font-size:.95rem;font-weight:700;margin:.5rem 0 .3rem;line-height:1.4}
+.desc{font-size:.8rem;color:rgba(224,247,255,.66);line-height:1.55}
+.meta{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem;align-items:center}
+.chip{font-family:var(--mono);font-size:.6rem;padding:.2rem .55rem;border-radius:999px;border:1px solid rgba(224,247,255,.14);color:rgba(224,247,255,.55)}
 .chip.src{border-color:rgba(0,240,255,.3);color:rgba(0,240,255,.8)}
-.chip.exploit{border-color:rgba(255,59,59,.5);color:var(--crit1)}
-.card.new-flash{animation:flash 1.6s ease}
-@keyframes flash{0%{box-shadow:0 0 0 rgba(0,240,255,0)}30%{box-shadow:0 0 40px rgba(0,240,255,.5);border-color:var(--ice)}}
-/* heat effect for critical/high */
-.card.hot{border-color:rgba(255,59,59,.4)}
+.chip.ref{border-color:rgba(0,240,255,.35);color:var(--ice);text-decoration:none}
+.chip.ref:hover{background:rgba(0,240,255,.12)}
+.card.hot{border-color:rgba(255,59,59,.35)}
 .card.hot::before{content:'';position:absolute;inset:-40%;pointer-events:none;
-  background:radial-gradient(ellipse at 85% 110%,rgba(255,59,59,.16),transparent 55%),
-             radial-gradient(ellipse at 10% -10%,rgba(255,122,0,.10),transparent 50%);
-  animation:heatwave 5s ease-in-out infinite}
-@keyframes heatwave{0%,100%{transform:translateY(0) scale(1);opacity:.8}50%{transform:translateY(-10px) scale(1.05);opacity:1}}
-.card.hot:hover{box-shadow:0 16px 50px -12px rgba(255,59,59,.4);border-color:rgba(255,59,59,.6)}
-.card.hot:hover{animation:rise .6s ease}
-@keyframes rise{30%{transform:translateY(-6px)}}
-.ember{position:absolute;width:4px;height:4px;border-radius:50%;background:var(--crit2);
-  box-shadow:0 0 8px var(--crit1);pointer-events:none;opacity:0}
-.card.hot .ember{animation:emberUp 3.4s linear infinite}
-@keyframes emberUp{0%{opacity:0;transform:translateY(0)}15%{opacity:.9}100%{opacity:0;transform:translateY(-120px)}}
-/* skeleton */
-.sk{height:110px;border-radius:18px;border:1px solid var(--line);background:
-  linear-gradient(100deg,var(--glass) 40%,rgba(0,240,255,.06) 50%,var(--glass) 60%);
-  background-size:200% 100%;animation:shimmer 1.4s infinite}
-@keyframes shimmer{to{background-position:-200% 0}}
-/* footer */
-footer{border-top:1px solid var(--line);margin-top:2rem;padding:2rem 0 2.6rem;text-align:center}
-footer .fbrand{font-family:var(--head);font-weight:800;letter-spacing:.12em;color:var(--frost)}
-footer .fsub{font-family:var(--mono);font-size:.72rem;letter-spacing:.2em;color:rgba(224,247,255,.5);margin:.5rem 0}
+  background:radial-gradient(ellipse at 85% 110%,rgba(255,59,59,.14),transparent 55%);animation:heat 5s ease-in-out infinite}
+@keyframes heat{50%{transform:translateY(-8px) scale(1.04)}}
+@media(hover:hover){.card.hot:hover{box-shadow:0 14px 44px -12px rgba(255,59,59,.35);border-color:rgba(255,59,59,.55)}}
+.ember{position:absolute;width:4px;height:4px;border-radius:50%;background:var(--c2);box-shadow:0 0 8px var(--c1);pointer-events:none;opacity:0;animation:emberUp 3.4s linear infinite}
+@keyframes emberUp{0%{opacity:0}15%{opacity:.9}100%{opacity:0;transform:translateY(-100px)}}
+@media(max-width:640px){.ember{display:none}} /* perf */
+#more{display:block;margin:1.2rem auto;padding:.7rem 1.6rem;border-radius:999px;border:1px solid var(--ice);
+  background:rgba(0,240,255,.08);color:var(--ice);font-family:var(--mono);font-size:.78rem;cursor:pointer}
+#more:hover{background:rgba(0,240,255,.16)}
+#err{font-family:var(--mono);font-size:.7rem;color:var(--med);text-align:center;padding:.8rem;display:none}
+footer{border-top:1px solid var(--line);margin-top:1.5rem;padding:1.8rem 0 2.4rem;text-align:center}
+.fbrand{font-weight:800;letter-spacing:.12em}
+.fsub{font-family:var(--mono);font-size:.7rem;letter-spacing:.18em;color:rgba(224,247,255,.5);margin:.45rem 0}
 footer a{color:var(--ice);text-decoration:none;border-bottom:1px dotted rgba(0,240,255,.4)}
-footer a:hover{text-shadow:0 0 10px var(--ice)}
-footer .copy{font-size:.7rem;color:rgba(224,247,255,.35);margin-top:.6rem}
-#err{font-family:var(--mono);font-size:.72rem;color:var(--med);text-align:center;padding:1rem;display:none}
-@media(max-width:640px){.live{margin-left:0}.score{margin-left:auto}}
+.copy{font-size:.66rem;color:rgba(224,247,255,.35);margin-top:.5rem}
+.toast{position:fixed;bottom:1.2rem;left:50%;transform:translateX(-50%) translateY(120%);z-index:90;
+  background:linear-gradient(120deg,rgba(255,59,59,.95),rgba(255,122,0,.95));color:#fff;font-family:var(--mono);
+  font-size:.75rem;padding:.7rem 1.2rem;border-radius:12px;box-shadow:0 10px 40px rgba(255,59,59,.5);
+  transition:transform .5s cubic-bezier(.2,.9,.3,1.3);max-width:92vw}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.sk{height:96px;border-radius:16px;border:1px solid var(--line);
+  background:linear-gradient(100deg,var(--glass) 40%,rgba(0,240,255,.05) 50%,var(--glass) 60%);
+  background-size:200% 100%;animation:shim 1.4s infinite}
+@keyframes shim{to{background-position:-200% 0}}
 </style>
 </head>
 <body>
@@ -145,214 +137,175 @@ footer .copy{font-size:.7rem;color:rgba(224,247,255,.35);margin-top:.6rem}
     <div class="logo">
       <svg class="logo-mark" viewBox="0 0 48 48" fill="none">
         <path d="M24 4 42 14v20L24 44 6 34V14L24 4z" stroke="#00f0ff" stroke-width="1.6" opacity=".85"/>
-        <path d="M24 12 34 18v12l-10 6-10-6V18l10-6z" stroke="#e0f7ff" stroke-width="1.2" opacity=".5"/>
         <circle cx="24" cy="24" r="4" fill="#00f0ff"/>
       </svg>
-      <div>
-        <h1>SUB ZERO — ZERO-DAY RADAR</h1>
-        <div class="sub">ROOT ACCESS CLUB</div>
-      </div>
+      <div><h1>SUB ZERO — ZERO-DAY RADAR</h1><div class="sub">ROOT ACCESS CLUB</div></div>
     </div>
-    <div class="live"><span class="dot"></span><span id="liveTxt">LIVE · SYNCING…</span></div>
+    <div class="live"><span class="dot"></span><span id="liveTxt">SYNCING…</span></div>
   </header>
 
   <div class="stats">
-    <div class="stat"><div class="n" id="sTotal">—</div><div class="l">Tracked CVEs</div></div>
+    <div class="stat"><div class="n" id="sTotal">—</div><div class="l">CVEs / 30d</div></div>
     <div class="stat hot"><div class="n" id="sCrit">—</div><div class="l">Critical</div></div>
     <div class="stat"><div class="n" id="sHigh">—</div><div class="l">High</div></div>
-    <div class="stat"><div class="n" id="sExp">—</div><div class="l">With References</div></div>
+    <div class="stat"><div class="n" id="sNew">—</div><div class="l">Last 24h</div></div>
   </div>
 
-  <div class="filters" id="sevFilters">
+  <div class="toolbar" id="sevFilters">
+    <div class="search"><input id="q" type="search" placeholder="search cve, vendor, keyword…" autocomplete="off"></div>
     <button class="fbtn on" data-sev="all">ALL</button>
     <button class="fbtn" data-sev="critical">CRITICAL</button>
     <button class="fbtn" data-sev="high">HIGH</button>
-    <button class="fbtn" data-sev="medium">MEDIUM</button>
+    <button class="fbtn" data-sev="medium">MED</button>
     <button class="fbtn" data-sev="low">LOW</button>
-    <div class="search">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e0f7ff" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
-      <input id="q" type="text" placeholder="search cve, vendor, keyword…">
-    </div>
+  </div>
+  <div class="sortbar">
+    <button class="fbtn on" data-sort="chrono">↓ OLDEST → NEWEST</button>
+    <button class="fbtn" data-sort="hot">🔥 HOTTEST FIRST</button>
+    <button class="fbtn" data-sort="new">NEWEST FIRST</button>
   </div>
 
   <div id="feed"></div>
+  <button id="more">LOAD MORE ▾</button>
   <div id="err"></div>
 
   <footer>
     <div class="fbrand">SUB ZERO — ZERO-DAY RADAR</div>
-    <div class="fsub">ROOT ACCESS CLUB</div>
-    <div class="fsub">Telegram: <a href="https://t.me/RootAccessClub" target="_blank" rel="noopener">@RootAccessClub</a></div>
-    <div class="copy">© Root Access Club. All rights reserved. · Data: NVD (NIST) / CIRCL</div>
+    <div class="fsub">ROOT ACCESS CLUB · <a href="https://t.me/RootAccessClub" target="_blank" rel="noopener">@RootAccessClub</a></div>
+    <div class="copy">© Root Access Club. All rights reserved. · Data: NVD (NIST)</div>
   </footer>
 </div>
+<div class="toast" id="toast"></div>
 
 <script>
-/* ============ data layer (swap for real backend later) ============ */
-const API = {
-  nvd: 'https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=40&pubStartDate=',
-  circl: 'https://cve.circl.lu/api/last/'
-};
-const SEV_ORDER = {critical:0, high:1, medium:2, low:3, unknown:4};
-function sevOf(score){ if(score==null) return 'unknown';
-  if(score>=9) return 'critical'; if(score>=7) return 'high'; if(score>=4) return 'medium'; return 'low'; }
+'use strict';
+/* ================= data layer ================= */
+const PAGE = 40;                    // cards per "load more"
+const SEV = {critical:0,high:1,medium:2,low:3,unknown:4};
+let ALL=[], seen=new Set(), shown=40, state={sev:'all',q:'',sort:'chrono'};
 
-function parseNVD(json){
-  return (json.vulnerabilities||[]).map(v=>{ const c=v.cve;
-    let score=null, vec='';
-    const m = c.metrics?.cvssMetricV31?.[0] || c.metrics?.cvssMetricV30?.[0] || c.metrics?.cvssMetricV2?.[0];
-    if(m){ score=m.cvssData.baseScore; vec=m.cvssData.vectorString||''; }
-    const desc = (c.descriptions||[]).find(d=>d.lang==='en')?.value||'No description.';
-    const vendors = new Set();
-    (c.configurations||[]).forEach(n=>n.nodes.forEach(nd=>nd.cpeMatch.forEach(cm=>{
-      const parts=(cm.criteria||'').split(':'); if(parts[3]) vendors.add(parts[3]);
-    })));
-    const refs = (c.references||[]).map(r=>r.url).filter(Boolean);
-    return { id:c.id, title:desc.split('. ')[0].slice(0,110), desc, score, sev:sevOf(score),
-      published:c.published, vendors:[...vendors].slice(0,6), refs:refs.slice(0,5),
-      sources:['NVD','CVE.org'] };
-  });
-}
-let seen = new Set(), allCVEs = [], state = {sev:'all', q:''};
-
-async function fetchCVEs(){
-  // 1) fast path: pre-fetched data.json (refreshed by GitHub Action every 15 min)
+async function loadData(){
+  // 1) pre-fetched data.json (GitHub Action refreshes every 15 min)
   try{
-    const r = await fetch('data.json', {cache:'no-store'});
-    if(r.ok){
-      const j = await r.json();
-      if(j.cves && j.cves.length) return j.cves;
-    }
-  }catch(e){ /* fall through to live NVD */ }
-  // 2) fallback: live NVD from the browser
-  const end = new Date();
-  const start = new Date(end.getTime() - 7*864e5);
-  const fmt = d => d.toISOString().slice(0,19) + '.000Z';
-  const url = API.nvd + fmt(start) + '&pubEndDate=' + fmt(end);
-  const r = await fetch(url);
-  if(!r.ok) throw new Error('NVD '+r.status);
-  return parseNVD(await r.json());
+    const r=await fetch('data.json?t='+Date.now(),{cache:'no-store'});
+    if(r.ok){const j=await r.json(); if(j.cves&&j.cves.length) return j.cves;}
+  }catch(e){}
+  // 2) live NVD fallback (last 30d)
+  try{
+    const now=new Date(), start=new Date(now.getTime()-30*864e5);
+    const f=d=>d.toISOString().slice(0,19)+'.000Z';
+    const r=await fetch('https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=120&pubStartDate='+f(start)+'&pubEndDate='+f(now));
+    if(r.ok) return parseNVD(await r.json());
+  }catch(e){}
+  throw new Error('all sources failed');
 }
+function parseNVD(json){
+  return (json.vulnerabilities||[]).map(v=>{const c=v.cve;
+    const m=(c.metrics&&(c.metrics.cvssMetricV31||c.metrics.cvssMetricV30||c.metrics.cvssMetricV2)||[{}])[0];
+    const score=m.cvssData?m.cvssData.baseScore:null;
+    const desc=(c.descriptions||[]).find(d=>d.lang==='en');
+    const vendors=new Set();
+    (c.configurations||[]).forEach(n=>n.nodes.forEach(nd=>nd.cpeMatch.forEach(cm=>{
+      const p=(cm.criteria||'').split(':'); if(p[3])vendors.add(p[3]);})));
+    return {id:c.id,title:(desc?desc.value:'No description.').split('. ')[0].slice(0,110),
+      desc:desc?desc.value:'No description.',score,sev:sevOf(score),published:c.published,
+      vendors:[...vendors].slice(0,6),refs:(c.references||[]).map(r=>r.url).filter(Boolean).slice(0,4),
+      sources:['NVD']};});
+}
+const sevOf=s=>s==null?'unknown':s>=9?'critical':s>=7?'high':s>=4?'medium':'low';
 
-/* ============ rendering ============ */
-const feed = document.getElementById('feed');
-const HOT_EMBERS = c => {
-  if(c.sev!=='critical' && c.sev!=='high') return '';
-  let s=''; for(let i=0;i<4;i++){ const l=12+Math.random()*76, d=(Math.random()*3).toFixed(2), w=(1.6+Math.random()*2).toFixed(1);
-    s+=`<span class="ember" style="left:${l}%;bottom:8px;animation-delay:${d}s;width:${w}px;height:${w}px"></span>`; }
-  return s;
-};
-function cardHTML(c, isNew){
-  const d = new Date(c.published);
-  return `<article class="card ${c.sev==='critical'||c.sev==='high'?'hot':''} ${isNew?'new-flash':''}">
-    ${HOT_EMBERS(c)}
+/* ================= render ================= */
+const feed=document.getElementById('feed'), moreBtn=document.getElementById('more');
+const esc=s=>String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function cardHTML(c){
+  const d=new Date(c.published||0);
+  const hot=c.sev==='critical'||c.sev==='high';
+  const embers=hot&&innerWidth>640?[0,1,2].map(i=>`<span class="ember" style="left:${15+i*25+Math.random()*10}%;bottom:8px;animation-delay:${(Math.random()*3).toFixed(2)}s"></span>`).join(''):'';
+  return `<article class="card ${hot?'hot':''}">
+    ${embers}
     <div class="topline">
-      <span class="cve"><a href="https://nvd.nist.gov/vuln/detail/${c.id}" target="_blank" rel="noopener">${c.id}</a></span>
+      <span class="cve"><a href="https://nvd.nist.gov/vuln/detail/${c.id}" target="_blank" rel="noopener">${esc(c.id)}</a></span>
       <span class="badge ${c.sev}">${c.sev}</span>
-      ${c.exploit?'<span class="chip exploit">PUBLIC EXPLOIT</span>':''}
       <span class="score ${c.sev}">${c.score!=null?c.score:'N/A'}</span>
     </div>
-    <h3>${c.title}</h3>
-    <p class="desc">${c.desc.slice(0,240)}${c.desc.length>240?'…':''}</p>
+    <h3>${esc(c.title)}</h3>
+    <p class="desc">${esc(c.desc.slice(0,220))}${c.desc.length>220?'…':''}</p>
     <div class="meta">
-      <span class="chip">📅 ${d.toISOString().slice(0,10)}</span>
-      ${c.vendors.slice(0,4).map(v=>`<span class="chip">${v}</span>`).join('')}
-      ${c.sources.map(s=>`<span class="chip src">${s}</span>`).join('')}
-      ${c.refs.length?`<span class="chip">${c.refs.length} refs</span>`:''}
+      <span class="chip">${d.toISOString().slice(0,10)}</span>
+      ${c.vendors.slice(0,4).map(v=>`<span class="chip">${esc(v)}</span>`).join('')}
+      ${c.refs.length?`<a class="chip ref" href="${esc(c.refs[0])}" target="_blank" rel="noopener">↗ ref</a>`:''}
+      ${c.sources.map(s=>`<span class="chip src">${esc(s)}</span>`).join('')}
     </div>
   </article>`;
 }
-function sortFeed(list){
-  return list.slice().sort((a,b)=>{
-    if(a.sev!==b.sev) return SEV_ORDER[a.sev]-SEV_ORDER[b.sev];
-    return new Date(b.published)-new Date(a.published);
-  });
+function currentList(){
+  let l=ALL.filter(c=>(state.sev==='all'||c.sev===state.sev)&&
+    (!state.q||(c.id+' '+c.title+' '+c.desc+' '+c.vendors.join(' ')).toLowerCase().includes(state.q)));
+  if(state.sort==='chrono') l.sort((a,b)=>new Date(a.published)-new Date(b.published));
+  else if(state.sort==='new') l.sort((a,b)=>new Date(b.published)-new Date(a.published));
+  else l.sort((a,b)=>SEV[a.sev]-SEV[b.sev]||new Date(b.published)-new Date(a.published));
+  return l;
 }
 function render(){
-  let list = allCVEs.filter(c=> (state.sev==='all'||c.sev===state.sev) &&
-    (!state.q || (c.id+' '+c.title+' '+c.desc+' '+c.vendors.join(' ')).toLowerCase().includes(state.q)));
-  list = sortFeed(list);
-  feed.innerHTML = list.length ? list.map(c=>cardHTML(c,false)).join('')
-    : '<div id="err" style="display:block">no results match your filters.</div>';
-  const s = sev => allCVEs.filter(c=>c.sev===sev).length;
-  document.getElementById('sTotal').textContent = allCVEs.length;
-  document.getElementById('sCrit').textContent = s('critical');
-  document.getElementById('sHigh').textContent = s('high');
-  document.getElementById('sExp').textContent = allCVEs.filter(c=>c.refs.length).length;
+  const l=currentList();
+  feed.innerHTML=l.slice(0,shown).map(cardHTML).join('');
+  moreBtn.style.display=l.length>shown?'block':'none';
+  moreBtn.textContent=`LOAD MORE (${l.length-shown} remaining) ▾`;
+  const s=sev=>ALL.filter(c=>c.sev===sev).length;
+  document.getElementById('sTotal').textContent=ALL.length;
+  document.getElementById('sCrit').textContent=s('critical');
+  document.getElementById('sHigh').textContent=s('high');
+  document.getElementById('sNew').textContent=ALL.filter(c=>Date.now()-new Date(c.published)<864e5).length;
 }
-function mergeCVEs(fresh){
-  const newOnes = fresh.filter(c=>!seen.has(c.id));
-  if(!newOnes.length) return false;
-  newOnes.forEach(c=>seen.add(c.id));
-  const criticalDrop = newOnes.some(c=>c.sev==='critical');
-  allCVEs = [...newOnes, ...allCVEs];
-  if(document.readyState && !document.hidden){
-    // slide-in new cards on top, then rerender whole list hot-first
-    const frag = sortFeed(newOnes).map(c=>cardHTML(c,true)).join('');
-    feed.insertAdjacentHTML('afterbegin', frag);
-    setTimeout(render, 1400);
-  } else render();
-  return criticalDrop;
+function merge(fresh){
+  const nw=fresh.filter(c=>!seen.has(c.id));
+  nw.forEach(c=>seen.add(c.id));
+  ALL=nw.concat(ALL);
+  render();
+  if(nw.length&&!document.hidden) toast(`${nw.length} new CVE${nw.length>1?'s':''} — feed updated`);
+  if(nw.some(c=>c.sev==='critical')) toast('🔥 CRITICAL CVE DETECTED — '+nw.find(c=>c.sev==='critical').id,true);
 }
-/* skeleton */
-feed.innerHTML = Array(5).fill('<div class="sk"></div>').join('');
-
-/* ============ live loop ============ */
-async function poll(first){
-  try{
-    const fresh = await fetchCVEs();
-    const crit = mergeCVEs(fresh);
-    document.getElementById('liveTxt').textContent = 'LIVE · '+new Date().toLocaleTimeString();
-    document.getElementById('err').style.display='none';
-    if(crit && !first) document.title = '🔥 CRITICAL CVE — SUB ZERO';
-  }catch(e){
-    const err=document.getElementById('err');
-    err.style.display='block'; err.textContent='⚠ feed temporarily unavailable — retrying…';
-    setTimeout(()=>{ if(!allCVEs.length) err.textContent='⚠ upstream feed unreachable. check connection.'; },3000);
-  }
+function toast(msg,crit){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.style.background=crit?'':'linear-gradient(120deg,rgba(0,240,255,.9),rgba(0,120,255,.9))';
+  t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),4000);
 }
-poll(true);
-setInterval(()=>poll(false), 40000);
 
-/* ============ filters ============ */
-document.getElementById('sevFilters').addEventListener('click', e=>{
-  const b=e.target.closest('.fbtn'); if(!b) return;
-  document.querySelectorAll('.fbtn').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on'); state.sev=b.dataset.sev; render();
-});
-document.getElementById('q').addEventListener('input', e=>{ state.q=e.target.value.toLowerCase(); render(); });
+/* ================= live loop (40s) ================= */
+async function poll(){try{merge(await loadData());
+  document.getElementById('liveTxt').textContent='LIVE · '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('err').style.display='none';
+}catch(e){const er=document.getElementById('err');er.style.display='block';er.textContent='⚠ feed unreachable — retrying…';}}
+moreBtn.onclick=()=>{shown+=PAGE;render();};
+document.getElementById('sevFilters').addEventListener('click',e=>{const b=e.target.closest('.fbtn');if(!b)return;
+  document.querySelectorAll('#sevFilters .fbtn').forEach(x=>x.classList.remove('on'));b.classList.add('on');state.sev=b.dataset.sev;render();});
+document.querySelector('.sortbar').addEventListener('click',e=>{const b=e.target.closest('.fbtn');if(!b)return;
+  document.querySelectorAll('.sortbar .fbtn').forEach(x=>x.classList.remove('on'));b.classList.add('on');state.sort=b.dataset.sort;render();});
+document.getElementById('q').addEventListener('input',e=>{state.q=e.target.value.toLowerCase();render();});
 
-/* ============ loader sequence ============ */
-(function loader(){
-  const box=document.getElementById('loader'), temp=document.getElementById('temp');
-  let t=0; const target=-47, dur=2600, start=performance.now();
-  for(let i=0;i<5;i++){ const r=document.createElement('div'); r.className='frost-ring';
-    r.style.cssText+=`width:${120+i*70}px;height:${120+i*70}px;animation-delay:${i*.45}s`;
-    box.appendChild(r); }
-  function tick(now){ const p=Math.min(1,(now-start)/dur);
-    temp.textContent=Math.round(target*p)+'°C';
-    if(p<1) requestAnimationFrame(tick); else setTimeout(()=>box.classList.add('done'),300); }
-  requestAnimationFrame(tick);
-  setTimeout(()=>box.classList.add('done'), 3400); // safety
-})();
+/* init */
+feed.innerHTML=Array(4).fill('<div class="sk"></div>').join('');
+poll();setInterval(poll,40000);
 
-/* ============ ambient frost particles ============ */
-(function fx(){
-  const cv=document.getElementById('particles'), ctx=cv.getContext('2d');
-  let W,H,P=[];
-  function resize(){ W=cv.width=innerWidth; H=cv.height=innerHeight; }
-  addEventListener('resize',resize); resize();
-  const N = Math.min(90, Math.floor(W*H/16000));
-  for(let i=0;i<N;i++) P.push({x:Math.random()*W,y:Math.random()*H,r:.6+Math.random()*1.8,
-    s:.15+Math.random()*.5,o:.08+Math.random()*.3,drift:Math.random()*2-1});
-  (function loop(){
-    ctx.clearRect(0,0,W,H);
-    P.forEach(p=>{ p.y-=p.s; p.x+=p.drift*.2;
-      if(p.y<-5){p.y=H+5;p.x=Math.random()*W}
-      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7);
-      ctx.fillStyle=`rgba(0,240,255,${p.o})`; ctx.fill(); });
-    requestAnimationFrame(loop);
-  })();
-})();
+/* ================= loader ================= */
+(function(){const box=document.getElementById('loader'),temp=document.getElementById('temp');
+let done=false;const target=-47,dur=2500,t0=performance.now();
+for(let i=0;i<4;i++){const r=document.createElement('div');r.className='frost-ring';
+r.style.cssText=`width:${110+i*60}px;height:${110+i*60}px;animation-delay:${i*.4}s`;box.appendChild(r);}
+(function tick(now){const p=Math.min(1,(now-t0)/dur);temp.textContent=Math.round(target*p)+'°C';
+if(p<1&&!done)requestAnimationFrame(tick);else if(!done){done=true;setTimeout(()=>box.classList.add('done'),300);}})(t0);
+setTimeout(()=>{done=true;box.classList.add('done');},3200);})();
+
+/* ================= particles (desktop only, throttled) ================= */
+(function(){if(matchMedia('(max-width:640px)').matches)return;
+const cv=document.getElementById('particles'),ctx=cv.getContext('2d',{alpha:true});
+let W,H,P=[];const N=60;
+function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight;}
+addEventListener('resize',rs);rs();
+for(let i=0;i<N;i++)P.push({x:Math.random()*W,y:Math.random()*H,r:.6+Math.random()*1.6,s:.1+Math.random()*.4,o:.06+Math.random()*.25,d:Math.random()*2-1});
+let last=0;(function loop(t){requestAnimationFrame(loop);if(t-last<33)return;last=t;
+ctx.clearRect(0,0,W,H);P.forEach(p=>{p.y-=p.s;p.x+=p.d*.15;if(p.y<-5){p.y=H+5;p.x=Math.random()*W}
+ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fillStyle=`rgba(0,240,255,${p.o})`;ctx.fill();});})(0);})();
 </script>
 </body>
 </html>
