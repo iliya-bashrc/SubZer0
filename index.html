@@ -215,6 +215,15 @@ function parseNVD(json){
 let seen = new Set(), allCVEs = [], state = {sev:'all', q:''};
 
 async function fetchCVEs(){
+  // 1) fast path: pre-fetched data.json (refreshed by GitHub Action every 15 min)
+  try{
+    const r = await fetch('data.json', {cache:'no-store'});
+    if(r.ok){
+      const j = await r.json();
+      if(j.cves && j.cves.length) return j.cves;
+    }
+  }catch(e){ /* fall through to live NVD */ }
+  // 2) fallback: live NVD from the browser
   const end = new Date();
   const start = new Date(end.getTime() - 7*864e5);
   const fmt = d => d.toISOString().slice(0,19) + '.000Z';
