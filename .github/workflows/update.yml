@@ -1,23 +1,48 @@
-name: Update CVE data
+name: Refresh vulnerability feed
+
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "35 * * * *"
   workflow_dispatch:
+
 permissions:
   contents: write
+
+concurrency:
+  group: vulnerability-feed-refresh
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
-      - run: pip install requests
-      - run: python scripts/update_data.py
-      - name: Commit if changed
+      - name: Check out the Pages source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run feed pipeline tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Collect and validate the complete 30-day feed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/update_data.py
+
+      - name: Publish changed snapshot to the Pages source branch
         run: |
-          git config user.name "subzero-bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add data.json
-          git diff --cached --quiet || git commit -m "refresh CVE data $(date -u +%FT%TZ)"
-          git push
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data
+          if ! git diff --cached --quiet; then
+            git commit -m "Refresh CVE feed $(date -u +%FT%TZ)"
+            git push origin HEAD:main
+          else
+            echo "Feed snapshot unchanged; no commit required."
+          fi
