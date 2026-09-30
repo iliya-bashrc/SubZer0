@@ -490,16 +490,20 @@
     return `<span class="product-chip"><strong>${esc(name)}</strong>${item.versions ? ` · ${esc(item.versions)}` : ''}</span>`;
   }
 
-  function cardHtml(record, index) {
+  function cardAgeVividness(record) {
+    const timestamp = parseTime(record.activity_at) || parseTime(record.window_date) || parseTime(record.published);
+    if (timestamp == null) return null;
+    const ageDays = Math.max(0, Math.min(30, (Date.now() - timestamp) / 86_400_000));
+    return Math.round(100 - (ageDays / 30) * 68);
+  }
+
+  function cardHtml(record) {
     const id = cveId(record.id);
     if (!id) return '';
     const scoreValue = record.score == null || !Number.isFinite(Number(record.score)) ? null : Number(record.score);
     const severity = cvssSeverity(scoreValue);
-    const bandHeat = { critical: 0.95, high: 0.75, medium: 0.5, low: 0.28, unknown: 0.06 }[severity];
-    const heat = scoreValue == null ? bandHeat : Math.max(bandHeat * 0.72, Math.min(1, scoreValue / 10));
-    const mix = Math.round(32 + heat * 49);
-    const washMix = Math.round(heat * 11);
-    const glow = Math.min(0.72, 0.12 + heat * 0.5).toFixed(2);
+    const ageVividness = cardAgeVividness(record);
+    const ageStyle = ageVividness == null ? '' : ` style="--age-vividness:${ageVividness}%"`;
     const primary = safeUrl(record.primary_url) || `https://www.cve.org/CVERecord?id=${encodeURIComponent(id)}`;
     const products = (record.affected || []).slice(0, 2).map(cardProduct).join('');
     const sources = (record.sources || []).map(sourceName).join(' · ') || 'CVE record';
@@ -515,7 +519,7 @@
       : '<span class="epss-chip unavailable" title="No EPSS score is present; this is not a zero probability"><i class="epss-dot"></i><strong>EPSS</strong><b>—</b><small>NOT AVAILABLE</small></span>';
     const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
     const share = telegramShareUrl(record, id);
-    return `<article class="cve-card severity-${severity}" style="--heat:${heat.toFixed(2)};--mix:${mix}%;--wash-mix:${washMix}%;--glow-opacity:${glow};animation-delay:${Math.min(index, 5) * 18}ms">
+    return `<article class="cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}"${ageStyle}>
       <div class="card-head"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a>
         <span class="severity-badge ${esc(severity)}">${esc(severityLabel)}</span>${record.kev ? '<span class="kev-badge" title="Listed in the CISA Known Exploited Vulnerabilities catalog">CISA KEV · LISTED</span>' : ''}
         <span class="cvss-score"><span>${esc(score)}</span><small>CVSS · SEVERITY</small></span></div>
