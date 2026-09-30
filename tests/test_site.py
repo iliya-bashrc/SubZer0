@@ -11,7 +11,7 @@ class StaticSiteTests(unittest.TestCase):
     def test_accessible_dashboard_controls_and_detail_dialog_exist(self):
         for element_id in (
             "search-input", "date-from", "date-to", "apply-dates", "severity-filters",
-            "sort-select", "load-more", "detail-dialog", "detail-content", "feed-status",
+            "sort-select", "load-more", "detail-dialog", "detail-content", "feed-status", "epss-freshness",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', HTML)
@@ -22,9 +22,20 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn('href="https://t.me/RootAccessClub"', HTML)
         self.assertIn('@RootAccessClub', HTML)
         self.assertIn('© RootAccessClub', HTML)
+        self.assertIn('https://img.shields.io/badge/Telegram-%40RootAccessClub', (ROOT / "README.md").read_text(encoding="utf-8"))
         self.assertIn('UNVERIFIED', HTML + JS)
         self.assertIn('NOT PUSH', HTML)
         self.assertIn('NVD API but is not endorsed or certified by the NVD', HTML)
+
+    def test_severity_probability_exploitation_and_poc_are_separate(self):
+        for label in ("CVSS / SEVERITY", "EPSS / PROBABILITY", "CISA KEV / EVIDENCE", "GITHUB PoC / LEAD"):
+            with self.subTest(label=label):
+                self.assertIn(label, HTML)
+        self.assertIn("EPSS / 30-DAY PROBABILITY", JS)
+        self.assertIn("GitHub PoC search: unverified", JS)
+        self.assertIn("t.me/share/url", JS)
+        self.assertIn("score_date", JS)
+        self.assertIn("EPSS is optional enrichment", JS)
 
     def test_responsive_layout_and_reduced_motion_are_present(self):
         self.assertIn('@media(max-width:560px)', CSS)

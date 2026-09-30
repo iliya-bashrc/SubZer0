@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -162,6 +163,95 @@ class NormalizeAndMergeTests(unittest.TestCase):
         }}]
         records = feed.build_records(nvd, [], [], self.start, self.end)
         self.assertEqual(records, [])
+
+    def test_github_advisory_label_is_not_cvss_when_no_numeric_score_exists(self):
+        advisory = {
+            "ghsa_id": "GHSA-no-cvss",
+            "cve_id": "CVE-2026-3002",
+            "published_at": "2026-09-10T11:00:00Z",
+            "summary": "An advisory with a severity label but no numeric score",
+            "severity": "critical",
+            "cvss_severities": {},
+        }
+        record = feed.build_records([], [advisory], [], self.start, self.end)[0]
+        self.assertIsNone(record["score"])
+        self.assertEqual(record["sev"], "unknown")
+
+
+class EpssTests(unittest.TestCase):
+    def test_csv_parser_reads_published_score_date_and_filters_to_requested_ids(self):
+        csv_text = (
+            "#model_version:v2026.06.15,score_date:2026-09-29T12:00:22Z\n"
+            "cve,epss,percentile\n"
+            "CVE-2026-0101,0.05000,0.93000\n"
+            "CVE-2026-0102,0.00001,0.20000\n"
+        )
+        scores, score_date, updated_at = feed.parse_epss_csv(StringIO(csv_text), {"CVE-2026-0101"})
+        self.assertEqual(score_date, "2026-09-29")
+        self.assertEqual(updated_at, "2026-09-29T12:00:22Z")
+        self.assertEqual(scores, {"CVE-2026-0101": {"score": 0.05, "percentile": 0.93}})
+
+    def test_api_lookup_only_requests_missing_cves_and_parses_probability(self):
+        calls = []
+
+        def request(url, headers=None):
+            calls.append(url)
+            return {"data": [{"cve": "CVE-2026-0103", "epss": "0.25", "percentile": "0.98"}]}, {}
+
+        scores = feed.fetch_epss_api({"CVE-2026-0103"}, request)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("CVE-2026-0103", calls[0])
+        self.assertEqual(scores["CVE-2026-0103"], {"score": 0.25, "percentile": 0.98})
+
+    def test_recent_cache_reuses_existing_scores_and_looks_up_only_new_ids(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "data"
+            output.mkdir()
+            feed._write_json(output / "epss.json", {
+                "schema_version": 1,
+                "updated_at": "2026-09-30T00:00:00Z",
+                "checked_at": "2026-09-30T00:00:00Z",
+                "score_date": "2026-09-29",
+                "source_updated_at": "2026-09-29T12:00:22Z",
+                "scores": {"CVE-2026-0101": {"score": 0.05, "percentile": 0.93}},
+            })
+
+            def api_request(url, headers=None):
+                self.assertIn("CVE-2026-0102", url)
+                return {"data": [{"cve": "CVE-2026-0102", "epss": "0.4", "percentile": "0.99"}]}, {}
+
+            def unexpected_csv(_):
+                raise AssertionError("A recently checked daily CSV should be reused")
+
+            records = [{"id": "CVE-2026-0101"}, {"id": "CVE-2026-0102"}]
+            snapshot, status = feed.build_epss_snapshot(
+                records,
+                output,
+                datetime(2026, 9, 30, 1, tzinfo=timezone.utc),
+                unexpected_csv,
+                api_request,
+            )
+            self.assertTrue(status["ok"])
+            self.assertEqual(snapshot["scores"]["CVE-2026-0101"]["score"], 0.05)
+            self.assertEqual(snapshot["scores"]["CVE-2026-0102"]["score"], 0.4)
+
+    def test_failed_optional_epss_does_not_raise_or_claim_a_zero_score(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "data"
+            output.mkdir()
+
+            def unavailable(_):
+                raise RuntimeError("offline")
+
+            snapshot, status = feed.build_epss_snapshot(
+                [{"id": "CVE-2026-0104"}],
+                output,
+                datetime(2026, 9, 30, 1, tzinfo=timezone.utc),
+                unavailable,
+            )
+            self.assertFalse(status["ok"])
+            self.assertEqual(status["records"], 1)
+            self.assertEqual(snapshot["scores"], {})
 
 
 class SnapshotTests(unittest.TestCase):

@@ -8,6 +8,9 @@ day so the browser can load recent records first on slower devices.
 from __future__ import annotations
 
 import argparse
+import csv
+import gzip
+import io
 import json
 import os
 import re
@@ -28,6 +31,8 @@ DEFAULT_OUTPUT = ROOT / "data"
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 GITHUB_API = "https://api.github.com/advisories"
 CISA_KEV = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+EPSS_CSV = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+EPSS_API = "https://api.first.org/data/v1/epss"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
 MAX_NVD_PAGE = 2000
 NVD_PAGE_PAUSE_SECONDS = 6
@@ -38,6 +43,7 @@ SOURCE_CREDITS = [
     {"name": "GitHub Security Advisory Database", "url": "https://github.com/advisories"},
     {"name": "CISA Known Exploited Vulnerabilities catalog", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"},
 ]
+EPSS_SOURCE = {"name": "FIRST EPSS", "url": "https://www.first.org/epss/data"}
 
 
 class FeedError(RuntimeError):
@@ -206,6 +212,93 @@ def fetch_kev(request_fn: Callable[..., tuple[Any, Any]] = request_json) -> tupl
         raise FeedError("CISA returned an unexpected KEV response shape")
     items = payload["vulnerabilities"]
     return items, int(payload.get("count", len(items)))
+
+
+def parse_epss_csv(stream: Any, allowed_cves: set[str] | None = None) -> tuple[dict[str, dict[str, float]], str, str]:
+    """Read the official daily EPSS CSV, retaining only the requested CVE IDs."""
+    comments: list[str] = []
+
+    def data_lines():
+        for line in stream:
+            if line.startswith("#"):
+                comments.append(line.strip())
+            elif line.strip():
+                yield line
+
+    reader = csv.DictReader(data_lines())
+    if not reader.fieldnames or not {"cve", "epss", "percentile"}.issubset(set(reader.fieldnames)):
+        raise FeedError("FIRST EPSS returned an unexpected CSV header")
+    metadata = " ".join(comments)
+    match = re.search(r"score_date:([^,\s]+)", metadata, re.I)
+    source_updated_at = match.group(1) if match else ""
+    if not source_updated_at or not parse_datetime(source_updated_at):
+        raise FeedError("FIRST EPSS CSV did not provide a valid score_date")
+    scores: dict[str, dict[str, float]] = {}
+    rows_seen = 0
+    for row in reader:
+        cve_id = _cve_id(row.get("cve"))
+        if not cve_id:
+            continue
+        rows_seen += 1
+        if allowed_cves is not None and cve_id not in allowed_cves:
+            continue
+        try:
+            score = float(row["epss"])
+            percentile = float(row["percentile"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= score <= 1 and 0 <= percentile <= 1:
+            scores[cve_id] = {"score": score, "percentile": percentile}
+    if rows_seen == 0:
+        raise FeedError("FIRST EPSS CSV contained no valid CVE rows")
+    score_date = source_updated_at[:10]
+    return scores, score_date, source_updated_at
+
+
+def fetch_epss_csv(allowed_cves: set[str] | None = None) -> tuple[dict[str, dict[str, float]], str, str]:
+    """Stream FIRST's compressed current-day CSV; its API is not used for bulk sync."""
+    request = urllib.request.Request(EPSS_CSV, headers={"User-Agent": USER_AGENT, "Accept": "application/gzip, text/csv"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            with gzip.GzipFile(fileobj=response) as compressed:
+                with io.TextIOWrapper(compressed, encoding="utf-8", newline="") as stream:
+                    return parse_epss_csv(stream, allowed_cves)
+    except (OSError, EOFError, urllib.error.URLError, gzip.BadGzipFile) as exc:
+        raise FeedError(f"Could not read FIRST EPSS daily data: {exc}") from exc
+
+
+def fetch_epss_api(cve_ids: set[str], request_fn: Callable[..., tuple[Any, Any]] = request_json) -> dict[str, dict[str, float]]:
+    """Look up small batches of new CVEs; FIRST limits the cve parameter to 2000 characters."""
+    ids = sorted(cve_ids)
+    batches: list[list[str]] = []
+    batch: list[str] = []
+    for cve_id in ids:
+        candidate = batch + [cve_id]
+        if batch and len(",".join(candidate)) > 1850:
+            batches.append(batch)
+            batch = [cve_id]
+        else:
+            batch = candidate
+    if batch:
+        batches.append(batch)
+    output: dict[str, dict[str, float]] = {}
+    for chunk in batches:
+        query = urllib.parse.urlencode({"cve": ",".join(chunk)})
+        payload, _ = request_fn(f"{EPSS_API}?{query}", headers={"Accept": "application/json"})
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            raise FeedError("FIRST EPSS API returned an unexpected response shape")
+        for item in payload["data"]:
+            cve_id = _cve_id(item.get("cve"))
+            if cve_id not in cve_ids:
+                continue
+            try:
+                score = float(item["epss"])
+                percentile = float(item["percentile"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 <= score <= 1 and 0 <= percentile <= 1:
+                output[cve_id] = {"score": score, "percentile": percentile}
+    return output
 
 
 def severity_for(score: float | int | None) -> str:
@@ -436,10 +529,6 @@ def build_records(
         if record["score"] is None and scores:
             record["score"] = max(scores)
             record["sev"] = severity_for(record["score"])
-        elif record["sev"] == "unknown":
-            advisory_severity = str(advisory.get("severity") or "unknown").lower()
-            if advisory_severity in SEVERITY_ORDER:
-                record["sev"] = advisory_severity
         _add_source(record, "GitHub Advisory Database")
         html_url = advisory.get("html_url") or advisory.get("url")
         if _safe_url(html_url) and not any(item["url"] == html_url for item in record["advisories"]):
@@ -599,6 +688,116 @@ def build_manifest(
     return manifest, dict(shards)
 
 
+def _load_epss_cache(output_dir: Path) -> dict[str, Any] | None:
+    path = output_dir / "epss.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if value.get("schema_version") == 1 and isinstance(value.get("scores"), dict):
+            return value
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return None
+
+
+def build_epss_snapshot(
+    records: list[dict[str, Any]],
+    output_dir: Path,
+    as_of: datetime,
+    csv_loader: Callable[[set[str] | None], tuple[dict[str, dict[str, float]], str, str]] = fetch_epss_csv,
+    api_request_fn: Callable[..., tuple[Any, Any]] = request_json,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build an optional EPSS score sidecar; core CVE coverage never depends on it."""
+    ids = {_cve_id(record.get("id")) for record in records}
+    ids.discard(None)
+    cache = _load_epss_cache(output_dir)
+    cached_scores: dict[str, dict[str, float]] = {}
+    if cache:
+        for cve_id, value in cache["scores"].items():
+            valid_id = _cve_id(cve_id)
+            if valid_id not in ids or not isinstance(value, dict):
+                continue
+            try:
+                score, percentile = float(value["score"]), float(value["percentile"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 <= score <= 1 and 0 <= percentile <= 1:
+                cached_scores[valid_id] = {"score": score, "percentile": percentile}
+
+    now_text = iso_z(as_of)
+    checked = parse_datetime(str(cache.get("checked_at") or "")) if cache else None
+    reuse_cache = bool(cache and checked and as_of - checked < timedelta(hours=8))
+    scores: dict[str, dict[str, float]]
+    score_date = str(cache.get("score_date") or "") if cache else ""
+    source_updated_at = str(cache.get("source_updated_at") or "") if cache else ""
+    error = str(cache.get("error") or "") if cache else ""
+    reused = False
+
+    if reuse_cache:
+        scores = cached_scores
+        reused = True
+    else:
+        try:
+            scores, score_date, source_updated_at = csv_loader(ids)
+            error = ""
+        except Exception as exc:
+            scores = cached_scores
+            error = f"Latest FIRST EPSS download failed; retaining prior scores where available ({str(exc)[:140]})."
+
+    if reused:
+        missing = ids - set(scores)
+        if missing:
+            try:
+                scores.update(fetch_epss_api(missing, api_request_fn))
+            except Exception as exc:
+                error = f"Could not look up {len(missing)} newly surfaced CVEs in FIRST EPSS ({str(exc)[:140]})."
+
+    source_time = parse_datetime(source_updated_at)
+    age = as_of - source_time if source_time else None
+    fresh = age is not None and timedelta(0) <= age <= timedelta(hours=36)
+    if not score_date:
+        error = error or "No dated FIRST EPSS score set is available."
+    elif not fresh:
+        error = error or "The latest FIRST EPSS score set is older than 36 hours or has an invalid timestamp."
+    status = {
+        "name": EPSS_SOURCE["name"],
+        "ok": bool(fresh and not error),
+        "scores": len(scores),
+        "records": len(ids),
+        "score_date": score_date,
+        "source_updated_at": source_updated_at,
+        "checked_at": now_text,
+        "note": error,
+    }
+    snapshot = {
+        "schema_version": 1,
+        "updated_at": now_text,
+        "checked_at": now_text,
+        "score_date": score_date,
+        "source_updated_at": source_updated_at,
+        "error": error,
+        "scores": {cve_id: scores[cve_id] for cve_id in sorted(ids) if cve_id in scores},
+    }
+    return snapshot, status
+
+
+def add_epss_metadata(manifest: dict[str, Any], snapshot: dict[str, Any], status: dict[str, Any]) -> None:
+    """Attach optional EPSS provenance without changing the three core-feed success contract."""
+    manifest["epss"] = {
+        "path": "data/epss.json",
+        "score_date": snapshot.get("score_date") or "",
+        "source_updated_at": snapshot.get("source_updated_at") or "",
+        "updated_at": snapshot.get("updated_at") or "",
+        "scored_cves": len(snapshot.get("scores") or {}),
+        "records": int(status.get("records") or 0),
+    }
+    sources = manifest.setdefault("sources", [])
+    if not any(source.get("name") == EPSS_SOURCE["name"] for source in sources):
+        sources.append(EPSS_SOURCE)
+    statuses = manifest.setdefault("source_status", [])
+    statuses[:] = [item for item in statuses if item.get("name") != EPSS_SOURCE["name"]]
+    statuses.append(status)
+
+
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as stream:
@@ -606,7 +805,12 @@ def _write_json(path: Path, value: Any) -> None:
         stream.write("\n")
 
 
-def write_snapshot(output_dir: Path, manifest: dict[str, Any], shards: dict[str, list[dict[str, Any]]]) -> None:
+def write_snapshot(
+    output_dir: Path,
+    manifest: dict[str, Any],
+    shards: dict[str, list[dict[str, Any]]],
+    epss_snapshot: dict[str, Any] | None = None,
+) -> None:
     """Write every shard first and the manifest last so browsers never see a partial index."""
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="subzero-feed-") as temp:
@@ -614,10 +818,14 @@ def write_snapshot(output_dir: Path, manifest: dict[str, Any], shards: dict[str,
         for summary in manifest["days"]:
             day = summary["date"]
             _write_json(staged / f"{day}.json", shards.get(day, []))
+        if epss_snapshot is not None:
+            _write_json(staged / "epss.json", epss_snapshot)
         _write_json(staged / "manifest.json", manifest)
         expected_days = {item["date"] for item in manifest["days"]}
         for day in expected_days:
             os.replace(staged / f"{day}.json", output_dir / f"{day}.json")
+        if epss_snapshot is not None:
+            os.replace(staged / "epss.json", output_dir / "epss.json")
         # The index changes last; versioned requests in the page avoid stale CDN shards.
         os.replace(staged / "manifest.json", output_dir / "manifest.json")
     for path in output_dir.glob("????-??-??.json"):
@@ -632,6 +840,8 @@ def refresh(
     sleep_fn: Callable[[float], None] = time.sleep,
     nvd_api_key: str | None = None,
     github_token: str | None = None,
+    epss_csv_loader: Callable[[set[str] | None], tuple[dict[str, dict[str, float]], str, str]] = fetch_epss_csv,
+    epss_api_request_fn: Callable[..., tuple[Any, Any]] = request_json,
 ) -> dict[str, Any]:
     as_of = (now or utc_now()).astimezone(timezone.utc).replace(microsecond=0)
     start = as_of - timedelta(days=30)
@@ -642,18 +852,52 @@ def refresh(
     ghsa_items, ghsa_pages = iter_github_advisories(start, end, request_fn, token=github_token)
     kev_items, kev_total = fetch_kev(request_fn)
     records = build_records(nvd_items, ghsa_items, kev_items, start, end)
+    epss_snapshot, epss_status = build_epss_snapshot(records, output_dir, as_of, epss_csv_loader, epss_api_request_fn)
     statuses = [
         {"name": "NVD CVE API 2.0", "ok": True, "pages": nvd_pages, "records": nvd_total},
         {"name": "GitHub Security Advisory Database", "ok": True, "pages": ghsa_pages, "advisories": len(ghsa_items)},
         {"name": "CISA KEV", "ok": True, "catalog_records": kev_total},
     ]
     manifest, shards = build_manifest(records, start, end, as_of, statuses, nvd_total, len(ghsa_items), kev_total)
-    write_snapshot(output_dir, manifest, shards)
+    add_epss_metadata(manifest, epss_snapshot, epss_status)
+    write_snapshot(output_dir, manifest, shards, epss_snapshot)
     print(
         f"Complete snapshot: {len(records)} unique CVEs across {len(manifest['days'])} UTC day shards; "
         f"NVD {nvd_total}/{nvd_pages} pages, GitHub {len(ghsa_items)}/{ghsa_pages} pages, CISA {kev_total} catalog entries; "
+        f"FIRST EPSS {epss_status['scores']}/{epss_status['records']} scores dated {epss_status['score_date'] or 'unavailable'}; "
         f"window {iso_z(start)} to {iso_z(end)}"
     )
+    return manifest
+
+
+def refresh_epss_only(
+    output_dir: Path = DEFAULT_OUTPUT,
+    now: datetime | None = None,
+    epss_csv_loader: Callable[[set[str] | None], tuple[dict[str, dict[str, float]], str, str]] = fetch_epss_csv,
+    epss_api_request_fn: Callable[..., tuple[Any, Any]] = request_json,
+) -> dict[str, Any]:
+    """Refresh only optional EPSS enrichment for an already-published core snapshot."""
+    manifest_path = output_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        records: list[dict[str, Any]] = []
+        for summary in manifest.get("days", []):
+            payload = json.loads((output_dir.parent / summary["path"]).read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise FeedError(f"Invalid feed shard for {summary.get('date', 'unknown')}")
+            records.extend(payload)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise FeedError(f"Could not read the existing snapshot for EPSS enrichment: {exc}") from exc
+    as_of = (now or utc_now()).astimezone(timezone.utc).replace(microsecond=0)
+    snapshot, status = build_epss_snapshot(records, output_dir, as_of, epss_csv_loader, epss_api_request_fn)
+    add_epss_metadata(manifest, snapshot, status)
+    _write_json(output_dir / "epss.json", snapshot)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=output_dir, prefix=".manifest-", delete=False) as stream:
+        json.dump(manifest, stream, ensure_ascii=False, separators=(",", ":"))
+        stream.write("\n")
+        staged_manifest = Path(stream.name)
+    os.replace(staged_manifest, manifest_path)
+    print(f"EPSS enrichment: {status['scores']}/{status['records']} scores dated {status['score_date'] or 'unavailable'}; core feed snapshot unchanged.")
     return manifest
 
 
@@ -661,15 +905,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--days", type=int, default=30, help="rolling publication window in days (default: 30)")
+    parser.add_argument("--epss-only", action="store_true", help="refresh EPSS enrichment without recollecting the core feeds")
     args = parser.parse_args()
     if args.days != 30:
         parser.error("the public feed contract is a 30-day window; --days must be 30")
     try:
-        refresh(
-            output_dir=args.output_dir,
-            nvd_api_key=os.environ.get("NVD_API_KEY") or None,
-            github_token=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None,
-        )
+        if args.epss_only:
+            refresh_epss_only(output_dir=args.output_dir)
+        else:
+            refresh(
+                output_dir=args.output_dir,
+                nvd_api_key=os.environ.get("NVD_API_KEY") or None,
+                github_token=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None,
+            )
     except Exception as exc:
         print(f"Feed refresh failed; existing snapshot left untouched: {exc}", file=sys.stderr)
         return 1

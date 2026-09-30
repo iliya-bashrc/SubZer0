@@ -12,6 +12,8 @@
   const allRecords = new Map();
   const loaderStartedAt = Date.now();
   let manifest = null;
+  let epssSnapshot = null;
+  let epssVersion = '';
   let lastBrowserCheck = null;
   let lastSnapshotVersion = '';
   let state = { from: '', to: '', severity: 'all', query: '', sort: 'new', exactHours: null };
@@ -42,6 +44,44 @@
 
   function pocUrl(id) {
     return `https://github.com/search?q=${encodeURIComponent(`${id} poc exploit`)}&type=repositories`;
+  }
+
+  function cvssSeverity(score) {
+    if (score == null || score === '' || !Number.isFinite(Number(score)) || Number(score) < 0 || Number(score) > 10) return 'unknown';
+    const value = Number(score);
+    if (value >= 9) return 'critical';
+    if (value >= 7) return 'high';
+    if (value >= 4) return 'medium';
+    return 'low';
+  }
+
+  function epssFor(id) {
+    const value = epssSnapshot?.scores?.[id];
+    if (!value || value.score == null || value.score === '' || !Number.isFinite(Number(value.score)) || Number(value.score) < 0 || Number(value.score) > 1) return null;
+    const percentile = value.percentile == null || value.percentile === '' ? null : Number(value.percentile);
+    return { score: Number(value.score), percentile: Number.isFinite(percentile) ? percentile : null };
+  }
+
+  function epssPercent(value) {
+    if (!value) return 'not available';
+    const percentage = value.score * 100;
+    return percentage > 0 && percentage < 0.1 ? '<0.1%' : `${percentage.toFixed(percentage >= 10 ? 1 : 2).replace(/0+$/, '').replace(/\.$/, '')}%`;
+  }
+
+  function telegramShareUrl(record, id) {
+    const score = record.score == null ? 'not rated' : Number(record.score).toFixed(1);
+    const severity = cvssSeverity(record.score);
+    const epss = epssFor(id);
+    const lines = [
+      `SubZer0 · ${id}`,
+      record.title || id,
+      `CVSS ${score} · ${severity === 'unknown' ? 'UNRATED' : severity.toUpperCase()} severity`,
+      `EPSS ${epss ? `${epssPercent(epss)} estimated 30-day probability` : 'not available in this snapshot'}`,
+      record.kev ? 'Listed in CISA KEV (known-exploited catalog)' : 'Not listed in the current CISA KEV snapshot',
+      'GitHub PoC search: unverified',
+      `Source: ${safeUrl(record.primary_url) || `https://www.cve.org/CVERecord?id=${encodeURIComponent(id)}`}`
+    ];
+    return `https://t.me/share/url?url=${encodeURIComponent(window.location.href.split('#')[0])}&text=${encodeURIComponent(lines.join('\n'))}`;
   }
 
   function parseTime(value) {
@@ -185,7 +225,7 @@
     const query = state.query.trim().toLocaleLowerCase();
     const matching = [...allRecords.values()].filter((record) => {
       if (!recordInRange(record)) return false;
-      if (state.severity !== 'all' && record.sev !== state.severity) return false;
+      if (state.severity !== 'all' && cvssSeverity(record.score) !== state.severity) return false;
       if (!query) return true;
       const products = (record.affected || []).map((item) => `${item.vendor || ''} ${item.product || ''} ${item.versions || ''}`).join(' ');
       const searchable = `${record.id || ''} ${record.title || ''} ${record.desc || ''} ${products} ${(record.sources || []).join(' ')}`;
@@ -194,7 +234,7 @@
     matching.sort((a, b) => {
       const dateDelta = (parseTime(a.activity_at) || parseTime(a.window_date) || parseTime(a.published) || 0) - (parseTime(b.activity_at) || parseTime(b.window_date) || parseTime(b.published) || 0);
       if (state.sort === 'old') return dateDelta || a.id.localeCompare(b.id);
-      if (state.sort === 'hot') return (SEVERITY_ORDER[a.sev] ?? 4) - (SEVERITY_ORDER[b.sev] ?? 4) || -dateDelta;
+      if (state.sort === 'hot') return (SEVERITY_ORDER[cvssSeverity(a.score)] ?? 4) - (SEVERITY_ORDER[cvssSeverity(b.score)] ?? 4) || -dateDelta;
       return -dateDelta || a.id.localeCompare(b.id);
     });
     return matching;
@@ -206,11 +246,11 @@
       const items = [...allRecords.values()].filter((record) => recordInRange(record));
       return {
         count: items.length,
-        critical: items.filter((item) => item.sev === 'critical').length,
-        high: items.filter((item) => item.sev === 'high').length,
-        medium: items.filter((item) => item.sev === 'medium').length,
-        low: items.filter((item) => item.sev === 'low').length,
-        unknown: items.filter((item) => item.sev === 'unknown').length,
+        critical: items.filter((item) => cvssSeverity(item.score) === 'critical').length,
+        high: items.filter((item) => cvssSeverity(item.score) === 'high').length,
+        medium: items.filter((item) => cvssSeverity(item.score) === 'medium').length,
+        low: items.filter((item) => cvssSeverity(item.score) === 'low').length,
+        unknown: items.filter((item) => cvssSeverity(item.score) === 'unknown').length,
         exploited: items.filter((item) => !!item.kev).length
       };
     }
@@ -265,6 +305,13 @@
     const generatedLabel = age == null ? 'Snapshot age unknown' : `Snapshot ${relativeTime(generated)} · browser check ${lastBrowserCheck ? relativeTime(new Date(lastBrowserCheck).toISOString()) : 'now'}`;
     const meta = $('snapshot-meta');
     if (meta) meta.textContent = generatedLabel;
+    const epssFreshness = $('epss-freshness');
+    if (epssFreshness) {
+      const scoreDate = manifest.epss?.score_date;
+      const scoreTime = manifest.epss?.source_updated_at;
+      epssFreshness.textContent = scoreDate ? `DAILY · ${fmtDate(scoreDate)}` : 'No dated score set';
+      epssFreshness.title = scoreTime ? `FIRST EPSS source timestamp: ${fmtTimestamp(scoreTime)}` : 'FIRST EPSS source timestamp unavailable';
+    }
     if (age != null && Date.now() - age > 90 * 60_000) setStatus('The last successful snapshot is older than 90 minutes. Keeping the last complete data while checks continue.', 'warning');
     else if (!sourceComplete) setStatus('One or more sources did not report complete coverage in this snapshot.', 'warning');
     else if (rangeDays().every((day) => loadedByDay.has(day))) setStatus(`Last complete snapshot ${relativeTime(generated)} · browser checks every 2 minutes.`, 'success');
@@ -281,6 +328,7 @@
       let facts = '';
       if (source.name === 'NVD CVE API 2.0') facts = `${Number(status.records || 0).toLocaleString()} records · ${Number(status.pages || 0)} pages`;
       else if (source.name === 'GitHub Security Advisory Database') facts = `${Number(status.advisories || 0).toLocaleString()} advisories · ${Number(status.pages || 0)} pages`;
+      else if (source.name === 'FIRST EPSS') facts = status.score_date ? `${Number(status.scores || 0).toLocaleString()} scores · dated ${status.score_date}` : 'Daily probability snapshot unavailable';
       else facts = `${Number(status.catalog_records || 0).toLocaleString()} catalog entries`;
       return `<li><i class="source-state-dot${ok ? '' : ' warning'}"></i><span><a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a><span class="source-facts">${esc(ok ? facts : 'Coverage unavailable')}</span></span></li>`;
     }).join('');
@@ -288,7 +336,7 @@
     const badge = $('source-state');
     badge.textContent = allOk ? `${sourceDefs.length} FEEDS OK` : 'PARTIAL';
     badge.className = `source-state${allOk ? '' : ' warning'}`;
-    $('window-caption').textContent = `${Number(manifest.coverage?.utc_days_sharded || 0)} UTC date shards · ${Number(manifest.coverage?.distinct_cve_records || 0).toLocaleString()} deduplicated records · all sources required for a successful snapshot.`;
+    $('window-caption').textContent = `${Number(manifest.coverage?.utc_days_sharded || 0)} UTC date shards · ${Number(manifest.coverage?.distinct_cve_records || 0).toLocaleString()} deduplicated records · NVD, GitHub and CISA gate coverage; EPSS is optional enrichment.`;
   }
 
   function renderStats() {
@@ -315,9 +363,13 @@
   function cardHtml(record, index) {
     const id = cveId(record.id);
     if (!id) return '';
-    const severity = SEVERITY_ORDER[record.sev] == null ? 'unknown' : record.sev;
-    const hot = severity === 'critical' || severity === 'high';
-    const heatClass = severity === 'critical' ? 'heat-critical' : severity === 'high' ? 'heat-high' : '';
+    const scoreValue = record.score == null || !Number.isFinite(Number(record.score)) ? null : Number(record.score);
+    const severity = cvssSeverity(scoreValue);
+    const bandHeat = { critical: 0.95, high: 0.75, medium: 0.5, low: 0.28, unknown: 0.06 }[severity];
+    const heat = scoreValue == null ? bandHeat : Math.max(bandHeat * 0.72, Math.min(1, scoreValue / 10));
+    const mix = Math.round(32 + heat * 49);
+    const washMix = Math.round(heat * 11);
+    const glow = Math.min(0.72, 0.12 + heat * 0.5).toFixed(2);
     const primary = safeUrl(record.primary_url) || `https://www.cve.org/CVERecord?id=${encodeURIComponent(id)}`;
     const products = (record.affected || []).slice(0, 2).map(cardProduct).join('');
     const sources = (record.sources || []).map(sourceName).join(' · ') || 'CVE record';
@@ -326,16 +378,23 @@
       : record.date_basis === 'GitHub advisory publication'
         ? `ADVISORY ${fmtDate(record.window_date)}`
         : `PUBLISHED ${fmtDate(record.published || record.window_date)}`;
-    const score = record.score == null || !Number.isFinite(Number(record.score)) ? '—' : Number(record.score).toFixed(1);
-    return `<article class="cve-card ${heatClass}" style="animation-delay:${Math.min(index, 5) * 24}ms">
+    const score = scoreValue == null ? '—' : scoreValue.toFixed(1);
+    const epss = epssFor(id);
+    const epssHtml = epss
+      ? `<span class="epss-chip" title="FIRST EPSS estimated probability for observed exploitation in the next 30 days"><i class="epss-dot"></i><strong>EPSS</strong><b>${esc(epssPercent(epss))}</b><small>30D PROBABILITY</small></span>`
+      : '<span class="epss-chip unavailable" title="No EPSS score is present; this is not a zero probability"><i class="epss-dot"></i><strong>EPSS</strong><b>—</b><small>NOT AVAILABLE</small></span>';
+    const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
+    const share = telegramShareUrl(record, id);
+    return `<article class="cve-card severity-${severity}" style="--heat:${heat.toFixed(2)};--mix:${mix}%;--wash-mix:${washMix}%;--glow-opacity:${glow};animation-delay:${Math.min(index, 5) * 18}ms">
       <div class="card-head"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a>
-        <span class="severity-badge ${esc(severity)}">${esc(severity)}</span>${record.kev ? '<span class="kev-badge">KNOWN EXPLOITED</span>' : ''}
-        <span class="cvss-score">${esc(score)}<span class="score-caption"> CVSS</span></span></div>
+        <span class="severity-badge ${esc(severity)}">${esc(severityLabel)}</span>${record.kev ? '<span class="kev-badge" title="Listed in the CISA Known Exploited Vulnerabilities catalog">CISA KEV · LISTED</span>' : ''}
+        <span class="cvss-score"><span>${esc(score)}</span><small>CVSS · SEVERITY</small></span></div>
+      ${epssHtml}
       <h3 class="card-title">${esc(record.title || id)}</h3>
       <p class="card-description">${esc(record.desc || 'No source summary is available yet. Review the linked primary records and advisories.')}</p>
       ${products ? `<div class="affected-preview" aria-label="Affected products">${products}</div>` : ''}
       <div class="card-meta"><span class="meta-date">${esc(activity)}</span><i class="meta-divider"></i><span>${record.affected?.length ? `${record.affected.length} affected product${record.affected.length === 1 ? '' : 's'}` : 'Product details not provided'}</span><i class="meta-divider"></i><span class="source-label">${esc(sources)}</span></div>
-      <div class="card-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy CVE ID</button><button class="card-action" type="button" data-action="detail" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⌕</span> View details</button><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub PoC search <small>UNVERIFIED</small></a></div>
+      <div class="card-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy ID</button><button class="card-action" type="button" data-action="detail" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⌕</span> Details</button><a class="card-action telegram-share" href="${esc(share)}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">➤</span> Share to Telegram</a><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub PoC search <small>UNVERIFIED</small></a></div>
     </article>`;
   }
 
@@ -414,6 +473,28 @@
     setStatus(`Some feed data could not be loaded: ${error.message || 'network error'}. Retry with “Load older CVEs”.`, 'error');
   }
 
+  async function loadEpssSnapshot(force = false) {
+    const config = manifest?.epss;
+    if (!config?.path || typeof config.path !== 'string' || !config.path.startsWith('data/') || config.path.includes('..')) {
+      epssSnapshot = null;
+      epssVersion = '';
+      return;
+    }
+    const version = String(config.updated_at || config.score_date || manifest.generated_at || '');
+    if (!force && version && version === epssVersion) return;
+    try {
+      const response = await fetch(`${config.path}?v=${encodeURIComponent(version)}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`EPSS snapshot request returned ${response.status}`);
+      const value = await response.json();
+      if (value.schema_version !== 1 || !value.scores || typeof value.scores !== 'object' || Array.isArray(value.scores)) throw new Error('EPSS snapshot has an unsupported schema');
+      epssSnapshot = value;
+      epssVersion = version;
+    } catch (_) {
+      epssSnapshot = null;
+      epssVersion = '';
+    }
+  }
+
   async function refresh(options = {}) {
     if (polling || (document.hidden && !options.force)) return;
     polling = true;
@@ -429,6 +510,7 @@
       manifest = next;
       lastSnapshotVersion = next.generated_at || '';
       setDateBounds();
+      await loadEpssSnapshot();
       const currentDays = new Set(manifest.days.map((day) => day.date));
       for (const day of [...loadedByDay.keys()]) {
         if (!currentDays.has(day)) loadedByDay.delete(day);
@@ -450,7 +532,7 @@
         }
         const uniqueNew = [...new Set(newIds)];
         if (uniqueNew.length) {
-          const crit = uniqueNew.find((id) => allRecords.get(id)?.sev === 'critical');
+          const crit = uniqueNew.find((id) => cvssSeverity(allRecords.get(id)?.score) === 'critical');
           toast(crit ? `${uniqueNew.length} new CVE${uniqueNew.length === 1 ? '' : 's'} · critical: ${crit}` : `${uniqueNew.length} new CVE${uniqueNew.length === 1 ? '' : 's'} in the refreshed snapshot`);
         } else {
           setStatus(`Snapshot refreshed ${relativeTime(manifest.generated_at)} · no new IDs in the shards previously open.`, 'success');
@@ -486,27 +568,40 @@
       return;
     }
     const dialog = $('detail-dialog');
-    const severity = SEVERITY_ORDER[record.sev] == null ? 'unknown' : record.sev;
+    const severity = cvssSeverity(record.score);
     const primary = safeUrl(record.primary_url) || `https://www.cve.org/CVERecord?id=${encodeURIComponent(id)}`;
-    const score = record.score == null ? 'CVSS score not provided by the available sources' : `CVSS ${Number(record.score).toFixed(1)} · ${severity.toUpperCase()}`;
+    const score = severity === 'unknown' ? 'CVSS score not provided by the available sources' : `CVSS ${Number(record.score).toFixed(1)} · ${severity.toUpperCase()} severity`;
     const activity = record.date_basis === 'CISA KEV date added'
       ? `CISA added this record to KEV on ${fmtDate(record.kev?.date_added || record.window_date)}.`
       : record.date_basis === 'GitHub advisory publication'
         ? `GitHub advisory published ${fmtDate(record.window_date)}${record.published ? ` · CVE publication ${fmtTimestamp(record.published)}` : ''}.`
         : `Published ${fmtTimestamp(record.published)}${record.modified ? ` · last modified ${fmtTimestamp(record.modified)}` : ''}.`;
     const products = (record.affected || []).length ? (record.affected || []).map((item) => `<div class="detail-product"><strong>${esc([item.vendor, item.product].filter(Boolean).join(' / ') || 'Product')}</strong><span>${esc(item.versions || 'Version details not specified')} · ${esc(item.source || 'Source record')}</span></div>`).join('') : '<p class="detail-description">Affected product/version details were not provided in the available records.</p>';
-    const kev = record.kev ? `<section class="detail-section"><h3>Exploitation signal · CISA KEV</h3><div class="kev-callout"><strong>Known exploited vulnerability</strong><p>${esc(record.kev.required_action || 'CISA lists this CVE in the Known Exploited Vulnerabilities catalog.')}${record.kev.due_date ? ` Due date: ${esc(record.kev.due_date)}.` : ''}${record.kev.ransomware ? ` Ransomware campaign use: ${esc(record.kev.ransomware)}.` : ''}</p></div></section>` : '';
+    const epss = epssFor(id);
+    const percentile = epss?.percentile == null ? '' : ` · P${Math.round(epss.percentile * 100)} relative percentile rank`;
+    const epssDetail = epss
+      ? `${epssPercent(epss)} estimated chance that exploitation activity will be observed in the next 30 days${percentile}. Score set dated ${fmtDate(epssSnapshot?.score_date || manifest.epss?.score_date)}.`
+      : 'No EPSS score is available in this snapshot. Missing data is not a 0% forecast.';
+    const kevDetail = record.kev
+      ? `Listed in CISA KEV · added ${fmtDate(record.kev.date_added || record.window_date)}. ${record.kev.required_action || 'CISA identifies this as a known exploited vulnerability.'}${record.kev.due_date ? ` Due date: ${record.kev.due_date}.` : ''}${record.kev.ransomware && record.kev.ransomware.toLowerCase() !== 'unknown' ? ` Ransomware campaign use: ${record.kev.ransomware}.` : ''}`
+      : 'Not listed in the current CISA KEV snapshot. Absence from this catalog is not proof that exploitation has never occurred.';
+    const poc = `GitHub repository search for ${id} · results are unverified and do not prove exploitation.`;
+    const signalCards = `<section class="detail-section"><h3>Four signals · separate evidence</h3><div class="signal-grid"><article class="signal-card signal-cvss severity-${esc(severity)}"><strong>CVSS / SEVERITY</strong><span>${esc(severity === 'unknown' ? 'UNRATED' : `${Number(record.score).toFixed(1)} · ${severity.toUpperCase()}`)}</span><small>Severity only; this is not an exploitation probability.</small></article><article class="signal-card signal-epss"><strong>EPSS / 30-DAY PROBABILITY</strong><span>${esc(epss ? epssPercent(epss) : 'Not available')}</span><small>${esc(epssDetail)}</small></article><article class="signal-card signal-kev"><strong>CISA KEV / CATALOG EVIDENCE</strong><span>${record.kev ? 'LISTED' : 'NOT LISTED'}</span><small>${esc(kevDetail)}</small></article><article class="signal-card signal-poc"><strong>GITHUB PoC / SEARCH LEAD</strong><span>UNVERIFIED</span><small>${esc(poc)}</small></article></div></section>`;
+    const kev = record.kev ? `<section class="detail-section"><h3>CISA KEV catalog detail</h3><div class="kev-callout"><strong>Known exploited vulnerability listing</strong><p>${esc(kevDetail)}</p></div></section>` : '';
     const refs = [...(record.advisories || []).map((item) => ({ label: item.label || 'Security advisory', url: item.url })), ...(record.refs || [])]
       .filter((item, index, all) => safeUrl(item.url) && all.findIndex((other) => other.url === item.url) === index).slice(0, 14);
-    const links = [{ label: record.sources?.includes('NVD') ? 'Primary record · NVD' : 'CVE Program record', url: primary }, ...refs]
+    const links = [{ label: record.sources?.includes('NVD') ? 'Primary record · NVD' : 'CVE Program record', url: primary }, { label: 'FIRST EPSS data and method', url: 'https://www.first.org/epss/data' }, ...refs]
       .filter((item, index, all) => safeUrl(item.url) && all.findIndex((other) => other.url === item.url) === index);
-    $('detail-content').innerHTML = `<div class="detail-id-row"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span class="severity-badge ${esc(severity)}">${esc(severity)}</span>${record.kev ? '<span class="kev-badge">KNOWN EXPLOITED</span>' : ''}</div>
+    const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
+    const share = telegramShareUrl(record, id);
+    $('detail-content').innerHTML = `<div class="detail-id-row"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span class="severity-badge ${esc(severity)}">${esc(severityLabel)}</span>${record.kev ? '<span class="kev-badge">CISA KEV · LISTED</span>' : ''}</div>
       <h2 id="detail-title">${esc(record.title || id)}</h2><p class="detail-score">${esc(score)} · ${esc(activity)}</p><p class="detail-description">${esc(record.desc || 'No summary has been published by the available sources.')}</p>
+      ${signalCards}
       <section class="detail-section"><h3>Affected products and versions</h3><div class="detail-products">${products}</div></section>
       ${kev}
       <section class="detail-section"><h3>Source records and references</h3><div class="detail-links">${links.map((item) => `<a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer">↗ ${esc(item.label || 'Reference')}</a>`).join('') || '<span class="detail-description">No source links provided.</span>'}</div></section>
       <section class="detail-section"><h3>Record attribution</h3><div class="detail-sources">${(record.sources || []).map((source) => `<span class="detail-source">${esc(source)}</span>`).join('') || '<span class="detail-source">CVE record</span>'}</div></section>
-      <div class="detail-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy CVE ID</button><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub PoC search <small>UNVERIFIED</small></a></div>`;
+      <div class="detail-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy CVE ID</button><a class="card-action telegram-share" href="${esc(share)}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">➤</span> Share to Telegram</a><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub PoC search <small>UNVERIFIED</small></a></div>`;
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else dialog.setAttribute('open', '');
   }
@@ -628,6 +723,7 @@
       lastSnapshotVersion = manifest.generated_at || '';
       lastBrowserCheck = Date.now();
       setDateBounds();
+      await loadEpssSnapshot();
       renderSources();
       renderStats();
       const newest = rangeDays().slice(-2).reverse();
