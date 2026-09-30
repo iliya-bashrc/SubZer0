@@ -2,6 +2,7 @@
 
 (() => {
   const PAGE_SIZE = 24;
+  const MAX_DOM_RECORDS = 200;
   const POLL_MS = 120_000;
   const SHARD_CONCURRENCY = 4;
   const FETCH_TIMEOUT_MS = 20_000;
@@ -17,8 +18,9 @@
   let epssVersion = '';
   let lastBrowserCheck = null;
   let lastSnapshotVersion = '';
-  let state = { from: '', to: '', severity: 'all', query: '', sort: 'new', exactHours: null };
+  let state = { from: '', to: '', severity: 'all', query: '', sort: 'new', exactHours: null, vendor: '', product: '', absoluteZero: false, group: 'none' };
   let visible = PAGE_SIZE;
+  let windowStart = 0;
   let polling = false;
   let searchTimer = 0;
   let searchGeneration = 0;
@@ -29,10 +31,50 @@
   let statAnimationKey = '';
   const statAnimationFrames = new Map();
   const pendingNewIds = new Set();
+  const pendingCriticalIds = new Set();
+  let preAbsoluteSeverity = 'all';
+  const storedStars = readStored('subzero:stars', []);
+  const storedRead = readStored('subzero:read', []);
+  const starredIds = new Set(Array.isArray(storedStars) ? storedStars.map(cveId).filter(Boolean) : []);
+  const readIds = new Set(Array.isArray(storedRead) ? storedRead.map(cveId).filter(Boolean) : []);
+  let savedViews = readStored('subzero:views', []);
+  let watchlist = readStored('subzero:watchlist', []);
+  let compactCards = readStored('subzero:compact', false) === true;
+  let facets = { vendors: [], products: [], product_pairs: [] };
+  let retainedHistory = null;
+  let exportBusy = false;
+  const githubPocCache = new Map();
 
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[char]);
+
+  function readStored(key, fallback) {
+    try {
+      const value = window.localStorage.getItem(key);
+      return value == null ? fallback : JSON.parse(value);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function writeStored(key, value) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (_) {
+      toast('This browser could not save the local preference.', 'warning');
+      return false;
+    }
+  }
+
+  function isTextTarget(target) {
+    return !!target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.getAttribute?.('role') === 'textbox');
+  }
+
+  function normalizeFacet(value) {
+    return String(value || '').trim().toLocaleLowerCase();
+  }
 
   function cveId(value) {
     const id = String(value || '').trim().toUpperCase();
@@ -67,6 +109,31 @@
     if (!value || value.score == null || value.score === '' || !Number.isFinite(Number(value.score)) || Number(value.score) < 0 || Number(value.score) > 1) return null;
     const percentile = value.percentile == null || value.percentile === '' ? null : Number(value.percentile);
     return { score: Number(value.score), percentile: Number.isFinite(percentile) ? percentile : null };
+  }
+
+  function priorityScore(record, id = cveId(record.id)) {
+    const components = [];
+    const weights = { cvss: 25, epss: 25, kev: 25, poc: 15, recency: 10 };
+    const cvss = Number(record.score);
+    if (record.score != null && Number.isFinite(cvss) && cvss >= 0 && cvss <= 10) {
+      components.push({ key: 'CVSS', value: cvss * 10, weight: weights.cvss, note: 'CVSS base score ÷ 10 × 100' });
+    }
+    const epss = epssFor(id);
+    if (epss) components.push({ key: 'EPSS', value: epss.score * 100, weight: weights.epss, note: 'FIRST EPSS probability × 100' });
+    const cisa = (manifest?.source_status || []).find((source) => source.name === 'CISA KEV');
+    if (cisa?.ok === true) components.push({ key: 'CISA KEV', value: record.kev ? 100 : 0, weight: weights.kev, note: 'Listed = 100; not listed = 0 in this catalog snapshot' });
+    const taggedExploit = (record.refs || []).some((ref) => ref.source === 'NVD' && Array.isArray(ref.tags) && ref.tags.some((tag) => String(tag).toLowerCase() === 'exploit'));
+    if (taggedExploit) components.push({ key: 'PoC reference', value: 60, weight: weights.poc, note: 'NVD reference tagged Exploit; code itself is not validated' });
+    const timestamp = parseTime(record.activity_at) || parseTime(record.window_date) || parseTime(record.published);
+    if (timestamp != null) {
+      const ageDays = Math.max(0, Math.min(30, (Date.now() - timestamp) / 86_400_000));
+      components.push({ key: 'Recency', value: 100 * (1 - ageDays / 30), weight: weights.recency, note: 'Linear decay from activity timestamp over 30 days' });
+    }
+    const availableWeight = components.reduce((sum, item) => sum + item.weight, 0);
+    const value = components.length >= 3 && availableWeight > 0
+      ? Math.round(components.reduce((sum, item) => sum + item.value * item.weight, 0) / availableWeight * 10) / 10
+      : null;
+    return { value, components, available: components.length, total: 5, missing: ['CVSS', 'EPSS', 'CISA KEV', 'PoC reference', 'Recency'].filter((key) => !components.some((item) => item.key === key)) };
   }
 
   function epssPercent(value) {
@@ -252,13 +319,23 @@
     notice.hidden = false;
   }
 
+  function triggerCriticalAmbient(count) {
+    if (count < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    document.body.classList.remove('critical-arrival');
+    void document.body.offsetWidth;
+    document.body.classList.add('critical-arrival');
+    window.setTimeout(() => document.body.classList.remove('critical-arrival'), 1_700);
+  }
+
   function acceptPendingUpdate(resetWindow = false) {
     if (!pendingFeedUpdate || !pendingSnapshot) return;
     const newCount = pendingNewIds.size;
+    const newCriticalCount = pendingCriticalIds.size;
     const staged = pendingSnapshot;
     pendingFeedUpdate = false;
     pendingSnapshot = null;
     pendingNewIds.clear();
+    pendingCriticalIds.clear();
     $('new-notice').hidden = true;
     manifest = staged.manifest;
     lastSnapshotVersion = manifest.generated_at || lastSnapshotVersion;
@@ -277,7 +354,12 @@
       state.query = '';
       state.sort = 'new';
       state.exactHours = null;
+      state.vendor = '';
+      state.product = '';
+      state.absoluteZero = false;
+      state.group = 'none';
       visible = PAGE_SIZE;
+      windowStart = 0;
       $('search-input').value = '';
       $('sort-select').value = 'new';
       $('date-from').value = state.from;
@@ -292,10 +374,17 @@
         element.classList.toggle('selected', selected);
         element.setAttribute('aria-pressed', String(selected));
       });
+      updateControlState();
     }
     render();
     refreshTimestamp();
     setStatus(newCount ? `${newCount} new CVE${newCount === 1 ? '' : 's'} now included in the feed.` : 'Updated feed data is now displayed.', 'success');
+    if (newCriticalCount) {
+      triggerCriticalAmbient(newCriticalCount);
+      toast(`${newCriticalCount} new Critical CVE${newCriticalCount === 1 ? '' : 's'} applied after your confirmation.`);
+    }
+    void loadFacets();
+    void loadRetainedHistory();
     void loadEpssSnapshot(true).then(() => {
       if (booted && manifest) render();
     });
@@ -357,8 +446,14 @@
       if (!recordInRange(record)) return false;
       const severity = cvssSeverity(record.score);
       if (state.severity !== 'all' && !(state.severity === 'unknown' && ['none', 'unknown'].includes(severity)) && severity !== state.severity) return false;
+      if (state.absoluteZero && !(severity === 'critical' && !!record.kev)) return false;
+      const affected = record.affected || [];
+      if (state.vendor && state.product) {
+        if (!affected.some((item) => normalizeFacet(item.vendor) === normalizeFacet(state.vendor) && normalizeFacet(item.product) === normalizeFacet(state.product))) return false;
+      } else if (state.vendor && !affected.some((item) => normalizeFacet(item.vendor) === normalizeFacet(state.vendor))) return false;
+      else if (state.product && !affected.some((item) => normalizeFacet(item.product) === normalizeFacet(state.product))) return false;
       if (!query) return true;
-      const products = (record.affected || []).map((item) => `${item.vendor || ''} ${item.product || ''} ${item.versions || ''}`).join(' ');
+      const products = affected.map((item) => `${item.vendor || ''} ${item.product || ''} ${item.versions || ''}`).join(' ');
       const searchable = `${record.id || ''} ${record.title || ''} ${record.desc || ''} ${products} ${(record.sources || []).join(' ')}`;
       return searchable.toLocaleLowerCase().includes(query);
     });
@@ -366,6 +461,7 @@
       const dateDelta = (parseTime(a.activity_at) || parseTime(a.window_date) || parseTime(a.published) || 0) - (parseTime(b.activity_at) || parseTime(b.window_date) || parseTime(b.published) || 0);
       if (state.sort === 'old') return dateDelta || a.id.localeCompare(b.id);
       if (state.sort === 'hot') return (SEVERITY_ORDER[cvssSeverity(a.score)] ?? 4) - (SEVERITY_ORDER[cvssSeverity(b.score)] ?? 4) || -dateDelta;
+      if (state.sort === 'priority') return (priorityScore(b).value ?? -1) - (priorityScore(a).value ?? -1) || -dateDelta;
       return -dateDelta || a.id.localeCompare(b.id);
     });
     return matching;
@@ -477,6 +573,266 @@
     $('window-caption').textContent = `${Number(manifest.coverage?.utc_days_sharded || 0)} UTC date shards · ${Number(manifest.coverage?.distinct_cve_records || 0).toLocaleString()} deduplicated records · NVD, GitHub and CISA gate coverage; EPSS is optional enrichment.`;
   }
 
+  async function loadFacets() {
+    const path = manifest?.facets?.path;
+    if (typeof path !== 'string' || !path.startsWith('data/') || path.includes('..')) return;
+    try {
+      const value = await fetchJson(`${path}?v=${encodeURIComponent(manifest.generated_at || '')}`, { cache: 'default', headers: { Accept: 'application/json' } });
+      if (value.schema_version !== 1 || !Array.isArray(value.vendors) || !Array.isArray(value.products)) return;
+      facets = {
+        vendors: [...new Set(value.vendors.filter((item) => typeof item === 'string' && item.length <= 160))],
+        products: [...new Set(value.products.filter((item) => typeof item === 'string' && item.length <= 200))],
+        product_pairs: Array.isArray(value.product_pairs) ? value.product_pairs.filter((item) => item && typeof item.vendor === 'string' && typeof item.product === 'string') : []
+      };
+      for (const [id, values] of [['vendor-suggestions', facets.vendors], ['product-suggestions', facets.products]]) {
+        const list = $(id);
+        list.replaceChildren(...values.map((value) => {
+          const option = document.createElement('option');
+          option.value = value;
+          return option;
+        }));
+      }
+    } catch (_) {
+      // Facets are optional indexes; the feed itself remains usable.
+    }
+  }
+
+  function canonicalFacet(value, values) {
+    const candidate = normalizeFacet(value);
+    return values.find((item) => normalizeFacet(item) === candidate) || '';
+  }
+
+  function restorePermalink() {
+    const params = new URLSearchParams(window.location.search);
+    const min = String(manifest?.window?.start || '').slice(0, 10);
+    const max = String(manifest?.window?.end || '').slice(0, 10);
+    const isDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+    const from = params.get('from') || '';
+    const to = params.get('to') || '';
+    if (isDate(from) && isDate(to) && from <= to && from >= min && to <= max) {
+      state.from = from;
+      state.to = to;
+    }
+    const severities = ['all', 'critical', 'high', 'medium', 'low', 'unknown'];
+    if (severities.includes(params.get('severity'))) state.severity = params.get('severity');
+    const sorts = ['new', 'old', 'hot', 'priority'];
+    if (sorts.includes(params.get('sort'))) state.sort = params.get('sort');
+    state.absoluteZero = params.get('az') === '1';
+    if (state.absoluteZero) {
+      preAbsoluteSeverity = state.severity;
+      state.severity = 'critical';
+    }
+    if (['none', 'vendor', 'product'].includes(params.get('group'))) state.group = params.get('group');
+    state.vendor = canonicalFacet(params.get('vendor') || '', facets.vendors);
+    state.product = canonicalFacet(params.get('product') || '', facets.products);
+    if (state.vendor && state.product && facets.product_pairs.length && !facets.product_pairs.some((item) => normalizeFacet(item.vendor) === normalizeFacet(state.vendor) && normalizeFacet(item.product) === normalizeFacet(state.product))) state.product = '';
+    compactCards = params.get('compact') === '1' || (params.has('compact') ? false : compactCards);
+    updateControlState();
+  }
+
+  function updateControlState() {
+    if ($('date-from') && state.from) $('date-from').value = state.from;
+    if ($('date-to') && state.to) $('date-to').value = state.to;
+    if ($('search-input')) $('search-input').value = state.query;
+    if ($('vendor-filter')) $('vendor-filter').value = state.vendor;
+    if ($('product-filter')) $('product-filter').value = state.product;
+    if ($('sort-select')) $('sort-select').value = state.sort;
+    if ($('group-select')) $('group-select').value = state.group;
+    document.querySelectorAll('.severity-filter').forEach((element) => {
+      const selected = element.dataset.severity === state.severity;
+      element.classList.toggle('active', selected);
+      element.setAttribute('aria-pressed', String(selected));
+    });
+    if ($('absolute-zero')) $('absolute-zero').setAttribute('aria-pressed', String(state.absoluteZero));
+    if ($('compact-toggle')) $('compact-toggle').setAttribute('aria-pressed', String(compactCards));
+    document.body.classList.toggle('compact-cards', compactCards);
+  }
+
+  function renderSavedViews() {
+    if (!Array.isArray(savedViews)) savedViews = [];
+    const select = $('saved-view-select');
+    const selected = select.value;
+    select.replaceChildren(new Option('No saved view selected', ''));
+    savedViews.forEach((view, index) => select.add(new Option(String(view.name || `View ${index + 1}`), String(view.id || index))));
+    select.value = [...select.options].some((option) => option.value === selected) ? selected : '';
+    $('apply-view').disabled = !select.value;
+    $('delete-view').disabled = !select.value;
+  }
+
+  function currentView(name) {
+    return {
+      id: `view-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      from: state.from,
+      to: state.to,
+      severity: state.severity,
+      query: state.query,
+      sort: state.sort,
+      vendor: state.vendor,
+      product: state.product,
+      absoluteZero: state.absoluteZero,
+      group: state.group,
+      compact: compactCards,
+      preAbsoluteSeverity
+    };
+  }
+
+  function saveCurrentView() {
+    const name = $('saved-view-name').value.trim().slice(0, 40);
+    if (!name) {
+      $('saved-view-name').focus();
+      setToolStatus('Enter a name for this saved view.');
+      return;
+    }
+    savedViews = Array.isArray(savedViews) ? savedViews : [];
+    const existing = savedViews.findIndex((view) => String(view.name || '').toLocaleLowerCase() === name.toLocaleLowerCase());
+    const view = currentView(name);
+    if (existing >= 0) savedViews.splice(existing, 1);
+    savedViews.unshift(view);
+    savedViews = savedViews.slice(0, 20);
+    writeStored('subzero:views', savedViews);
+    renderSavedViews();
+    $('saved-view-select').value = view.id;
+    renderSavedViews();
+    $('saved-view-name').value = '';
+    setToolStatus(`Saved “${name}” on this browser.`);
+  }
+
+  function selectedSavedView() {
+    return savedViews.find((view, index) => String(view.id || index) === $('saved-view-select').value);
+  }
+
+  function applySelectedView() {
+    const view = selectedSavedView();
+    if (!view) return;
+    state = { ...state, ...view, exactHours: null };
+    state.query = String(view.query || '').slice(0, 200);
+    compactCards = view.compact === true;
+    preAbsoluteSeverity = ['all', 'critical', 'high', 'medium', 'low', 'unknown'].includes(view.preAbsoluteSeverity) ? view.preAbsoluteSeverity : 'all';
+    updateControlState();
+    visible = PAGE_SIZE;
+    windowStart = 0;
+    setRange(state.from, state.to);
+    setToolStatus(`Applied “${view.name}”.`);
+  }
+
+  function deleteSelectedView() {
+    const view = selectedSavedView();
+    if (!view) return;
+    savedViews = savedViews.filter((item) => item !== view);
+    writeStored('subzero:views', savedViews);
+    renderSavedViews();
+    setToolStatus(`Deleted “${view.name}” from this browser.`);
+  }
+
+  function setToolStatus(message) {
+    const status = $('tool-status');
+    if (status) status.textContent = message;
+  }
+
+  function watchPair(vendor, product) {
+    const cleanVendor = String(vendor || '').trim().slice(0, 160);
+    const cleanProduct = String(product || '').trim().slice(0, 200);
+    if (!cleanVendor || !cleanProduct) return;
+    const existing = Array.isArray(watchlist) ? watchlist : [];
+    const index = existing.findIndex((item) => normalizeFacet(item.vendor) === normalizeFacet(cleanVendor) && normalizeFacet(item.product) === normalizeFacet(cleanProduct));
+    if (index >= 0) existing.splice(index, 1);
+    else existing.unshift({ vendor: cleanVendor, product: cleanProduct });
+    watchlist = existing.slice(0, 200);
+    writeStored('subzero:watchlist', watchlist);
+    renderWatchlist();
+    setToolStatus(index >= 0 ? 'Removed from the local watchlist.' : 'Added to the local watchlist.');
+  }
+
+  function renderWatchlist() {
+    const list = $('watchlist-list');
+    if (!list) return;
+    watchlist = Array.isArray(watchlist) ? watchlist.filter((item) => item && item.vendor && item.product) : [];
+    $('watchlist-empty').hidden = watchlist.length > 0;
+    list.innerHTML = watchlist.map((item, index) => `<li><button type="button" class="watch-filter" data-action="watch-filter" data-index="${index}">${esc(item.vendor)} / ${esc(item.product)}</button><button type="button" class="watch-remove" data-action="watch-remove" data-index="${index}" aria-label="Remove ${esc(item.vendor)} ${esc(item.product)} from local watchlist">×</button></li>`).join('');
+  }
+
+  function buildPermalink() {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    const params = new URLSearchParams();
+    if (state.from && state.to) { params.set('from', state.from); params.set('to', state.to); }
+    if (state.severity !== 'all') params.set('severity', state.severity);
+    if (state.sort !== 'new') params.set('sort', state.sort);
+    if (state.absoluteZero) params.set('az', '1');
+    if (state.group !== 'none') params.set('group', state.group);
+    if (state.vendor && canonicalFacet(state.vendor, facets.vendors)) params.set('vendor', canonicalFacet(state.vendor, facets.vendors));
+    if (state.product && canonicalFacet(state.product, facets.products)) params.set('product', canonicalFacet(state.product, facets.products));
+    if (compactCards) params.set('compact', '1');
+    url.search = params.toString();
+    return url.toString();
+  }
+
+  async function copyPermalink() {
+    const link = buildPermalink();
+    try {
+      await copyText(link);
+      setToolStatus('Share link copied. The free-text search is not included.');
+      toast('Share link copied.');
+    } catch (_) {
+      setToolStatus(link);
+      toast('Clipboard blocked; the share link is shown in the tool status.', 'warning');
+    }
+  }
+
+  async function loadRetainedHistory() {
+    const path = manifest?.history?.path;
+    if (typeof path !== 'string' || !path.startsWith('data/') || path.includes('..')) {
+      renderHistory();
+      return;
+    }
+    try {
+      const value = await fetchJson(`${path}?v=${encodeURIComponent(manifest.generated_at || '')}`, { cache: 'default', headers: { Accept: 'application/json' } });
+      if (value.schema_version !== 1 || !Array.isArray(value.events) || !Array.isArray(value.snapshots)) throw new Error('Unsupported retained history');
+      retainedHistory = value;
+    } catch (_) {
+      retainedHistory = null;
+    }
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const badge = $('changes-coverage');
+    const caption = $('changes-caption');
+    const list = $('recent-changes-list');
+    if (!badge || !caption || !list) return;
+    if (!retainedHistory) {
+      badge.textContent = 'NOT AVAILABLE';
+      badge.classList.add('warning');
+      caption.textContent = 'No retained comparison file is available; no change or trend is inferred.';
+      list.innerHTML = '<li>Historical comparison unavailable.</li>';
+      return;
+    }
+    const snapshots = retainedHistory.snapshots.filter((item) => item && parseTime(item.observed_at));
+    const orderedSnapshots = snapshots.slice().sort((a, b) => parseTime(a.observed_at) - parseTime(b.observed_at));
+    const coverage = orderedSnapshots.length
+      ? `${orderedSnapshots.length} complete snapshots from ${fmtTimestamp(orderedSnapshots[0].observed_at)} to ${fmtTimestamp(orderedSnapshots[orderedSnapshots.length - 1].observed_at)}; up to ${Number(retainedHistory.retention_days) || 30} days are retained.`
+      : 'No complete snapshots are retained yet.';
+    const cutoff = Date.now() - 48 * 60 * 60_000;
+    const events = retainedHistory.events.filter((item) => item && parseTime(item.observed_at) >= cutoff).sort((a, b) => parseTime(b.observed_at) - parseTime(a.observed_at));
+    badge.textContent = `${snapshots.length} SNAPSHOTS`;
+    badge.classList.remove('warning');
+    caption.textContent = events.length
+      ? `${coverage} ${events.length.toLocaleString()} measured CVE change${events.length === 1 ? '' : 's'} in the last 48 hours of retained comparisons.`
+      : `${coverage} No material changes detected in the available 48-hour comparisons. This is not an attention or popularity measure.`;
+    const labels = { severity: 'CVSS severity changed', kev_added: 'Entered CISA KEV', kev_removed: 'Removed from CISA KEV', epss_jump: 'Material EPSS change' };
+    list.innerHTML = events.slice(0, 6).map((item) => {
+      const id = cveId(item.id);
+      if (!id) return '';
+      let detail = '';
+      if (item.type === 'severity') detail = `${String(item.from || 'UNRATED').toUpperCase()} → ${String(item.to || 'UNRATED').toUpperCase()}`;
+      else if (item.type === 'epss_jump') detail = `${Number(item.from).toFixed(3)} → ${Number(item.to).toFixed(3)}`;
+      else detail = fmtTimestamp(item.observed_at);
+      return `<li><a href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span><strong>${esc(labels[item.type] || 'Source change')}</strong><small>${esc(detail)} · ${esc(relativeTime(item.observed_at))}</small></span></li>`;
+    }).join('') || '<li>No material changes recorded in the retained window.</li>';
+  }
+
   function renderStats({ countUp = false } = {}) {
     if (!manifest) return;
     const summary = summaryForSelection();
@@ -556,22 +912,52 @@
         : `PUBLISHED ${fmtDate(record.published || record.window_date)}`;
     const score = scoreValue == null ? '—' : scoreValue.toFixed(1);
     const epss = epssFor(id);
+    const priority = priorityScore(record, id);
+    const priorityHtml = priority.value == null
+      ? `<div class="priority-chip unavailable" title="At least 3 of 5 sourced inputs are required; missing: ${esc(priority.missing.join(', '))}"><strong>COMPOSITE PRIORITY</strong><span>Not enough inputs</span><small>Custom · ${priority.available}/5</small></div>`
+      : `<div class="priority-chip" title="Custom SubZer0 triage heuristic; not an official score. Available inputs: ${esc(priority.components.map((item) => `${item.key} ${item.value.toFixed(1)}`).join(' · '))}"><strong>COMPOSITE PRIORITY</strong><span>${priority.value.toFixed(1)} <small>/ 100</small></span><small>Custom · ${priority.available}/5 inputs</small></div>`;
     const epssHtml = epss
       ? `<span class="epss-chip" title="FIRST EPSS estimated probability for observed exploitation in the next 30 days"><i class="epss-dot"></i><strong>EPSS</strong><b>${esc(epssPercent(epss))}</b><small>30D PROBABILITY</small></span>`
       : '<span class="epss-chip unavailable" title="No EPSS score is present; this is not a zero probability"><i class="epss-dot"></i><strong>EPSS</strong><b>—</b><small>NOT AVAILABLE</small></span>';
     const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
     const share = telegramShareUrl(record, id);
-    return `<article class="cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}"${ageStyle}>
+    const starred = starredIds.has(id);
+    const isRead = readIds.has(id);
+    return `<article class="cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}${isRead ? ' is-read' : ''}" data-cve-id="${esc(id)}" tabindex="-1"${ageStyle}>
       <div class="card-head"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a>
         <span class="severity-badge ${esc(severity)}">${esc(severityLabel)}</span>${record.kev ? '<span class="kev-badge" title="Listed in the CISA Known Exploited Vulnerabilities catalog">CISA KEV · LISTED</span>' : ''}
         <span class="cvss-score"><span>${esc(score)}</span><small>CVSS · SEVERITY</small></span></div>
       ${epssHtml}
+      ${priorityHtml}
       <h3 class="card-title">${esc(record.title || id)}</h3>
       <p class="card-description">${esc(record.desc || 'No source summary is available yet. Review the linked primary records and advisories.')}</p>
       ${products ? `<div class="affected-preview" aria-label="Affected products">${products}</div>` : ''}
       <div class="card-meta"><span class="meta-date">${esc(activity)}</span><i class="meta-divider"></i><span>${record.affected?.length ? `${record.affected.length} affected product${record.affected.length === 1 ? '' : 's'}` : 'Product details not provided'}</span><i class="meta-divider"></i><span class="source-label">${esc(sources)}</span></div>
-      <div class="card-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy ID</button><button class="card-action" type="button" data-action="detail" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⌕</span> Details</button><a class="card-action telegram-share" href="${esc(share)}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">➤</span> Share to Telegram</a><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub PoC search <small>UNVERIFIED</small></a></div>
+      <div class="card-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy ID</button><button class="card-action" type="button" data-action="detail" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⌕</span> Details</button><button class="card-action local-toggle${starred ? ' selected' : ''}" type="button" data-action="star" data-id="${esc(id)}" aria-pressed="${starred}" aria-label="${starred ? 'Remove star from' : 'Star'} ${esc(id)}">${starred ? '★ Starred' : '☆ Star'}</button><button class="card-action local-toggle" type="button" data-action="read" data-id="${esc(id)}" aria-pressed="${isRead}" aria-label="Mark ${esc(id)} as ${isRead ? 'unread' : 'read'}">${isRead ? 'Mark unread' : 'Mark read'}</button><a class="card-action telegram-share" href="${esc(share)}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">➤</span> Share to Telegram</a><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub repository search <small>UNVERIFIED LEADS</small></a></div>
     </article>`;
+  }
+
+  function groupValue(record, key) {
+    const affected = (record.affected || []).filter((item) => String(item[key] || '').trim());
+    affected.sort((a, b) => {
+      const rank = { NVD: 0, 'GitHub Advisory Database': 1, 'CISA KEV': 2 };
+      return (rank[a.source] ?? 9) - (rank[b.source] ?? 9) || String(a.vendor || '').localeCompare(String(b.vendor || '')) || String(a.product || '').localeCompare(String(b.product || ''));
+    });
+    const item = affected[0];
+    if (!item) return key === 'vendor' ? 'Vendor not specified' : 'Product not specified';
+    return key === 'vendor' ? item.vendor : `${item.product} · ${item.vendor || 'Vendor not specified'}`;
+  }
+
+  function renderGroupedCards(records) {
+    if (state.group === 'none') return records.map(cardHtml).join('');
+    const key = state.group === 'vendor' ? 'vendor' : 'product';
+    const groups = new Map();
+    records.forEach((record) => {
+      const label = groupValue(record, key);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(record);
+    });
+    return [...groups].map(([label, items]) => `<section class="feed-group"><h3>${esc(state.group === 'vendor' ? 'Vendor' : 'Product')} · ${esc(label)} <small>${items.length} CVE${items.length === 1 ? '' : 's'}</small></h3>${items.map(cardHtml).join('')}</section>`).join('');
   }
 
   function render({ animateCards = false, animateStats = false } = {}) {
@@ -580,13 +966,18 @@
     const matches = selectedRecords();
     const completeRange = rangeDays().every((day) => loadedByDay.has(day));
     const isSearching = state.query.trim().length > 0;
+    const needsCompleteRange = isSearching || !!state.vendor || !!state.product || state.absoluteZero || state.sort !== 'new';
     let total;
-    if (isSearching || state.exactHours === 24) total = matches.length;
+    if (needsCompleteRange || state.exactHours === 24) total = matches.length;
     else if (state.severity === 'all') total = summaryForSelection().count;
     else total = manifest.days.filter((item) => item.date >= state.from && item.date <= state.to).reduce((sum, item) => sum + (state.severity === 'unknown' ? Number(item.none || 0) + Number(item.unknown || 0) : Number(item[state.severity] || 0)), 0);
-    const countLabel = total > visible ? `Showing ${Math.min(visible, matches.length).toLocaleString()} of ${total.toLocaleString()}` : `${total.toLocaleString()} records`;
-    $('feed-count').textContent = total.toLocaleString();
-    $('feed-list').innerHTML = matches.slice(0, visible).map(cardHtml).join('');
+    const renderCount = Math.min(visible, MAX_DOM_RECORDS);
+    const pageRecords = matches.slice(windowStart, windowStart + renderCount);
+    const countLabel = needsCompleteRange && !completeRange
+      ? `Showing ${pageRecords.length.toLocaleString()} loaded · scanning selected dates`
+      : total > windowStart + renderCount ? `Showing ${Math.min(renderCount, matches.length).toLocaleString()} of ${total.toLocaleString()}` : `${total.toLocaleString()} records`;
+    $('feed-count').textContent = needsCompleteRange && !completeRange ? '…' : total.toLocaleString();
+    $('feed-list').innerHTML = renderGroupedCards(pageRecords);
     $('feed-list').setAttribute('aria-busy', 'false');
     if (animateCards && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       feedList.querySelectorAll('.cve-card').forEach((card) => {
@@ -595,17 +986,21 @@
       });
     }
     const noLoadedRecords = matches.length === 0;
-    const couldLoadMore = !completeRange && !isSearching;
+    const couldLoadMore = !completeRange && !needsCompleteRange;
     $('empty-state').hidden = !(noLoadedRecords && completeRange);
     const button = $('load-more');
-    button.hidden = !(matches.length > visible || couldLoadMore);
+    const hasNextCards = matches.length > windowStart + renderCount;
+    button.hidden = !(hasNextCards || couldLoadMore);
     button.disabled = false;
-    if (matches.length > visible) {
+    if (hasNextCards && visible >= MAX_DOM_RECORDS) {
+      button.innerHTML = `<span>SHOW NEXT 24</span><small>DOM capped at ${MAX_DOM_RECORDS}; use filters or export for the full range</small><b aria-hidden="true">↓</b>`;
+    } else if (hasNextCards) {
       button.innerHTML = `<span>LOAD MORE</span><small>${countLabel}</small><b aria-hidden="true">↓</b>`;
     } else if (couldLoadMore) {
       button.innerHTML = `<span>LOAD OLDER CVEs</span><small>${loadedByDay.size} of ${rangeDays().length} date shards loaded</small><b aria-hidden="true">↓</b>`;
     }
-    if (state.query && isSearching && completeRange) setStatus(`Search covers all ${rangeDays().length} selected UTC date shards.`, 'success');
+    if (needsCompleteRange && completeRange) setStatus(`Filters cover all ${rangeDays().length} selected UTC date shards.`, 'success');
+    else if (needsCompleteRange && !completeRange) setStatus(`Loading all ${rangeDays().length} selected date shards to complete these filters…`);
     else if (!state.query && !completeRange && noLoadedRecords) setStatus('Loading records for this date range…');
     else if (!state.query && !completeRange && matches.length) setStatus(`Showing recent records first · ${loadedByDay.size} of ${rangeDays().length} date shards loaded.`);
     else if (!state.query && !completeRange) setStatus('All selected dates loaded.');
@@ -626,6 +1021,7 @@
     searchGeneration += 1;
     const rangeGeneration = searchGeneration;
     visible = PAGE_SIZE;
+    windowStart = 0;
     $('date-from').value = from;
     $('date-to').value = to;
     document.querySelectorAll('.quick-ranges button').forEach((button) => {
@@ -635,7 +1031,7 @@
     });
     render({ animateCards: true });
     const days = rangeDays().slice(-2).reverse();
-    if (state.query || state.sort !== 'new') loadAllSelectedDays(rangeGeneration).catch(showLoadError);
+    if (state.query || state.vendor || state.product || state.absoluteZero || state.sort !== 'new') loadAllSelectedDays(rangeGeneration).catch(showLoadError);
     else loadDays(days).then(() => render()).catch(showLoadError);
   }
 
@@ -650,7 +1046,7 @@
     }
     if (generation === searchGeneration) {
       render();
-      const purpose = state.query ? 'Search covers' : 'Full-range sort covers';
+      const purpose = state.query ? 'Search covers' : state.vendor || state.product ? 'Exact vendor/product filters cover' : state.absoluteZero ? 'Absolute Zero mode covers' : 'Selected view covers';
       setStatus(`${purpose} all ${days.length} selected UTC date shards.`, 'success');
     }
   }
@@ -740,7 +1136,10 @@
             const oldIds = new Set(oldRecords.map((item) => cveId(item.id)));
             for (const record of newRecords) {
               const id = cveId(record.id);
-              if (id && !oldIds.has(id)) detected.add(id);
+              if (id && !oldIds.has(id)) {
+                detected.add(id);
+                if (cvssSeverity(record.score) === 'critical') pendingCriticalIds.add(id);
+              }
             }
           } else if (changedDataDays.includes(day)) {
             uncertainChangedDays.push(day);
@@ -812,7 +1211,14 @@
       : record.date_basis === 'GitHub advisory publication'
         ? `GitHub advisory published ${fmtDate(record.window_date)}${record.published ? ` · CVE publication ${fmtTimestamp(record.published)}` : ''}.`
         : `Published ${fmtTimestamp(record.published)}${record.modified ? ` · last modified ${fmtTimestamp(record.modified)}` : ''}.`;
-    const products = (record.affected || []).length ? (record.affected || []).map((item) => `<div class="detail-product"><strong>${esc([item.vendor, item.product].filter(Boolean).join(' / ') || 'Product')}</strong><span>${esc(item.versions || 'Version details not specified')} · ${esc(item.source || 'Source record')}</span></div>`).join('') : '<p class="detail-description">Affected product/version details were not provided in the available records.</p>';
+    const products = (record.affected || []).length ? (record.affected || []).map((item) => {
+      const vendor = String(item.vendor || '').trim();
+      const product = String(item.product || '').trim();
+      const pairWatched = watchlist.some((entry) => normalizeFacet(entry.vendor) === normalizeFacet(vendor) && normalizeFacet(entry.product) === normalizeFacet(product));
+      const cpe = item.source === 'NVD' && /^cpe:2\.3:/i.test(String(item.cpe || '')) ? `<code class="cpe-value">${esc(item.cpe)}</code>` : '';
+      const watch = vendor && product ? `<button class="watch-product-button" type="button" data-action="watch-product" data-vendor="${esc(vendor)}" data-product="${esc(product)}" aria-pressed="${pairWatched}">${pairWatched ? 'Remove from local watchlist' : 'Watch vendor / product'}</button>` : '';
+      return `<div class="detail-product"><strong>${esc([vendor, product].filter(Boolean).join(' / ') || 'Product')}</strong><span>${esc(item.versions || 'Version details not specified')} · ${esc(item.source || 'Source record')}</span>${cpe}${watch}</div>`;
+    }).join('') : '<p class="detail-description">Affected product/version details were not provided in the available records.</p>';
     const epss = epssFor(id);
     const percentile = epss?.percentile == null ? '' : ` · P${Math.round(epss.percentile * 100)} relative percentile rank`;
     const epssDetail = epss
@@ -821,78 +1227,248 @@
     const kevDetail = record.kev
       ? `Listed in CISA KEV · added ${fmtDate(record.kev.date_added || record.window_date)}. ${record.kev.required_action || 'CISA identifies this as a known exploited vulnerability.'}${record.kev.due_date ? ` Due date: ${record.kev.due_date}.` : ''}${record.kev.ransomware && record.kev.ransomware.toLowerCase() !== 'unknown' ? ` Ransomware campaign use: ${record.kev.ransomware}.` : ''}`
       : 'Not listed in the current CISA KEV snapshot. Absence from this catalog is not proof that exploitation has never occurred.';
-    const poc = `GitHub repository search for ${id} · results are unverified and do not prove exploitation.`;
+    const poc = `GitHub repository search matches are unverified leads and do not prove a working exploit or exploitation.`;
     const signalCards = `<section class="detail-section"><h3>Why it matters</h3><div class="signal-grid"><article class="signal-card signal-cvss severity-${esc(severity)}"><strong>CVSS / SEVERITY</strong><span>${esc(severity === 'unknown' ? 'UNRATED' : severity === 'none' ? '0.0 · NONE' : `${Number(record.score).toFixed(1)} · ${severity.toUpperCase()}`)}</span><small>Severity only; this is not an exploitation probability.</small></article><article class="signal-card signal-epss"><strong>EPSS / 30-DAY PROBABILITY</strong><span>${esc(epss ? epssPercent(epss) : 'Not available')}</span><small>${esc(epssDetail)}</small></article><article class="signal-card signal-kev"><strong>CISA KEV / CATALOG EVIDENCE</strong><span>${record.kev ? 'LISTED' : 'NOT LISTED'}</span><small>${esc(kevDetail)}</small></article><article class="signal-card signal-poc"><strong>GITHUB PoC / SEARCH LEAD</strong><span>UNVERIFIED</span><small>${esc(poc)}</small></article></div></section>`;
+    const priority = priorityScore(record, id);
+    const priorityDetail = `<section class="detail-section"><h3>Composite priority · custom 0–100</h3><p class="detail-description">${priority.value == null ? 'Not calculated: fewer than 3 of 5 inputs are available.' : `${priority.value.toFixed(1)} · ${priority.available}/5 inputs available. Available component weights are renormalized; this is a triage heuristic, not an official score.`}</p><div class="priority-breakdown">${priority.components.map((item) => `<div><strong>${esc(item.key)} · ${item.weight}%</strong><span>${item.value.toFixed(1)} / 100</span><small>${esc(item.note)}</small></div>`).join('')}${priority.missing.map((item) => `<div class="missing-component"><strong>${esc(item)} · not available</strong><span>Weight omitted</span><small>Missing data is uncertainty, not a zero.</small></div>`).join('')}</div><a class="method-link" href="#methodology" data-action="close-methodology">Scoring formula and limitations</a></section>`;
     const kev = record.kev ? `<section class="detail-section"><h3>CISA KEV catalog detail</h3><div class="kev-callout"><strong>Known exploited vulnerability listing</strong><p>${esc(kevDetail)}</p></div></section>` : '';
     const refs = [...(record.advisories || []).map((item) => ({ label: item.label || 'Security advisory', url: item.url })), ...(record.refs || [])]
       .filter((item, index, all) => safeUrl(item.url) && all.findIndex((other) => other.url === item.url) === index).slice(0, 14);
-    const links = [{ label: record.sources?.includes('NVD') ? 'Primary record · NVD' : 'CVE Program record', url: primary }, { label: 'FIRST EPSS data and method', url: 'https://www.first.org/epss/data' }, ...refs]
+    const links = [{ label: record.sources?.includes('NVD') ? 'Primary record · NVD' : 'CVE Program record', url: primary }, { label: 'FIRST EPSS data and method', url: 'https://www.first.org/epss/data' }, ...refs.map((item) => ({ ...item, label: item.source === 'NVD' && item.tags?.some((tag) => String(tag).toLowerCase() === 'exploit') ? `NVD-tagged Exploit reference · unverified · ${item.label || 'Reference'}` : item.label }))]
       .filter((item, index, all) => safeUrl(item.url) && all.findIndex((other) => other.url === item.url) === index);
+    const linkedFromNormalizedData = (record.related_cves || []).filter((item) => {
+      if (item.source !== 'NVD reference') return false;
+      const idValue = cveId(item.id);
+      try {
+        const url = new URL(item.url);
+        const nvdId = url.hostname === 'nvd.nist.gov' ? url.pathname.match(/^\/vuln\/detail\/(CVE-\d{4,}-\d+)$/i)?.[1] : null;
+        const cveOrgId = (url.hostname === 'www.cve.org' || url.hostname === 'cve.org') && url.pathname.replace(/\/$/, '') === '/CVERecord' ? cveId(url.searchParams.get('id')) : null;
+        return !!idValue && idValue === cveId(nvdId || cveOrgId);
+      } catch (_) { return false; }
+    }).map((item) => item.id);
+    const linkedFromLegacyReferences = (record.refs || []).filter((item) => item.source === 'NVD').flatMap((item) => {
+      try {
+        const url = new URL(item.url);
+        const pathId = url.hostname === 'nvd.nist.gov' ? url.pathname.match(/\/vuln\/detail\/(CVE-\d{4,}-\d+)/i)?.[1] : null;
+        const cveOrgId = (url.hostname === 'www.cve.org' || url.hostname === 'cve.org') && url.pathname.replace(/\/$/, '') === '/CVERecord' ? url.searchParams.get('id') : null;
+        return [pathId || cveOrgId];
+      } catch (_) { return []; }
+    });
+    const nvdLinkedCves = [...new Set([...linkedFromNormalizedData, ...linkedFromLegacyReferences].map(cveId).filter((linked) => linked && linked !== id))];
+    const relatedLinks = nvdLinkedCves.length
+      ? `<section class="detail-section"><h3>CVE links explicitly present in NVD references</h3><p class="detail-description">The source links these CVE records; no relationship type is inferred.</p><div class="detail-links">${nvdLinkedCves.map((linked) => `<a href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(linked)}" target="_blank" rel="noopener noreferrer">↗ ${esc(linked)} · NVD record</a>`).join('')}</div></section>`
+      : '';
     const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
     const share = telegramShareUrl(record, id);
     $('detail-content').innerHTML = `<div class="detail-id-row"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span class="severity-badge ${esc(severity)}">${esc(severityLabel)}</span>${record.kev ? '<span class="kev-badge">CISA KEV · LISTED</span>' : ''}</div>
       <h2 id="detail-title">${esc(record.title || id)}</h2><p class="detail-score">${esc(score)} · ${esc(activity)}</p><p class="detail-description">${esc(record.desc || 'No summary has been published by the available sources.')}</p>
       ${signalCards}
+      ${priorityDetail}
       <section class="detail-section"><h3>Affected products and versions</h3><div class="detail-products">${products}</div></section>
+      ${relatedLinks}
       ${kev}
-      <section class="detail-section"><h3>Source records and references</h3><div class="detail-links">${links.map((item) => `<a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer">↗ ${esc(item.label || 'Reference')}</a>`).join('') || '<span class="detail-description">No source links provided.</span>'}</div></section>
+      <section class="detail-section"><h3>Source records and references</h3><div class="detail-links">${links.map((item) => `<a class="${item.source === 'NVD' && item.tags?.some((tag) => String(tag).toLowerCase() === 'exploit') ? 'nvd-exploit-reference' : ''}" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer">↗ ${esc(item.label || 'Reference')}</a>`).join('') || '<span class="detail-description">No source links provided.</span>'}</div></section>
       <section class="detail-section"><h3>Record attribution</h3><div class="detail-sources">${(record.sources || []).map((source) => `<span class="detail-source">${esc(source)}</span>`).join('') || '<span class="detail-source">CVE record</span>'}</div></section>
-      <div class="detail-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy CVE ID</button><a class="card-action telegram-share" href="${esc(share)}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">➤</span> Share to Telegram</a><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> GitHub PoC search <small>UNVERIFIED</small></a></div>`;
+      <section class="detail-section github-search-section"><h3>GitHub repository search</h3><p class="detail-description">${esc(poc)} The on-demand count is the API’s raw query-match count, not the number of verified PoCs.</p><button class="card-action" type="button" data-action="poc-count" data-id="${esc(id)}">Check current repository matches</button><p id="poc-search-status" class="poc-search-status" role="status" aria-live="polite">Not checked. Search absence is not proof that no public PoC exists.</p><ul id="poc-search-results" class="poc-search-results"></ul></section>
+      <div class="detail-actions"><button class="card-action" type="button" data-action="copy" data-id="${esc(id)}"><span class="action-icon" aria-hidden="true">⧉</span> Copy CVE ID</button><a class="card-action telegram-share" href="${esc(share)}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">➤</span> Share to Telegram</a><a class="card-action poc-action" href="${esc(pocUrl(id))}" target="_blank" rel="noopener noreferrer"><span class="action-icon" aria-hidden="true">↗</span> Open GitHub search <small>UNVERIFIED LEADS</small></a></div>`;
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else dialog.setAttribute('open', '');
   }
 
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    field.select();
+    const copied = document.execCommand('copy');
+    field.remove();
+    if (!copied) throw new Error('Clipboard permission unavailable');
+  }
+
   async function copyId(id) {
     try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(id);
-      } else {
-        const field = document.createElement('textarea');
-        field.value = id;
-        field.setAttribute('readonly', '');
-        field.style.position = 'fixed';
-        field.style.opacity = '0';
-        document.body.appendChild(field);
-        field.select();
-        const copied = document.execCommand('copy');
-        field.remove();
-        if (!copied) throw new Error('Clipboard permission unavailable');
-      }
+      await copyText(id);
       toast('Copied');
     } catch (_) {
       toast('Clipboard access was blocked by this browser.', 'warning');
     }
   }
 
+  function csvCell(value) {
+    let text = String(value == null ? '' : value);
+    if (/^[\s\u0000-\u001f]*[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  async function exportFiltered(format) {
+    if (exportBusy) return;
+    exportBusy = true;
+    const buttons = [$('export-json'), $('export-csv')];
+    buttons.forEach((button) => { button.disabled = true; button.setAttribute('aria-busy', 'true'); });
+    setToolStatus('Loading every selected date shard before export…');
+    try {
+      const generation = ++searchGeneration;
+      await loadAllSelectedDays(generation);
+      if (!rangeDays().every((day) => loadedByDay.has(day))) throw new Error('Some selected date shards could not be loaded.');
+      const records = selectedRecords();
+      const filters = { from: state.from, to: state.to, severity: state.severity, vendor: state.vendor, product: state.product, absoluteZero: state.absoluteZero };
+      let body;
+      let mime;
+      let extension;
+      if (format === 'csv') {
+        const headers = ['id', 'title', 'cvss_score', 'cvss_severity', 'epss_probability', 'cisa_kev_listed', 'composite_priority_custom', 'priority_inputs_available', 'activity_at', 'vendor_product_sources', 'primary_url'];
+        const rows = records.map((record) => {
+          const id = cveId(record.id);
+          const priority = priorityScore(record, id);
+          const affected = (record.affected || []).map((item) => `${item.vendor || ''} / ${item.product || ''} (${item.versions || ''}) [${item.source || 'source unknown'}]`).join(' | ');
+          return [id, record.title, record.score, cvssSeverity(record.score), epssFor(id)?.score ?? '', !!record.kev, priority.value ?? '', `${priority.available}/5`, record.activity_at || record.published || '', affected, safeUrl(record.primary_url) || ''];
+        });
+        body = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
+        mime = 'text/csv;charset=utf-8';
+        extension = 'csv';
+      } else {
+        body = JSON.stringify({ schema_version: 1, exported_at: new Date().toISOString(), filters, note: 'Composite priority is a custom heuristic; a missing component is not zero. CVSS, EPSS, KEV and PoC evidence remain separate.', records: records.map((record) => ({ ...record, subzero_priority_custom: priorityScore(record) })) }, null, 2);
+        mime = 'application/json;charset=utf-8';
+        extension = 'json';
+      }
+      const blob = new Blob([body], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `subzero-filtered-${state.from || 'all'}-${state.to || 'dates'}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      setToolStatus(`${records.length.toLocaleString()} filtered records downloaded as ${extension.toUpperCase()}.`);
+    } catch (error) {
+      setToolStatus(`Export stopped: ${error.message || 'selected feed data could not be loaded'}`);
+      toast('Export could not be completed. Retry after the feed loads.', 'warning');
+    } finally {
+      exportBusy = false;
+      buttons.forEach((button) => { button.disabled = false; button.removeAttribute('aria-busy'); });
+    }
+  }
+
+  async function loadGithubRepositoryMatches(id, button) {
+    const output = $('poc-search-status');
+    const results = $('poc-search-results');
+    if (!output || !results) return;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    output.textContent = 'Requesting current GitHub repository search…';
+    results.replaceChildren();
+    try {
+      let payload = githubPocCache.get(id);
+      if (!payload) {
+        const query = `${id} exploit OR PoC in:name,description,readme`;
+        const url = `https://api.github.com/search/repositories?${new URLSearchParams({ q: query, per_page: '3' })}`;
+        payload = await fetchJson(url, { cache: 'no-store', headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } }, 1);
+        if (!Number.isInteger(payload.total_count) || !Array.isArray(payload.items)) throw new Error('GitHub returned an unexpected search response');
+        githubPocCache.set(id, payload);
+      }
+      output.textContent = `${Number(payload.total_count).toLocaleString()} GitHub repository search match${payload.total_count === 1 ? '' : 'es'}; unreviewed leads, not verified PoCs. Search absence is not proof none exist.`;
+      results.innerHTML = payload.items.slice(0, 3).map((item) => {
+        const repoUrl = safeUrl(item.html_url);
+        if (!repoUrl) return '';
+        const owner = String(item.owner?.login || 'Repository');
+        const description = String(item.description || 'No repository description.').slice(0, 200);
+        const stars = Number.isFinite(Number(item.stargazers_count)) ? Number(item.stargazers_count).toLocaleString() : '—';
+        return `<li><a href="${esc(repoUrl)}" target="_blank" rel="noopener noreferrer">${esc(owner)}/${esc(item.name || '')}</a><span>${esc(description)}</span><small>${stars} stars · unverified search result</small></li>`;
+      }).join('');
+    } catch (error) {
+      output.textContent = `GitHub search count unavailable (${error.status === 403 ? 'rate limit or access restriction' : 'network or API error'}). This is not evidence that no PoC exists.`;
+    } finally {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
+
   function bindEvents() {
+    const resetWindow = () => { visible = PAGE_SIZE; windowStart = 0; };
+    const loadForFilters = () => {
+      window.clearTimeout(searchTimer);
+      const generation = ++searchGeneration;
+      if (state.query || state.vendor || state.product || state.absoluteZero || state.sort !== 'new') {
+        searchTimer = window.setTimeout(() => loadAllSelectedDays(generation).catch(showLoadError), 180);
+      }
+    };
+    const setFacetFilter = (key, raw) => {
+      const values = key === 'vendor' ? facets.vendors : facets.products;
+      const input = $(key === 'vendor' ? 'vendor-filter' : 'product-filter');
+      const canonical = canonicalFacet(raw, values);
+      state[key] = canonical;
+      resetWindow();
+      if (raw.trim() && !canonical) setToolStatus(`Choose an exact ${key} from the source-backed suggestions, or clear this field.`);
+      render({ animateCards: true });
+      loadForFilters();
+      if (input.value !== raw) input.value = raw;
+    };
+    renderSavedViews();
+    renderWatchlist();
+    updateControlState();
     $('severity-filters').addEventListener('click', (event) => {
       const button = event.target.closest('[data-severity]');
       if (!button) return;
       state.severity = button.dataset.severity;
-      document.querySelectorAll('.severity-filter').forEach((element) => {
-        const selected = element === button;
-        element.classList.toggle('active', selected);
-        element.setAttribute('aria-pressed', String(selected));
-      });
-      visible = PAGE_SIZE;
+      if (state.absoluteZero && state.severity !== 'critical') state.absoluteZero = false;
+      updateControlState();
+      resetWindow();
       render({ animateCards: true });
     });
     $('sort-select').addEventListener('change', (event) => {
       state.sort = event.target.value;
+      updateControlState();
+      resetWindow();
       render({ animateCards: true });
-      if (state.sort !== 'new' && !rangeDays().every((day) => loadedByDay.has(day))) {
-        const generation = ++searchGeneration;
-        loadAllSelectedDays(generation).catch(showLoadError);
-      }
+      loadForFilters();
     });
     $('search-input').addEventListener('input', (event) => {
       state.query = event.target.value.trim();
-      visible = PAGE_SIZE;
+      resetWindow();
       render({ animateCards: true });
-      window.clearTimeout(searchTimer);
-      const generation = ++searchGeneration;
-      if (state.query) searchTimer = window.setTimeout(() => loadAllSelectedDays(generation).catch(showLoadError), 260);
+      loadForFilters();
     });
+    $('vendor-filter').addEventListener('input', (event) => setFacetFilter('vendor', event.target.value));
+    $('product-filter').addEventListener('input', (event) => setFacetFilter('product', event.target.value));
+    $('group-select').addEventListener('change', (event) => {
+      state.group = ['none', 'vendor', 'product'].includes(event.target.value) ? event.target.value : 'none';
+      resetWindow();
+      render();
+    });
+    $('absolute-zero').addEventListener('click', () => {
+      if (!state.absoluteZero) {
+        preAbsoluteSeverity = state.severity;
+        state.absoluteZero = true;
+        state.severity = 'critical';
+      } else {
+        state.absoluteZero = false;
+        state.severity = preAbsoluteSeverity || 'all';
+      }
+      updateControlState();
+      resetWindow();
+      render({ animateCards: true });
+      loadForFilters();
+    });
+    $('compact-toggle').addEventListener('click', () => {
+      compactCards = !compactCards;
+      updateControlState();
+      writeStored('subzero:compact', compactCards);
+    });
+    $('save-view').addEventListener('click', saveCurrentView);
+    $('saved-view-select').addEventListener('change', () => {
+      $('apply-view').disabled = !selectedSavedView();
+      $('delete-view').disabled = !selectedSavedView();
+    });
+    $('apply-view').addEventListener('click', applySelectedView);
+    $('delete-view').addEventListener('click', deleteSelectedView);
+    $('copy-permalink').addEventListener('click', copyPermalink);
+    $('export-json').addEventListener('click', () => exportFiltered('json'));
+    $('export-csv').addEventListener('click', () => exportFiltered('csv'));
     $('apply-dates').addEventListener('click', () => setRange($('date-from').value, $('date-to').value));
     $('date-from').addEventListener('keydown', (event) => { if (event.key === 'Enter') setRange($('date-from').value, $('date-to').value); });
     $('date-to').addEventListener('keydown', (event) => { if (event.key === 'Enter') setRange($('date-from').value, $('date-to').value); });
@@ -918,8 +1494,9 @@
       const button = $('load-more');
       button.disabled = true;
       const visibleMatches = selectedRecords().length;
-      if (visibleMatches > visible) {
-        visible += PAGE_SIZE;
+      if (visibleMatches > windowStart + Math.min(visible, MAX_DOM_RECORDS)) {
+        if (visible < MAX_DOM_RECORDS) visible = Math.min(MAX_DOM_RECORDS, visible + PAGE_SIZE);
+        else windowStart = Math.min(windowStart + PAGE_SIZE, Math.max(0, visibleMatches - MAX_DOM_RECORDS));
         render();
         return;
       }
@@ -946,7 +1523,7 @@
             }
           });
           rebuildRecords();
-          visible += PAGE_SIZE;
+          visible = Math.min(MAX_DOM_RECORDS, visible + PAGE_SIZE);
           render();
         } catch (error) {
           feedList.querySelectorAll('.loading-skeleton').forEach((skeleton) => skeleton.remove());
@@ -967,20 +1544,85 @@
       if (!id) return;
       if (action.dataset.action === 'copy') copyId(id);
       if (action.dataset.action === 'detail') renderDetail(id);
+      if (action.dataset.action === 'star') {
+        if (starredIds.has(id)) starredIds.delete(id); else starredIds.add(id);
+        writeStored('subzero:stars', [...starredIds]);
+        render();
+        feedList.querySelector(`[data-action="star"][data-id="${id}"]`)?.focus();
+      }
+      if (action.dataset.action === 'read') {
+        if (readIds.has(id)) readIds.delete(id); else readIds.add(id);
+        writeStored('subzero:read', [...readIds]);
+        render();
+        feedList.querySelector(`[data-action="read"][data-id="${id}"]`)?.focus();
+      }
     });
     $('detail-content').addEventListener('click', (event) => {
-      const action = event.target.closest('[data-action="copy"]');
-      if (action) copyId(cveId(action.dataset.id));
+      const action = event.target.closest('[data-action]');
+      if (!action) return;
+      if (action.dataset.action === 'copy') copyId(cveId(action.dataset.id));
+      if (action.dataset.action === 'poc-count') loadGithubRepositoryMatches(cveId(action.dataset.id), action);
+      if (action.dataset.action === 'watch-product') {
+        const vendor = action.dataset.vendor;
+        const product = action.dataset.product;
+        watchPair(vendor, product);
+        const watching = watchlist.some((item) => normalizeFacet(item.vendor) === normalizeFacet(vendor) && normalizeFacet(item.product) === normalizeFacet(product));
+        action.setAttribute('aria-pressed', String(watching));
+        action.textContent = watching ? 'Remove from local watchlist' : 'Watch vendor / product';
+      }
+      if (action.dataset.action === 'close-methodology') {
+        event.preventDefault();
+        $('detail-dialog').close();
+        $('methodology').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        history.replaceState(null, '', `${window.location.pathname}${window.location.search}#methodology`);
+      }
+    });
+    $('workspace-tools').addEventListener('click', (event) => {
+      const action = event.target.closest('[data-action]');
+      if (!action) return;
+      const index = Number(action.dataset.index);
+      if (action.dataset.action === 'watch-remove' && Number.isInteger(index)) {
+        watchlist.splice(index, 1);
+        writeStored('subzero:watchlist', watchlist);
+        renderWatchlist();
+        setToolStatus('Removed from the local watchlist.');
+      }
+      if (action.dataset.action === 'watch-filter' && Number.isInteger(index) && watchlist[index]) {
+        state.vendor = canonicalFacet(watchlist[index].vendor, facets.vendors);
+        state.product = canonicalFacet(watchlist[index].product, facets.products);
+        state.query = '';
+        updateControlState();
+        resetWindow();
+        render({ animateCards: true });
+        loadForFilters();
+        $('feed').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     });
     $('dialog-close').addEventListener('click', () => $('detail-dialog').close());
     $('detail-dialog').addEventListener('click', (event) => {
       if (event.target === $('detail-dialog')) $('detail-dialog').close();
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+      const target = document.activeElement;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === '/' && !isTextTarget(target)) {
         event.preventDefault();
         $('search-input').focus();
+        return;
       }
+      if (isTextTarget(target) || $('detail-dialog').open || !['j', 'k', 'c'].includes(event.key.toLocaleLowerCase())) return;
+      const cards = [...feedList.querySelectorAll('.cve-card')];
+      const activeCard = target.closest?.('.cve-card');
+      if (event.key.toLocaleLowerCase() === 'c') {
+        const id = cveId(activeCard?.dataset.cveId);
+        if (id) { event.preventDefault(); copyId(id); }
+        return;
+      }
+      if (!cards.length) return;
+      const current = activeCard ? cards.indexOf(activeCard) : -1;
+      const next = event.key.toLocaleLowerCase() === 'j' ? Math.min(cards.length - 1, current < 0 ? 0 : current + 1) : Math.max(0, current < 0 ? cards.length - 1 : current - 1);
+      event.preventDefault();
+      cards[next].focus();
     });
   }
 
@@ -991,21 +1633,29 @@
       try {
         setLoaderMessage('Loading vulnerability feed…');
         manifest = await fetchManifest();
+        await loadFacets();
+        restorePermalink();
         setDateBounds();
         renderSources();
-        let newest = manifest.days.slice().reverse().filter((item) => Number(item.count) > 0).slice(0, 2).map((item) => item.date);
-        if (!newest.length) newest = manifest.days.slice(-2).map((item) => item.date).reverse();
+        const selectedDays = rangeDays();
+        let newest = selectedDays.slice().reverse().filter((day) => Number(manifest.days.find((item) => item.date === day)?.count) > 0).slice(0, 2);
+        if (!newest.length) newest = selectedDays.slice(-2).reverse();
         await loadDays(newest, { deferRender: true });
         rebuildRecords();
         render({ animateStats: true });
         void loadEpssSnapshot().then(() => {
           if (booted && manifest) render();
         });
+        void loadRetainedHistory();
         lastSnapshotVersion = manifest.generated_at || '';
         lastBrowserCheck = Date.now();
         refreshTimestamp();
         setLoaderMessage('Feed ready');
         hideLoader();
+        if (state.query || state.vendor || state.product || state.absoluteZero || state.sort !== 'new') {
+          const generation = ++searchGeneration;
+          void loadAllSelectedDays(generation).catch(showLoadError);
+        }
         break;
       } catch (error) {
         $('feed-list').setAttribute('aria-busy', 'true');

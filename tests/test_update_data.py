@@ -96,7 +96,12 @@ class NormalizeAndMergeTests(unittest.TestCase):
                 "versionStartIncluding": "1.2",
                 "versionEndExcluding": "2.0",
             }]}]}],
-            "references": [{"url": "https://vendor.example/security/advisory"}],
+            "references": [
+                {"url": "https://vendor.example/security/advisory"},
+                {"url": "https://nvd.nist.gov/vuln/detail/CVE-2022-1234", "tags": ["Exploit"]},
+                {"url": "https://vendor.example/CVE-2022-5678"},
+                {"url": "https://www.cve.org/unrelated?id=CVE-2022-9876"},
+            ],
         }}]
         advisories = [{
             "ghsa_id": "GHSA-test",
@@ -135,8 +140,14 @@ class NormalizeAndMergeTests(unittest.TestCase):
         self.assertEqual(record["sources"], ["NVD", "GitHub Advisory Database", "CISA KEV"])
         self.assertEqual(record["kev"]["date_added"], "2026-09-15")
         self.assertTrue(any(item["source"] == "NVD" and "1.2" in item["versions"] for item in record["affected"]))
+        self.assertTrue(any(item.get("cpe") == "cpe:2.3:a:acme:router:*:*:*:*:*:*:*:*" for item in record["affected"]))
         self.assertTrue(any(item["source"] == "GitHub Advisory Database" for item in record["affected"]))
         self.assertEqual(len([ref for ref in record["refs"] if ref["url"] == "https://vendor.example/security/advisory"]), 1)
+        exploit_ref = next(ref for ref in record["refs"] if ref["url"] == "https://nvd.nist.gov/vuln/detail/CVE-2022-1234")
+        self.assertEqual(exploit_ref["tags"], ["Exploit"])
+        self.assertEqual(record["related_cves"], [{"id": "CVE-2022-1234", "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-1234", "source": "NVD reference"}])
+        facets = feed.build_facets(records)
+        self.assertIn(("acme", "router"), {(item["vendor"].casefold(), item["product"].casefold()) for item in facets["product_pairs"]})
         self.assertEqual(record["primary_url"], "https://nvd.nist.gov/vuln/detail/CVE-2026-1001")
 
     def test_recent_kev_only_cve_is_included_but_old_kevs_are_not(self):
@@ -293,6 +304,8 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(manifest["coverage"]["distinct_cve_records"], len(records := [item for shard in shards.values() for item in shard]))
         self.assertEqual(len(shards["2026-09-02"]), 1)
         self.assertEqual(manifest["coverage"]["utc_days_sharded"], 3)
+        self.assertEqual(manifest["facets"]["path"], "data/facets.json")
+        self.assertEqual(manifest["history"]["path"], "data/history.json")
 
     def test_snapshot_is_sharded_and_manifest_is_written(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -301,12 +314,53 @@ class SnapshotTests(unittest.TestCase):
         statuses = [{"name": "NVD", "ok": True}]
         manifest, shards = feed.build_manifest([], start, end, generated, statuses, 0, 0, 0)
         with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary)
+            output = Path(temporary) / "data"
             feed.write_snapshot(output, manifest, shards)
             saved = json.loads((output / "manifest.json").read_text())
             self.assertEqual(saved["totals"]["cves"], 0)
             self.assertEqual(json.loads((output / "2026-09-01.json").read_text()), [])
             self.assertEqual(json.loads((output / "2026-09-02.json").read_text()), [])
+            facets = json.loads((output / "facets.json").read_text())
+            history = json.loads((output / "history.json").read_text())
+            api_manifest = json.loads((Path(temporary) / "api/v1/manifest.json").read_text())
+            self.assertEqual(facets, {"schema_version": 1, "vendors": [], "products": [], "product_pairs": []})
+            self.assertEqual(history["schema_version"], 1)
+            self.assertEqual(api_manifest, saved)
+
+    def test_history_records_only_material_changes_between_ids_in_both_snapshots(self):
+        old = [
+            {"id": "CVE-2026-4101", "score": 8.7, "kev": None},
+            {"id": "CVE-2026-4102", "score": 7.4, "kev": None},
+        ]
+        new = [
+            {"id": "CVE-2026-4101", "score": 9.3, "kev": {"date_added": "2026-09-29"}},
+            {"id": "CVE-2026-4102", "score": 7.4, "kev": None},
+            {"id": "CVE-2026-4103", "score": 9.8, "kev": {"date_added": "2026-09-29"}},
+        ]
+        old_epss = {"score_date": "2026-09-28", "scores": {"CVE-2026-4101": {"score": 0.03}, "CVE-2026-4102": {"score": 0.0}}}
+        new_epss = {"score_date": "2026-09-29", "scores": {"CVE-2026-4101": {"score": 0.13}, "CVE-2026-4102": {"score": 0.09}}}
+        events = feed.material_change_events(old, new, old_epss, new_epss, datetime(2026, 9, 30, tzinfo=timezone.utc))
+        self.assertEqual({item["type"] for item in events}, {"severity", "kev_added", "epss_jump"})
+        self.assertEqual({item["id"] for item in events}, {"CVE-2026-4101"})
+
+    def test_retained_history_compares_published_complete_snapshot_not_window_expiry(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 1, 23, 59, tzinfo=timezone.utc)
+        old_time = datetime(2026, 9, 2, 1, tzinfo=timezone.utc)
+        new_time = datetime(2026, 9, 2, 2, tzinfo=timezone.utc)
+        old = {"id": "CVE-2026-4201", "score": 8.4, "sev": "high", "kev": None, "window_date": "2026-09-01"}
+        new = {**old, "score": 9.4, "sev": "critical", "kev": {"date_added": "2026-09-01"}}
+        old_manifest, old_shards = feed.build_manifest([old], start, end, old_time, [{"name": "NVD", "ok": True}], 1, 0, 0)
+        new_manifest, _ = feed.build_manifest([new], start, end, new_time, [{"name": "NVD", "ok": True}], 1, 0, 0)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "data"
+            feed.write_snapshot(output, old_manifest, old_shards, {"schema_version": 1, "score_date": "2026-09-01", "scores": {}})
+            old_history = {"schema_version": 1, "retention_days": 30, "snapshots": [{"observed_at": feed.iso_z(old_time), "core_snapshot_at": feed.iso_z(old_time), "record_count": 1, "complete": True}], "events": []}
+            feed._write_json(output / "history.json", old_history)
+            history = feed.build_change_history(output, [new], {"schema_version": 1, "score_date": "2026-09-02", "scores": {}}, new_manifest, new_time)
+            self.assertEqual(len(history["snapshots"]), 2)
+            self.assertEqual({item["type"] for item in history["events"]}, {"severity", "kev_added"})
+            self.assertTrue(all(item["id"] == "CVE-2026-4201" for item in history["events"]))
 
     def test_manifest_rejects_records_outside_every_available_utc_shard(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)

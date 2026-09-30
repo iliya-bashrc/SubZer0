@@ -76,7 +76,7 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("function cardAgeVividness(record)", JS)
         self.assertIn("const ageVividness = cardAgeVividness(record);", JS)
         self.assertIn("if (timestamp == null) return null;", JS)
-        self.assertIn("class=\"cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}\"", JS)
+        self.assertIn("class=\"cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}${isRead ? ' is-read' : ''}\"", JS)
         self.assertIn("const ageStyle = ageVividness == null ? '' : ` style=\"--age-vividness:${ageVividness}%\"`;", JS)
         self.assertIn(".cve-card.kev-listed { --card-accent: var(--critical);", CSS)
         self.assertIn("color: var(--aged-severity, var(--accent));", CSS)
@@ -168,9 +168,10 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("data/manifest.json?check=${Date.now()}", JS)
         self.assertIn("?v=${encodeURIComponent(version)}", JS)
         self.assertIn("const PAGE_SIZE = 24", JS)
-        self.assertIn(".slice(0, visible)", JS)
+        self.assertIn("const MAX_DOM_RECORDS = 200", JS)
+        self.assertIn("matches.slice(windowStart, windowStart + renderCount)", JS)
         self.assertIn("const SHARD_CONCURRENCY = 4", JS)
-        self.assertIn("each request reveals up to 24 more cards", README)
+        self.assertIn("Each request reveals up to 24 more cards", README)
         self.assertIn("one skeleton per outstanding shard request", README)
 
     def test_static_frontend_has_no_external_runtime_and_source_specific_dates(self):
@@ -191,13 +192,70 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("git pull --rebase origin main", workflow)
         self.assertIn("git push origin HEAD:main", workflow)
         self.assertNotIn("--force", workflow)
+        self.assertIn("git add -A data api/v1/manifest.json", workflow)
+        self.assertIn("api/v1/manifest.json", README)
         self.assertIn("main", checks)
         self.assertIn("GitHub Pages is configured to publish `/` from the `main` branch", README)
+
+    def test_remaining_workspaces_score_history_and_filters_are_functional_and_documented(self):
+        for control in ["absolute-zero", "compact-toggle", "saved-view-select", "copy-permalink", "export-json", "export-csv", "vendor-filter", "product-filter", "group-select", "watchlist-list", "observed-changes", "methodology"]:
+            self.assertIn(f'id="{control}"', HTML)
+        for marker in ["data-action=\"star\"", "data-action=\"read\"", "function saveCurrentView", "function copyPermalink", "function exportFiltered", "MAX_DOM_RECORDS = 200", "key.toLocaleLowerCase() === 'j'", "key.toLocaleLowerCase() === 'c'", "triggerCriticalAmbient(newCriticalCount)"]:
+            self.assertIn(marker, JS)
+        self.assertIn("0.10", README)
+        self.assertIn("twofold change", README)
+        self.assertIn("3 of the 5 inputs", README)
+        self.assertIn("rolling 30 days of complete snapshots", README)
+        self.assertIn("Automated alerts · NOT CONFIGURED", HTML)
+        self.assertIn("no secure server-side relay", README)
+
+    def test_combined_vendor_and_product_filters_require_the_same_sourced_pair(self):
+        start = JS.index("function selectedRecords()")
+        end = JS.index("function summaryForSelection()", start)
+        selection = JS[start:end]
+        self.assertIn("if (state.vendor && state.product)", selection)
+        self.assertIn("normalizeFacet(item.vendor) === normalizeFacet(state.vendor) && normalizeFacet(item.product) === normalizeFacet(state.product)", selection)
+
+    def test_initial_boot_loads_shards_inside_restored_permalink_date_range(self):
+        start = JS.index("async function boot()")
+        end = JS.index("boot();", start)
+        boot = JS[start:end]
+        self.assertIn("restorePermalink();", boot)
+        self.assertIn("const selectedDays = rangeDays();", boot)
+        self.assertIn("selectedDays.slice().reverse()", boot)
+        self.assertIn("if (!newest.length) newest = selectedDays.slice(-2).reverse();", boot)
+
+    def test_share_permalink_contains_only_allow_listed_public_filters(self):
+        start = JS.index("function buildPermalink()")
+        end = JS.index("async function copyPermalink()", start)
+        builder = JS[start:end]
+        self.assertIn("url.search = ''", builder)
+        self.assertIn("url.hash = ''", builder)
+        self.assertIn("params.set('vendor'", builder)
+        self.assertIn("params.set('product'", builder)
+        self.assertIn("params.set('severity'", builder)
+        self.assertIn("params.set('compact'", builder)
+        self.assertNotIn("state.query", builder)
+        self.assertNotIn("starredIds", builder)
+        self.assertNotIn("watchlist", builder)
 
     def test_poc_search_is_constructed_only_from_validated_cve_id(self):
         self.assertIn("^CVE-\\d{4,}-\\d+$", JS)
         self.assertIn("GitHub PoC search", JS)
         self.assertIn("unverified", JS.lower())
+
+    def test_custom_priority_formula_is_weighted_transparent_and_coverage_gated(self):
+        start = JS.index("function priorityScore(")
+        end = JS.index("function epssPercent(", start)
+        score = JS[start:end]
+        self.assertIn("weights = { cvss: 25, epss: 25, kev: 25, poc: 15, recency: 10 }", score)
+        self.assertIn("cvss * 10", score)
+        self.assertIn("epss.score * 100", score)
+        self.assertIn("if (cisa?.ok === true)", score)
+        self.assertIn("value: 60, weight: weights.poc", score)
+        self.assertIn("100 * (1 - ageDays / 30)", score)
+        self.assertIn("components.length >= 3 && availableWeight > 0", score)
+        self.assertIn("availableWeight", score)
 
 
 if __name__ == "__main__":

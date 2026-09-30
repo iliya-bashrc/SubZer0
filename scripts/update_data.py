@@ -343,11 +343,28 @@ def _safe_url(value: Any) -> str | None:
     return value if value.startswith(("https://", "http://")) else None
 
 
-def _add_ref(refs: list[dict[str, str]], seen: set[str], label: str, url: Any, source: str) -> None:
+def _add_ref(
+    refs: list[dict[str, Any]],
+    seen: set[str],
+    label: str,
+    url: Any,
+    source: str,
+    tags: Any = None,
+) -> None:
     safe = _safe_url(url)
-    if safe and safe not in seen:
-        seen.add(safe)
-        refs.append({"label": label[:80], "url": safe, "source": source})
+    if not safe:
+        return
+    safe_tags = sorted({str(tag).strip()[:40] for tag in tags if isinstance(tag, str) and tag.strip()}) if isinstance(tags, list) else []
+    existing = next((item for item in refs if item.get("url") == safe), None)
+    if existing:
+        if safe_tags:
+            existing["tags"] = sorted(set(existing.get("tags", [])) | set(safe_tags))
+        return
+    seen.add(safe)
+    reference = {"label": label[:80], "url": safe, "source": source}
+    if safe_tags:
+        reference["tags"] = safe_tags
+    refs.append(reference)
 
 
 def _cvss(cve: dict[str, Any]) -> float | None:
@@ -399,7 +416,9 @@ def _nvd_affected(cve: dict[str, Any]) -> list[dict[str, str]]:
                 "versions": _version_range(match, version),
                 "source": "NVD",
             }
-            identity = (entry["vendor"].lower(), entry["product"].lower(), entry["versions"].lower())
+            if criteria.lower().startswith("cpe:2.3:") and len(parts) == 13:
+                entry["cpe"] = criteria
+            identity = (entry["vendor"].lower(), entry["product"].lower(), entry["versions"].lower(), entry.get("cpe", "").lower())
             if identity not in seen:
                 seen.add(identity)
                 affected.append(entry)
@@ -436,6 +455,7 @@ def _record(cve_id: str, published: str | None = None) -> dict[str, Any]:
         "date_basis": None,
         "affected": [],
         "refs": [],
+        "related_cves": [],
         "advisories": [],
         "sources": [],
         "kev": None,
@@ -449,8 +469,8 @@ def _add_source(record: dict[str, Any], source: str) -> None:
 
 
 def _add_affected(record: dict[str, Any], entry: dict[str, str]) -> None:
-    identity = tuple(str(entry.get(key, "")).casefold() for key in ("vendor", "product", "versions"))
-    if not any(tuple(str(existing.get(key, "")).casefold() for key in ("vendor", "product", "versions")) == identity for existing in record["affected"]):
+    identity = tuple(str(entry.get(key, "")).casefold() for key in ("vendor", "product", "versions", "cpe"))
+    if not any(tuple(str(existing.get(key, "")).casefold() for key in ("vendor", "product", "versions", "cpe")) == identity for existing in record["affected"]):
         record["affected"].append(entry)
 
 
@@ -464,9 +484,9 @@ def build_records(
     """Merge source records by canonical CVE ID, keeping both attribution and links."""
     records: dict[str, dict[str, Any]] = {}
 
-    def add_ref(record: dict[str, Any], label: str, url: Any, source: str) -> None:
+    def add_ref(record: dict[str, Any], label: str, url: Any, source: str, tags: Any = None) -> None:
         known = {item["url"] for item in record["refs"]}
-        _add_ref(record["refs"], known, label, url, source)
+        _add_ref(record["refs"], known, label, url, source, tags)
 
     for item in nvd_items:
         cve = item.get("cve", item)
@@ -497,7 +517,19 @@ def build_records(
         add_ref(record, "CVE Program record", f"https://www.cve.org/CVERecord?id={cve_id}", "CVE Program")
         for reference in cve.get("references") or []:
             if isinstance(reference, dict):
-                add_ref(record, "Reference", reference.get("url"), "NVD")
+                ref_url = _safe_url(reference.get("url"))
+                add_ref(record, "Reference", ref_url, "NVD", reference.get("tags"))
+                if ref_url:
+                    parsed = urllib.parse.urlsplit(ref_url)
+                    target = None
+                    if parsed.hostname == "nvd.nist.gov":
+                        match = re.fullmatch(r"/vuln/detail/(CVE-\d{4,}-\d+)", parsed.path, re.I)
+                        target = match.group(1) if match else None
+                    elif parsed.hostname in {"cve.org", "www.cve.org"} and parsed.path.rstrip("/") == "/CVERecord":
+                        target = urllib.parse.parse_qs(parsed.query).get("id", [None])[0]
+                    linked_id = _cve_id(target)
+                    if linked_id and linked_id != cve_id and not any(item["id"] == linked_id for item in record["related_cves"]):
+                        record["related_cves"].append({"id": linked_id, "url": ref_url, "source": "NVD reference"})
         for product in _nvd_affected(cve):
             _add_affected(record, product)
 
@@ -614,9 +646,36 @@ def build_records(
             record["sev"] = severity_for(record["score"])
         record["affected"].sort(key=lambda item: (item["vendor"].lower(), item["product"].lower(), item["versions"].lower()))
         record["refs"] = record["refs"][:14]
+        record["related_cves"].sort(key=lambda item: item["id"])
         record["advisories"] = record["advisories"][:6]
         record["sources"].sort(key=lambda source: {"NVD": 0, "GitHub Advisory Database": 1, "CISA KEV": 2}.get(source, 9))
     return sorted(records.values(), key=lambda record: (record.get("window_date") or "", record["id"]), reverse=True)
+
+
+def build_facets(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build exact values for sourced vendor/product filters; no inferred CPE expansion."""
+    vendors: dict[str, str] = {}
+    products: dict[str, str] = {}
+    pairs: dict[tuple[str, str], tuple[str, str]] = {}
+    for record in records:
+        for item in record.get("affected") or []:
+            vendor = str(item.get("vendor") or "").strip()
+            product = str(item.get("product") or "").strip()
+            if vendor:
+                vendors.setdefault(vendor.casefold(), vendor)
+            if product:
+                products.setdefault(product.casefold(), product)
+            if vendor and product:
+                pairs.setdefault((vendor.casefold(), product.casefold()), (vendor, product))
+    return {
+        "schema_version": 1,
+        "vendors": sorted(vendors.values(), key=str.casefold),
+        "products": sorted(products.values(), key=str.casefold),
+        "product_pairs": [
+            {"vendor": vendor, "product": product}
+            for vendor, product in sorted(pairs.values(), key=lambda pair: (pair[0].casefold(), pair[1].casefold()))
+        ],
+    }
 
 
 def build_manifest(
@@ -697,6 +756,8 @@ def build_manifest(
         },
         "sources": SOURCE_CREDITS,
         "source_status": source_status,
+        "facets": {"path": "data/facets.json"},
+        "history": {"path": "data/history.json", "retention_days": 30},
         "days": day_summaries,
     }
     return manifest, dict(shards)
@@ -819,14 +880,159 @@ def _write_json(path: Path, value: Any) -> None:
         stream.write("\n")
 
 
+def _load_snapshot_records(output_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for summary in manifest.get("days") or []:
+        day = str(summary.get("date") or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise FeedError("Retained snapshot contains an invalid day shard name")
+        payload = json.loads((output_dir / f"{day}.json").read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise FeedError(f"Invalid retained feed shard for {day}")
+        records.extend(item for item in payload if isinstance(item, dict) and _cve_id(item.get("id")))
+    return records
+
+
+def material_change_events(
+    previous_records: list[dict[str, Any]],
+    current_records: list[dict[str, Any]],
+    previous_epss: dict[str, Any] | None,
+    current_epss: dict[str, Any] | None,
+    observed_at: datetime,
+) -> list[dict[str, Any]]:
+    """Compare IDs present in both complete snapshots so rolling-window expiry is not a removal event."""
+    old_by_id = {_cve_id(item.get("id")): item for item in previous_records if _cve_id(item.get("id"))}
+    new_by_id = {_cve_id(item.get("id")): item for item in current_records if _cve_id(item.get("id"))}
+    old_scores = (previous_epss or {}).get("scores") or {}
+    new_scores = (current_epss or {}).get("scores") or {}
+    observed = iso_z(observed_at)
+    events: list[dict[str, Any]] = []
+    for cve_id in sorted(old_by_id.keys() & new_by_id.keys()):
+        old = old_by_id[cve_id]
+        new = new_by_id[cve_id]
+        old_score, new_score = old.get("score"), new.get("score")
+        try:
+            old_cvss, new_cvss = float(old_score), float(new_score)
+        except (TypeError, ValueError):
+            old_cvss = new_cvss = float("nan")
+        if old_score is not None and new_score is not None and severity_for(old_cvss) != "unknown" and severity_for(new_cvss) != "unknown":
+            before, after = severity_for(old_cvss), severity_for(new_cvss)
+            if before != after:
+                events.append({"id": cve_id, "type": "severity", "from": before, "to": after, "cvss_from": old_cvss, "cvss_to": new_cvss, "observed_at": observed})
+        old_kev, new_kev = bool(old.get("kev")), bool(new.get("kev"))
+        if old_kev != new_kev:
+            events.append({"id": cve_id, "type": "kev_added" if new_kev else "kev_removed", "observed_at": observed})
+        try:
+            epss_before = float(old_scores[cve_id]["score"])
+            epss_after = float(new_scores[cve_id]["score"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (0 <= epss_before <= 1 and 0 <= epss_after <= 1):
+            continue
+        absolute_jump = abs(epss_after - epss_before) >= 0.10
+        relative_jump = min(epss_before, epss_after) > 0 and max(epss_before, epss_after) >= 0.05 and max(epss_before, epss_after) / min(epss_before, epss_after) >= 2
+        if absolute_jump or relative_jump:
+            events.append({
+                "id": cve_id,
+                "type": "epss_jump",
+                "from": epss_before,
+                "to": epss_after,
+                "direction": "up" if epss_after > epss_before else "down",
+                "score_date": str((current_epss or {}).get("score_date") or ""),
+                "observed_at": observed,
+            })
+    return events
+
+
+def build_change_history(
+    output_dir: Path,
+    current_records: list[dict[str, Any]],
+    current_epss: dict[str, Any],
+    current_manifest: dict[str, Any],
+    observed_at: datetime,
+) -> dict[str, Any]:
+    """Append actual complete published snapshots and their material CVE changes; retain 30 days."""
+    history_path = output_dir / "history.json"
+    try:
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        if history.get("schema_version") != 1 or not isinstance(history.get("snapshots"), list) or not isinstance(history.get("events"), list):
+            raise FeedError("Retained history file has an unsupported schema; refusing to replace it")
+    except FileNotFoundError:
+        history = {"schema_version": 1, "retention_days": 30, "snapshots": [], "events": []}
+    except json.JSONDecodeError as exc:
+        raise FeedError("Retained history JSON is invalid; refusing to discard it") from exc
+
+    previous_manifest = None
+    previous_records: list[dict[str, Any]] = []
+    previous_epss = _load_epss_cache(output_dir)
+    try:
+        previous_manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+        if previous_manifest.get("complete") is True:
+            previous_records = _load_snapshot_records(output_dir, previous_manifest)
+        else:
+            previous_manifest = None
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, AttributeError, FeedError):
+        previous_manifest = None
+        previous_records = []
+
+    retention_start = observed_at - timedelta(days=30)
+    snapshots = [item for item in history["snapshots"] if isinstance(item, dict) and parse_datetime(str(item.get("observed_at") or "")) and parse_datetime(str(item["observed_at"])) >= retention_start]
+    events = [item for item in history["events"] if isinstance(item, dict) and parse_datetime(str(item.get("observed_at") or "")) and parse_datetime(str(item["observed_at"])) >= retention_start]
+    if previous_manifest is not None:
+        old_at = str(previous_manifest.get("generated_at") or "")
+        if old_at and not any(item.get("core_snapshot_at") == old_at for item in snapshots):
+            snapshots.append({
+                "observed_at": old_at,
+                "core_snapshot_at": old_at,
+                "epss_score_date": str((previous_epss or {}).get("score_date") or ""),
+                "record_count": len(previous_records),
+                "complete": True,
+            })
+        events.extend(material_change_events(previous_records, current_records, previous_epss, current_epss, observed_at))
+
+    core_at = str(current_manifest.get("generated_at") or iso_z(observed_at))
+    snapshot = {
+        "observed_at": iso_z(observed_at),
+        "core_snapshot_at": core_at,
+        "epss_score_date": str(current_epss.get("score_date") or ""),
+        "record_count": len(current_records),
+        "complete": current_manifest.get("complete") is True,
+    }
+    if not any(item.get("observed_at") == snapshot["observed_at"] and item.get("core_snapshot_at") == core_at and item.get("epss_score_date") == snapshot["epss_score_date"] for item in snapshots):
+        snapshots.append(snapshot)
+    snapshots.sort(key=lambda item: str(item.get("observed_at") or ""))
+    events.sort(key=lambda item: str(item.get("observed_at") or ""))
+    current_manifest["history"] = {"path": "data/history.json", "retention_days": 30}
+    return {"schema_version": 1, "retention_days": 30, "snapshots": snapshots[-800:], "events": events[-10_000:]}
+
+
+def _atomic_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent, prefix=f".{path.name}-", delete=False) as stream:
+        json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
+        stream.write("\n")
+        staged = Path(stream.name)
+    os.replace(staged, path)
+
+
 def write_snapshot(
     output_dir: Path,
     manifest: dict[str, Any],
     shards: dict[str, list[dict[str, Any]]],
     epss_snapshot: dict[str, Any] | None = None,
+    history: dict[str, Any] | None = None,
 ) -> None:
-    """Write every shard first and the manifest last so browsers never see a partial index."""
+    """Write shards and sidecars first, then publish the manifest and static API index."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    manifest["facets"] = {"path": "data/facets.json"}
+    manifest.setdefault("history", {"path": "data/history.json", "retention_days": 30})
+    records = [record for items in shards.values() for record in items]
+    facet_index = build_facets(records)
+    if history is None:
+        try:
+            history = json.loads((output_dir / "history.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            history = {"schema_version": 1, "retention_days": 30, "snapshots": [], "events": []}
     with tempfile.TemporaryDirectory(prefix="subzero-feed-") as temp:
         staged = Path(temp)
         for summary in manifest["days"]:
@@ -834,14 +1040,20 @@ def write_snapshot(
             _write_json(staged / f"{day}.json", shards.get(day, []))
         if epss_snapshot is not None:
             _write_json(staged / "epss.json", epss_snapshot)
+        _write_json(staged / "facets.json", facet_index)
+        _write_json(staged / "history.json", history)
         _write_json(staged / "manifest.json", manifest)
         expected_days = {item["date"] for item in manifest["days"]}
         for day in expected_days:
             os.replace(staged / f"{day}.json", output_dir / f"{day}.json")
         if epss_snapshot is not None:
             os.replace(staged / "epss.json", output_dir / "epss.json")
+        os.replace(staged / "facets.json", output_dir / "facets.json")
+        os.replace(staged / "history.json", output_dir / "history.json")
         # The index changes last; versioned requests in the page avoid stale CDN shards.
         os.replace(staged / "manifest.json", output_dir / "manifest.json")
+    api_manifest = output_dir.parent / "api" / "v1" / "manifest.json"
+    _atomic_json(api_manifest, manifest)
     for path in output_dir.glob("????-??-??.json"):
         if path.stem not in expected_days:
             path.unlink()
@@ -874,7 +1086,8 @@ def refresh(
     ]
     manifest, shards = build_manifest(records, start, end, as_of, statuses, nvd_total, len(ghsa_items), kev_total)
     add_epss_metadata(manifest, epss_snapshot, epss_status)
-    write_snapshot(output_dir, manifest, shards, epss_snapshot)
+    history = build_change_history(output_dir, records, epss_snapshot, manifest, as_of)
+    write_snapshot(output_dir, manifest, shards, epss_snapshot, history)
     print(
         f"Complete snapshot: {len(records)} unique CVEs across {len(manifest['days'])} UTC day shards; "
         f"NVD {nvd_total}/{nvd_pages} pages, GitHub {len(ghsa_items)}/{ghsa_pages} pages, CISA {kev_total} catalog entries; "
@@ -905,12 +1118,15 @@ def refresh_epss_only(
     as_of = (now or utc_now()).astimezone(timezone.utc).replace(microsecond=0)
     snapshot, status = build_epss_snapshot(records, output_dir, as_of, epss_csv_loader, epss_api_request_fn)
     add_epss_metadata(manifest, snapshot, status)
+    history = build_change_history(output_dir, records, snapshot, manifest, as_of)
+    _write_json(output_dir / "history.json", history)
     _write_json(output_dir / "epss.json", snapshot)
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=output_dir, prefix=".manifest-", delete=False) as stream:
         json.dump(manifest, stream, ensure_ascii=False, separators=(",", ":"))
         stream.write("\n")
         staged_manifest = Path(stream.name)
     os.replace(staged_manifest, manifest_path)
+    _atomic_json(output_dir.parent / "api" / "v1" / "manifest.json", manifest)
     print(f"EPSS enrichment: {status['scores']}/{status['records']} scores dated {status['score_date'] or 'unavailable'}; core feed snapshot unchanged.")
     return manifest
 
