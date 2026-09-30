@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -286,6 +287,19 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(first_manifest["days"][0]["count"], revised_manifest["days"][0]["count"])
         self.assertNotEqual(first_manifest["days"][0]["sha256"], revised_manifest["days"][0]["sha256"])
         self.assertEqual(first_manifest["days"][0]["sha256"], feed.build_manifest([first], start, end, generated, [], 0, 0, 0)[0]["days"][0]["sha256"])
+
+    def test_day_fingerprint_matches_exact_published_shard_bytes(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 1, 23, 59, tzinfo=timezone.utc)
+        generated = datetime(2026, 9, 2, 1, tzinfo=timezone.utc)
+        record = {"id": "CVE-2026-4010", "title": "Shard checksum fixture", "sev": "high", "window_date": "2026-09-01"}
+        manifest, shards = feed.build_manifest([record], start, end, generated, [], 0, 0, 0)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "data"
+            feed.write_snapshot(output, manifest, shards)
+            published_bytes = (output / "2026-09-01.json").read_bytes()
+            self.assertTrue(published_bytes.endswith(b"\n"))
+            self.assertEqual(hashlib.sha256(published_bytes).hexdigest(), manifest["days"][0]["sha256"])
 
     def test_manifest_advertises_every_calendar_shard_and_exact_source_coverage(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)

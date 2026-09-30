@@ -329,6 +329,9 @@
 
   function acceptPendingUpdate(resetWindow = false) {
     if (!pendingFeedUpdate || !pendingSnapshot) return;
+    window.clearTimeout(searchTimer);
+    searchTimer = 0;
+    searchGeneration += 1;
     const newCount = pendingNewIds.size;
     const newCriticalCount = pendingCriticalIds.size;
     const staged = pendingSnapshot;
@@ -415,6 +418,7 @@
     const pending = uniqueDays.filter((day) => force || !destination.has(day));
     if (!pending.length) return;
     const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest, options.onShardLoaded);
+    if (destination === loadedByDay && manifest?.generated_at !== sourceManifest.generated_at) return;
     entries.forEach(([day, records]) => destination.set(day, records));
     if (!options.deferRender) {
       if (destination === loadedByDay) rebuildRecords();
@@ -1588,8 +1592,9 @@
         setToolStatus('Removed from the local watchlist.');
       }
       if (action.dataset.action === 'watch-filter' && Number.isInteger(index) && watchlist[index]) {
-        state.vendor = canonicalFacet(watchlist[index].vendor, facets.vendors);
-        state.product = canonicalFacet(watchlist[index].product, facets.products);
+        const watchedPair = watchlist[index];
+        state.vendor = canonicalFacet(watchedPair.vendor, facets.vendors) || String(watchedPair.vendor || '').trim().slice(0, 160);
+        state.product = canonicalFacet(watchedPair.product, facets.products) || String(watchedPair.product || '').trim().slice(0, 200);
         state.query = '';
         updateControlState();
         resetWindow();

@@ -49,7 +49,7 @@
           <button class="quiet-button" id="refresh-button" type="button" title="Check for a newer feed snapshot"><span class="refresh-icon" aria-hidden="true">↻</span> Check for updates</button>
         </div>
         <div class="filter-grid">
-          <label class="search-box"><span class="control-label">SEARCH ALL SELECTED DATES</span><span class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.8"/><path d="m13 13 4.1 4.1"/></svg><input id="search-input" type="search" placeholder="CVE ID, vendor, product, description…" autocomplete="off" spellcheck="false" aria-label="Search CVE IDs, vendors, products, and descriptions"><kbd aria-hidden="true">/</kbd></span><small>Search covers every date shard in the selected range.</small></label>
+          <label class="search-box"><span class="control-label">SEARCH ALL SELECTED DATES</span><span class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.8"/><path d="m13 13 4.1 4.1"/></svg><input id="search-input" type="search" placeholder="CVE ID, title, product, version, source…" autocomplete="off" spellcheck="false" aria-label="Search CVE IDs, titles, descriptions, vendors, products, versions, and source names"><kbd aria-hidden="true">/</kbd></span><small>Search matches IDs, titles, descriptions, vendors, products, versions, and source names across every selected date shard.</small></label>
           <div class="date-box"><span class="control-label">ACTIVITY DATE · UTC</span><div class="date-fields"><label><span>FROM</span><input id="date-from" type="date" aria-label="From date"></label><span class="date-arrow" aria-hidden="true">→</span><label><span>TO</span><input id="date-to" type="date" aria-label="To date"></label><button class="apply-button" id="apply-dates" type="button">APPLY</button></div><div class="quick-ranges" role="group" aria-label="Quick date ranges"><button type="button" data-days="1" aria-pressed="false">24H</button><button type="button" data-days="7" aria-pressed="false">7D</button><button type="button" data-days="14" aria-pressed="false">14D</button><button class="selected" type="button" data-days="30" aria-pressed="true">30D</button></div></div>
         </div>
         <div class="filter-row">
@@ -74,7 +74,7 @@
           </div>
           <p class="keyboard-hint">Keyboard: <kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous visible record · <kbd>c</kbd> copy the focused CVE ID</p>
           <div id="feed-status" class="feed-status" role="status" aria-live="polite">Loading feed data…</div>
-          <div id="feed-list" class="feed-list" aria-live="polite" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div></div>
+          <div id="feed-list" class="feed-list" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div></div>
           <div id="empty-state" class="empty-state" hidden><strong>No vulnerabilities match these filters.</strong><p>Change the date range or clear the search and severity filters.</p></div>
           <button class="load-button" id="load-more" type="button" aria-controls="feed-list" hidden><span>LOAD MORE</span><small></small><b aria-hidden="true">↓</b></button>
         </div>
