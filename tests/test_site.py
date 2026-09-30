@@ -72,6 +72,39 @@ class StaticSiteTests(unittest.TestCase):
         ):
             self.assertIn(rule, CSS)
 
+    def test_card_age_cools_signal_and_kev_keeps_an_independent_ice_edge(self):
+        self.assertIn("function cardAgeVividness(record)", JS)
+        self.assertIn("const ageVividness = cardAgeVividness(record);", JS)
+        self.assertIn("if (timestamp == null) return null;", JS)
+        self.assertIn("class=\"cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}\"", JS)
+        self.assertIn("const ageStyle = ageVividness == null ? '' : ` style=\"--age-vividness:${ageVividness}%\"`;", JS)
+        self.assertIn(".cve-card.kev-listed { --card-accent: var(--critical);", CSS)
+        self.assertIn("color: var(--aged-severity, var(--accent));", CSS)
+
+    def test_cards_use_subtle_pointer_hover_and_critical_only_pulse(self):
+        self.assertIn("@media (hover: hover) and (pointer: fine)", CSS)
+        self.assertIn(".cve-card:hover { transform: translateY(-2px);", CSS)
+        self.assertIn("0 0 13px rgba(120, 205, 227, .055)", CSS)
+        self.assertIn(".severity-critical::before { animation: criticalEmber 7s ease-in-out infinite; }", CSS)
+        self.assertIn("@keyframes criticalEmber", CSS)
+        self.assertIn(".loader-mark, .loader-readout i, .skeleton, .severity-critical::before, .quiet-button.is-checking .refresh-icon, .cve-card.filter-arrive { animation: none; }", CSS)
+
+    def test_microinteraction_states_include_filter_loading_refresh_and_copy_feedback(self):
+        self.assertIn("render({ animateCards: true });", JS)
+        self.assertIn("class=\"skeleton loading-skeleton\"", JS)
+        self.assertIn("await Promise.allSettled", JS)
+        self.assertIn("onShardLoaded: (day, records)", JS)
+        self.assertIn("appendLoadingSkeletons(days.length)", JS)
+        self.assertIn("const outstanding = days.length - completedShards;", JS)
+        self.assertIn("button.classList.add('is-checking')", JS)
+        self.assertIn("class=\"refresh-icon\"", HTML)
+        self.assertIn("animation: coldRing 2.2s linear infinite", CSS)
+        self.assertIn("toast('Copied');", JS)
+        self.assertIn("const duration = message === 'Copied' ? 1_800 : 4_600;", JS)
+        self.assertIn(".control-panel { position: sticky;", CSS)
+        self.assertIn(".cve-card.filter-arrive { animation: filterCardsIn .14s", CSS)
+        self.assertIn(".skeleton.loading-skeleton { min-height: 118px; }", CSS)
+
     def test_mobile_first_breakpoints_touch_sizes_and_reduced_motion(self):
         self.assertIn("@media (max-width: 900px)", CSS)
         self.assertIn("@media (max-width: 720px)", CSS)
@@ -124,6 +157,8 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("const PAGE_SIZE = 24", JS)
         self.assertIn(".slice(0, visible)", JS)
         self.assertIn("const SHARD_CONCURRENCY = 4", JS)
+        self.assertIn("each request reveals up to 24 more cards", README)
+        self.assertIn("one skeleton per outstanding shard request", README)
 
     def test_static_frontend_has_no_external_runtime_and_source_specific_dates(self):
         self.assertNotIn("services.nvd.nist.gov", JS)

@@ -20,7 +20,7 @@ CVSS is severity, not exploit likelihood. Numeric scores map to **Critical** (9.
 
 ## Feed behavior
 
-The homepage provides the feed, snapshot time, source coverage, and EPSS score-set date. Search matches CVE IDs, descriptions, vendors, products, versions, and source names without reloading the page. Users can filter by severity, select UTC date ranges, sort records, open source-linked details, and load more results. Recent date shards are loaded first; the browser renders at most 24 cards per page, loads additional cards on request, and fetches every shard in the selected range when searching.
+The homepage provides the feed, snapshot time, source coverage, and EPSS score-set date. Search matches CVE IDs, descriptions, vendors, products, versions, and source names without reloading the page. Users can filter by severity, select UTC date ranges, sort records, open source-linked details, and load more results. Recent date shards are loaded first; each request reveals up to 24 more cards, and completed older shards are rendered as they arrive. Older-shard loading shows one skeleton per outstanding shard request; search and non-new sorting fetch every shard in the selected range.
 
 While open, the page checks the manifest every two minutes and when it becomes visible. Manifest checks bypass the browser cache; shard URLs include the snapshot version. Per-day SHA-256 fingerprints reveal changes even when record totals stay the same. New CVE IDs are counted when they can be compared with loaded records; other changed data is reported as an update without guessing how many IDs are new. The current list remains visible until the user selects the persistent **View updates** notice; accepted records are applied without a full-page reload.
 

@@ -187,7 +187,8 @@
     element.textContent = message;
     element.className = `toast show${kind ? ` ${kind}` : ''}`;
     window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => element.classList.remove('show'), 4600);
+    const duration = message === 'Copied' ? 1_800 : 4_600;
+    toastTimer = window.setTimeout(() => element.classList.remove('show'), duration);
   }
 
   async function fetchManifest() {
@@ -298,13 +299,19 @@
     });
   }
 
-  async function fetchDays(days, version, sourceManifest = manifest) {
+  async function fetchDays(days, version, sourceManifest = manifest, onShardLoaded = null) {
     const uniqueDays = [...new Set(days)].filter((day) => sourceManifest.days.some((item) => item.date === day));
     const entries = [];
     for (let offset = 0; offset < uniqueDays.length; offset += SHARD_CONCURRENCY) {
       const batch = uniqueDays.slice(offset, offset + SHARD_CONCURRENCY);
-      const result = await Promise.all(batch.map(async (day) => [day, await fetchDay(day, version, sourceManifest)]));
-      entries.push(...result);
+      const settled = await Promise.allSettled(batch.map(async (day) => {
+        const records = await fetchDay(day, version, sourceManifest);
+        if (onShardLoaded) await onShardLoaded(day, records);
+        return [day, records];
+      }));
+      const failures = settled.filter((result) => result.status === 'rejected');
+      entries.push(...settled.filter((result) => result.status === 'fulfilled').map((result) => result.value));
+      if (failures.length) throw failures[0].reason;
     }
     return entries;
   }
@@ -316,7 +323,7 @@
     const uniqueDays = [...new Set(days)].filter((day) => sourceManifest.days.some((item) => item.date === day));
     const pending = uniqueDays.filter((day) => force || !destination.has(day));
     if (!pending.length) return;
-    const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest);
+    const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest, options.onShardLoaded);
     entries.forEach(([day, records]) => destination.set(day, records));
     if (!options.deferRender) {
       if (destination === loadedByDay) rebuildRecords();
@@ -532,9 +539,9 @@
     </article>`;
   }
 
-  function render() {
+  function render({ animateCards = false, animateStats = false } = {}) {
     if (!manifest) return;
-    renderStats();
+    renderStats({ countUp: animateStats });
     const matches = selectedRecords();
     const completeRange = rangeDays().every((day) => loadedByDay.has(day));
     const isSearching = state.query.trim().length > 0;
@@ -546,6 +553,12 @@
     $('feed-count').textContent = total.toLocaleString();
     $('feed-list').innerHTML = matches.slice(0, visible).map(cardHtml).join('');
     $('feed-list').setAttribute('aria-busy', 'false');
+    if (animateCards && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      feedList.querySelectorAll('.cve-card').forEach((card) => {
+        card.classList.add('filter-arrive');
+        card.addEventListener('animationend', () => card.classList.remove('filter-arrive'), { once: true });
+      });
+    }
     const noLoadedRecords = matches.length === 0;
     const couldLoadMore = !completeRange && !isSearching;
     $('empty-state').hidden = !(noLoadedRecords && completeRange);
@@ -585,7 +598,7 @@
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
-    render();
+    render({ animateCards: true });
     const days = rangeDays().slice(-2).reverse();
     if (state.query || state.sort !== 'new') loadAllSelectedDays(rangeGeneration).catch(showLoadError);
     else loadDays(days).then(() => render()).catch(showLoadError);
@@ -611,6 +624,11 @@
     setStatus(`Some feed data could not be loaded: ${error.message || 'network error'}. Retry with “Load older CVEs”.`, 'error');
   }
 
+  function appendLoadingSkeletons(count) {
+    feedList.setAttribute('aria-busy', 'true');
+    feedList.insertAdjacentHTML('beforeend', Array.from({ length: count }, () => '<div class="skeleton loading-skeleton" aria-hidden="true"></div>').join(''));
+  }
+
   async function loadEpssSnapshot(force = false) {
     const config = manifest?.epss;
     if (!config?.path || typeof config.path !== 'string' || !config.path.startsWith('data/') || config.path.includes('..')) {
@@ -634,7 +652,11 @@
     if (polling || (document.hidden && !options.force)) return;
     polling = true;
     const button = $('refresh-button');
-    if (options.force) button.disabled = true;
+    if (options.force) {
+      button.disabled = true;
+      button.classList.add('is-checking');
+      button.setAttribute('aria-busy', 'true');
+    }
     const priorPending = pendingSnapshot;
     const previousManifest = priorPending?.manifest || manifest;
     const previousVersion = lastSnapshotVersion;
@@ -735,6 +757,8 @@
     } finally {
       polling = false;
       button.disabled = false;
+      button.classList.remove('is-checking');
+      button.removeAttribute('aria-busy');
     }
   }
 
@@ -799,7 +823,7 @@
         field.remove();
         if (!copied) throw new Error('Clipboard permission unavailable');
       }
-      toast(`${id} copied to clipboard.`);
+      toast('Copied');
     } catch (_) {
       toast('Clipboard access was blocked by this browser.', 'warning');
     }
@@ -816,11 +840,11 @@
         element.setAttribute('aria-pressed', String(selected));
       });
       visible = PAGE_SIZE;
-      render();
+      render({ animateCards: true });
     });
     $('sort-select').addEventListener('change', (event) => {
       state.sort = event.target.value;
-      render();
+      render({ animateCards: true });
       if (state.sort !== 'new' && !rangeDays().every((day) => loadedByDay.has(day))) {
         const generation = ++searchGeneration;
         loadAllSelectedDays(generation).catch(showLoadError);
@@ -829,7 +853,7 @@
     $('search-input').addEventListener('input', (event) => {
       state.query = event.target.value.trim();
       visible = PAGE_SIZE;
-      render();
+      render({ animateCards: true });
       window.clearTimeout(searchTimer);
       const generation = ++searchGeneration;
       if (state.query) searchTimer = window.setTimeout(() => loadAllSelectedDays(generation).catch(showLoadError), 260);
@@ -866,14 +890,38 @@
       }
       const days = rangeDays().filter((day) => !loadedByDay.has(day)).reverse().slice(0, 3);
       if (days.length) {
-        button.innerHTML = '<span>LOADING OLDER RECORDS…</span><small>Please wait</small><b aria-hidden="true">·</b>';
+        const loadingLabel = '<span>LOADING OLDER RECORDS…</span><small>Please wait</small><b aria-hidden="true">·</b>';
+        let completedShards = 0;
+        button.innerHTML = loadingLabel;
+        button.setAttribute('aria-busy', 'true');
+        appendLoadingSkeletons(days.length);
         try {
-          await loadDays(days);
+          await loadDays(days, {
+            deferRender: true,
+            onShardLoaded: (day, records) => {
+              loadedByDay.set(day, records);
+              completedShards += 1;
+              rebuildRecords();
+              render();
+              const outstanding = days.length - completedShards;
+              if (outstanding) appendLoadingSkeletons(outstanding);
+              button.disabled = true;
+              button.setAttribute('aria-busy', 'true');
+              button.innerHTML = loadingLabel;
+            }
+          });
+          rebuildRecords();
           visible += PAGE_SIZE;
           render();
         } catch (error) {
+          feedList.querySelectorAll('.loading-skeleton').forEach((skeleton) => skeleton.remove());
+          feedList.setAttribute('aria-busy', 'false');
+          render();
           showLoadError(error);
           button.disabled = false;
+        } finally {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
         }
       }
     });
