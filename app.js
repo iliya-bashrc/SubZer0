@@ -434,10 +434,13 @@
       else facts = `${Number(status.catalog_records || 0).toLocaleString()} catalog entries`;
       return `<li><i class="source-state-dot${ok ? '' : ' warning'}"></i><span><a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a><span class="source-facts">${esc(ok ? facts : 'Coverage unavailable')}</span></span></li>`;
     }).join('');
-    const allOk = sourceDefs.length > 0 && sourceDefs.every((source) => statusFor(source).ok === true);
+    const coreSourceNames = ['NVD CVE API 2.0', 'GitHub Security Advisory Database', 'CISA KEV'];
+    const coreSources = coreSourceNames.map((name) => sourceDefs.find((source) => (statusAliases[source.name] || source.name) === name));
+    const coreKnown = coreSources.every(Boolean);
+    const coreOk = coreKnown && coreSources.every((source) => statusFor(source).ok === true);
     const badge = $('source-state');
-    badge.textContent = allOk ? `${sourceDefs.length} FEEDS OK` : 'PARTIAL';
-    badge.className = `source-state${allOk ? '' : ' warning'}`;
+    badge.textContent = !coreKnown ? 'CORE STATUS MISSING' : coreOk ? '3 CORE SOURCES OK' : 'CORE COVERAGE GAP';
+    badge.className = `source-state${coreOk ? '' : ' warning'}`;
     $('window-caption').textContent = `${Number(manifest.coverage?.utc_days_sharded || 0)} UTC date shards · ${Number(manifest.coverage?.distinct_cve_records || 0).toLocaleString()} deduplicated records · NVD, GitHub and CISA gate coverage; EPSS is optional enrichment.`;
   }
 

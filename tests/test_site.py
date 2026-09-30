@@ -50,6 +50,14 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("Missing data is not a 0% forecast.", JS)
         self.assertIn("CISA Known Exploited Vulnerabilities catalog", JS)
 
+    def test_core_source_badge_excludes_optional_epss(self):
+        self.assertIn("const coreSourceNames = ['NVD CVE API 2.0'", JS)
+        self.assertIn("const coreOk = coreKnown && coreSources.every", JS)
+        self.assertIn("3 CORE SOURCES OK", JS)
+        self.assertIn("CORE COVERAGE GAP", JS)
+        self.assertNotIn("FEEDS OK", JS)
+        self.assertIn("FIRST EPSS is separate probability enrichment", HTML)
+
     def test_severity_color_mapping_is_severity_controlled(self):
         for color in ("--critical: #ed5558", "--high: #ee9b4c", "--medium: #d8bd59", "--low: #78cde3", "--unknown: #8d999f"):
             with self.subTest(color=color):
