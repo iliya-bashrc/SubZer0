@@ -322,8 +322,10 @@
     const list = $('source-list');
     const statuses = new Map((manifest.source_status || []).map((item) => [item.name, item]));
     const sourceDefs = manifest.sources || [];
+    const statusAliases = { 'CISA Known Exploited Vulnerabilities catalog': 'CISA KEV' };
+    const statusFor = (source) => statuses.get(source.name) || statuses.get(statusAliases[source.name]) || {};
     list.innerHTML = sourceDefs.map((source) => {
-      const status = statuses.get(source.name) || {};
+      const status = statusFor(source);
       const ok = status.ok === true;
       let facts = '';
       if (source.name === 'NVD CVE API 2.0') facts = `${Number(status.records || 0).toLocaleString()} records · ${Number(status.pages || 0)} pages`;
@@ -332,7 +334,7 @@
       else facts = `${Number(status.catalog_records || 0).toLocaleString()} catalog entries`;
       return `<li><i class="source-state-dot${ok ? '' : ' warning'}"></i><span><a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a><span class="source-facts">${esc(ok ? facts : 'Coverage unavailable')}</span></span></li>`;
     }).join('');
-    const allOk = sourceDefs.length > 0 && sourceDefs.every((source) => statuses.get(source.name)?.ok === true);
+    const allOk = sourceDefs.length > 0 && sourceDefs.every((source) => statusFor(source).ok === true);
     const badge = $('source-state');
     badge.textContent = allOk ? `${sourceDefs.length} FEEDS OK` : 'PARTIAL';
     badge.className = `source-state${allOk ? '' : ' warning'}`;

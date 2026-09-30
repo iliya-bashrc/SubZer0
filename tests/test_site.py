@@ -36,6 +36,7 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("t.me/share/url", JS)
         self.assertIn("score_date", JS)
         self.assertIn("EPSS is optional enrichment", JS)
+        self.assertIn("'CISA Known Exploited Vulnerabilities catalog': 'CISA KEV'", JS)
 
     def test_responsive_layout_and_reduced_motion_are_present(self):
         self.assertIn('@media(max-width:560px)', CSS)
