@@ -81,6 +81,12 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("min-height: 44px", CSS)
         self.assertIn("grid-template-columns: 1fr", CSS)
 
+    def test_stats_use_balanced_desktop_columns_and_preserve_mobile_reflow(self):
+        self.assertIn(".stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));", CSS)
+        self.assertIn(".stat-total { grid-template-columns: 1fr; align-items: center; gap: 0; }", CSS)
+        self.assertIn(".stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }", CSS)
+        self.assertIn(".stat-total { grid-column: 1 / -1; grid-template-columns: 1fr auto;", CSS)
+
     def test_startup_is_data_aware_and_retries_without_timed_hide(self):
         self.assertIn("for (;;) {", JS)
         self.assertIn("BOOT_RETRY_MS", JS)
