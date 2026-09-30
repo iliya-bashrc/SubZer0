@@ -16,6 +16,21 @@ class StaticSiteTests(unittest.TestCase):
         self.assertNotRegex(HTML + CSS + JS + README, re.compile(r"ice\s*[×x/]\s*ember|frost signal|\barena\b|\bmatchup\b", re.I))
         self.assertNotIn("SUBZER0", HTML + CSS + JS + README)
 
+    def test_task_first_document_order_preserves_secondary_tools(self):
+        masthead = HTML.index('<section class="masthead"')
+        search = HTML.index('<section class="control-panel"')
+        feed = HTML.index('<section class="dashboard"')
+        totals = HTML.index('<section class="stats"')
+        workspace = HTML.index('class="post-feed-tools"')
+        methodology = HTML.index('<section class="methodology-panel"')
+        self.assertLess(masthead, search)
+        self.assertLess(search, feed)
+        self.assertLess(feed, totals)
+        self.assertLess(feed, workspace)
+        self.assertLess(workspace, methodology)
+        self.assertIn('id="advanced-filters"', HTML)
+        self.assertIn('id="snapshot-time"', HTML)
+
     def test_accessible_feed_controls_loader_notice_and_detail_dialog_exist(self):
         for element_id in (
             "loader", "loader-message", "search-input", "date-from", "date-to", "apply-dates",

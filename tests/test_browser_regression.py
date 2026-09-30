@@ -75,6 +75,37 @@ class BrowserRegressionTests(unittest.TestCase):
         page.wait_for_selector("#feed-list .cve-card", timeout=30000)
         return context, page
 
+    def test_first_record_enters_initial_viewport_across_devices(self):
+        for label, width, height, mobile in (
+            ("android-320", 320, 740, True),
+            ("android-360", 360, 800, True),
+            ("android-390", 390, 844, True),
+            ("tablet-768", 768, 1024, False),
+            ("desktop-1440", 1440, 1000, False),
+        ):
+            with self.subTest(device=label):
+                context, page = self.open_page(width, height, mobile)
+                try:
+                    first = page.locator("#feed-list .cve-card").first
+                    geometry = page.evaluate("""() => {
+                      const panel = document.querySelector('#search-panel');
+                      const card = document.querySelector('#feed-list .cve-card');
+                      const head = card.querySelector('.card-head');
+                      return {
+                        viewport: [innerWidth, innerHeight],
+                        pageWidth: document.documentElement.scrollWidth,
+                        panelPosition: getComputedStyle(panel).position,
+                        cardTop: card.getBoundingClientRect().top,
+                        cardHeadBottom: head.getBoundingClientRect().bottom
+                      };
+                    }""")
+                    self.assertLessEqual(geometry["pageWidth"], width, geometry)
+                    self.assertNotEqual(geometry["panelPosition"], "sticky", geometry)
+                    self.assertGreater(first.get_attribute("data-cve-id"), "", geometry)
+                    self.assertLess(geometry["cardHeadBottom"], height, geometry)
+                finally:
+                    context.close()
+
     def test_search_results_are_visible_below_filters_on_desktop_and_android(self):
         for label, width, height, mobile in (
             ("desktop", 1440, 1000, False),
