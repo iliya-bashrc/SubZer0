@@ -708,8 +708,49 @@ body { background: linear-gradient(180deg, #0a0e17 0, #070b14 24rem); }
 }
 
 @media (max-width: 760px) {
-  .severity-filter { font-size: 9px; letter-spacing: -.02em; }
+  .control-panel { padding: 14px; }
+  .filter-grid { gap: 8px; }
+  .filter-row { margin-top: 8px; padding-top: 8px; }
+  .control-label, .date-fields > label > span { font-size: 10px; }
+  .date-fields > label { display: grid; grid-template-columns: minmax(0, 1fr); align-content: center; gap: 2px; padding: 0 6px; }
+  .date-fields input { font-size: 11px; }
+  .apply-button { font-size: 12px; }
+  .quiet-button { font-size: 11px; }
+  .quick-ranges button { font-size: 11px; }
+  .severity-filters {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .severity-filter {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 4px;
+    border-color: var(--line);
+    border-radius: 8px;
+    background: var(--surface-well);
+    color: var(--soft);
+    font-size: 12px;
+    letter-spacing: 0;
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
+  }
+  .severity-filter.active, .severity-filter[aria-pressed="true"] {
+    border-color: #155e75;
+    background: #0c1a27;
+    color: var(--text-strong);
+  }
+  .severity-filter .filter-mark { width: 7px; height: 7px; }
 }
 @media (max-width: 380px) {
-  .severity-filter { gap: 3px; padding-right: 2px; padding-left: 2px; font-size: 12px; letter-spacing: -.01em; }
+  .control-panel { padding: 10px; }
+  .date-fields input { font-size: 12px; }
+  .control-heading h2 { font-size: 15px; }
+  .quiet-button { font-size: 10px; }
+  .severity-filter { font-size: 12px; }
 }

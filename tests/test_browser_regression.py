@@ -121,6 +121,43 @@ class BrowserRegressionTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_mobile_filter_controls_are_readable_and_tappable(self):
+        for width, height in ((320, 740), (360, 800), (390, 844)):
+            with self.subTest(width=width):
+                context, page = self.open_page(width, height, True)
+                try:
+                    metrics = page.evaluate("""() => {
+                      const filters = document.querySelector('.severity-filters');
+                      const buttons = [...filters.querySelectorAll('button')];
+                      return {
+                        columns: getComputedStyle(filters).gridTemplateColumns.trim().split(/\\s+/).length,
+                        severityFont: parseFloat(getComputedStyle(buttons[0]).fontSize),
+                        dateLabelDisplay: getComputedStyle(document.querySelector('.date-fields > label')).display,
+                        dateLabelFont: parseFloat(getComputedStyle(document.querySelector('.date-fields > label > span')).fontSize),
+                        dateInputFont: parseFloat(getComputedStyle(document.querySelector('.date-fields input')).fontSize),
+                        applyFont: parseFloat(getComputedStyle(document.querySelector('.apply-button')).fontSize),
+                        buttonHeights: buttons.map(button => button.getBoundingClientRect().height),
+                        firstCardTop: document.querySelector('#feed-list .cve-card').getBoundingClientRect().top,
+                        pageWidth: document.documentElement.scrollWidth
+                      };
+                    }""")
+                    self.assertEqual(metrics["columns"], 3, metrics)
+                    self.assertGreaterEqual(metrics["severityFont"], 12, metrics)
+                    self.assertEqual(metrics["dateLabelDisplay"], "grid", metrics)
+                    self.assertGreaterEqual(metrics["dateLabelFont"], 10, metrics)
+                    self.assertGreaterEqual(metrics["dateInputFont"], 12 if width <= 380 else 11, metrics)
+                    self.assertGreaterEqual(metrics["applyFont"], 12, metrics)
+                    self.assertTrue(all(height >= 44 for height in metrics["buttonHeights"]), metrics)
+                    self.assertLessEqual(metrics["pageWidth"], width, metrics)
+                    if width == 320:
+                        self.assertLessEqual(metrics["firstCardTop"], 660, metrics)
+
+                    high = page.locator('.severity-filter[data-severity="high"]')
+                    high.tap()
+                    self.assertEqual(high.get_attribute("aria-pressed"), "true")
+                finally:
+                    context.close()
+
     def test_search_results_are_visible_below_filters_on_desktop_and_android(self):
         for label, width, height, mobile in (
             ("desktop", 1440, 1000, False),
