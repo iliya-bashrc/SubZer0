@@ -114,11 +114,22 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("min-height: 44px", CSS)
         self.assertIn("grid-template-columns: 1fr", CSS)
 
-    def test_stats_use_balanced_desktop_columns_and_preserve_mobile_reflow(self):
-        self.assertIn(".stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));", CSS)
-        self.assertIn(".stat-total { grid-template-columns: 1fr; align-items: center; gap: 0; }", CSS)
-        self.assertIn(".stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }", CSS)
-        self.assertIn(".stat-total { grid-column: 1 / -1; grid-template-columns: 1fr auto;", CSS)
+    def test_stats_use_larger_separated_cards_and_preserve_mobile_reflow(self):
+        self.assertIn(".stats { display: grid; grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr)); gap: 11px;", CSS)
+        self.assertIn(".stat-total .stat-value", CSS)
+        self.assertIn("font-size: 40px", CSS)
+        self.assertIn(".stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;", CSS)
+        self.assertIn(".stat-total { grid-column: 1 / -1; }", CSS)
+
+    def test_hero_stat_count_up_runs_after_initial_data_and_respects_reduced_motion(self):
+        self.assertIn("function animateCountUp(element, target)", JS)
+        self.assertIn("window.matchMedia('(prefers-reduced-motion: reduce)').matches", JS)
+        self.assertIn("await loadDays(newest, { deferRender: true });", JS)
+        self.assertIn("render({ animateStats: true });", JS)
+        self.assertIn("statAnimationFrames.size && statAnimationKey === targetKey", JS)
+        self.assertIn("element.textContent = '0';", JS)
+        self.assertIn("Math.max(0, Math.min(1, (now - startedAt) / duration))", JS)
+        self.assertIn("<span class=\"stat-foot\">Deduplicated records</span>", HTML)
 
     def test_startup_is_data_aware_and_retries_without_timed_hide(self):
         self.assertIn("for (;;) {", JS)

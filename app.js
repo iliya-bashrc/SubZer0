@@ -26,6 +26,8 @@
   let booted = false;
   let pendingFeedUpdate = false;
   let pendingSnapshot = null;
+  let statAnimationKey = '';
+  const statAnimationFrames = new Map();
   const pendingNewIds = new Set();
 
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
@@ -475,13 +477,29 @@
     $('window-caption').textContent = `${Number(manifest.coverage?.utc_days_sharded || 0)} UTC date shards · ${Number(manifest.coverage?.distinct_cve_records || 0).toLocaleString()} deduplicated records · NVD, GitHub and CISA gate coverage; EPSS is optional enrichment.`;
   }
 
-  function renderStats() {
+  function renderStats({ countUp = false } = {}) {
     if (!manifest) return;
     const summary = summaryForSelection();
-    $('stat-total').textContent = Number(summary.count || 0).toLocaleString();
-    $('stat-critical').textContent = Number(summary.critical || 0).toLocaleString();
-    $('stat-high').textContent = Number(summary.high || 0).toLocaleString();
-    $('stat-kev').textContent = Number(summary.exploited || 0).toLocaleString();
+    const counts = [
+      ['stat-total', summary.count],
+      ['stat-critical', summary.critical],
+      ['stat-high', summary.high],
+      ['stat-kev', summary.exploited]
+    ];
+    const targetKey = counts.map(([, value]) => Number(value || 0)).join(':');
+    const animate = countUp && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const currentAnimationStillMatches = !countUp && statAnimationFrames.size && statAnimationKey === targetKey;
+    if (!currentAnimationStillMatches) {
+      statAnimationFrames.forEach((frame) => window.cancelAnimationFrame(frame));
+      statAnimationFrames.clear();
+      if (animate) {
+        statAnimationKey = targetKey;
+        counts.forEach(([id, value]) => animateCountUp($(id), Number(value || 0)));
+      } else {
+        statAnimationKey = '';
+        counts.forEach(([id, value]) => { $(id).textContent = Number(value || 0).toLocaleString(); });
+      }
+    }
     $('stat-window-label').textContent = state.exactHours === 24 ? '/ LAST 24 HOURS' : ` / ${state.from === String(manifest.window.start).slice(0, 10) && state.to === String(manifest.window.end).slice(0, 10) ? '30 DAY WINDOW' : 'UTC DATE WINDOW'}`;
     const known = summary.critical + summary.high + summary.medium + summary.low + summary.none + summary.unknown;
     const pct = (value) => known ? `${Math.max(value > 0 ? 1.2 : 0, value / known * 100)}%` : '0%';
@@ -490,6 +508,23 @@
     $('meter-medium').style.width = pct(summary.medium);
     $('meter-low').style.width = pct(summary.low);
     $('meter-neutral').style.width = pct(summary.none + summary.unknown);
+  }
+
+  function animateCountUp(element, target) {
+    const duration = 620;
+    const startedAt = performance.now();
+    element.textContent = '0';
+    const step = (now) => {
+      const progress = Math.max(0, Math.min(1, (now - startedAt) / duration));
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = Math.round(target * eased).toLocaleString();
+      if (progress < 1) statAnimationFrames.set(element, window.requestAnimationFrame(step));
+      else {
+        statAnimationFrames.delete(element);
+        if (!statAnimationFrames.size) statAnimationKey = '';
+      }
+    };
+    statAnimationFrames.set(element, window.requestAnimationFrame(step));
   }
 
   function cardProduct(item) {
@@ -958,11 +993,11 @@
         manifest = await fetchManifest();
         setDateBounds();
         renderSources();
-        renderStats();
         let newest = manifest.days.slice().reverse().filter((item) => Number(item.count) > 0).slice(0, 2).map((item) => item.date);
         if (!newest.length) newest = manifest.days.slice(-2).map((item) => item.date).reverse();
-        await loadDays(newest);
-        render();
+        await loadDays(newest, { deferRender: true });
+        rebuildRecords();
+        render({ animateStats: true });
         void loadEpssSnapshot().then(() => {
           if (booted && manifest) render();
         });
