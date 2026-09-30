@@ -754,3 +754,12 @@ body { background: linear-gradient(180deg, #0a0e17 0, #070b14 24rem); }
   .quiet-button { font-size: 10px; }
   .severity-filter { font-size: 12px; }
 }
+
+/* Fit the first result on extra-narrow screens without shrinking controls. */
+@media (max-width: 340px) {
+  .masthead { padding-top: 8px; padding-bottom: 8px; }
+  .control-panel { padding: 8px; }
+  .filter-grid { gap: 4px; margin-top: 6px; }
+  .filter-row { margin-top: 4px; padding-top: 4px; }
+  .dashboard { margin-top: 6px; }
+}
