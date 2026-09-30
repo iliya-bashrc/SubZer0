@@ -4,13 +4,14 @@
   const PAGE_SIZE = 24;
   const POLL_MS = 120_000;
   const SHARD_CONCURRENCY = 4;
-  const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3, unknown: 4 };
+  const FETCH_TIMEOUT_MS = 20_000;
+  const BOOT_RETRY_MS = 3_000;
+  const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3, none: 4, unknown: 5 };
   const $ = (id) => document.getElementById(id);
   const feedList = $('feed-list');
   const loadedByDay = new Map();
   const loadJobs = new Map();
   const allRecords = new Map();
-  const loaderStartedAt = Date.now();
   let manifest = null;
   let epssSnapshot = null;
   let epssVersion = '';
@@ -23,6 +24,8 @@
   let searchGeneration = 0;
   let toastTimer = 0;
   let booted = false;
+  let pendingFeedUpdate = false;
+  const pendingNewIds = new Set();
 
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -49,10 +52,11 @@
   function cvssSeverity(score) {
     if (score == null || score === '' || !Number.isFinite(Number(score)) || Number(score) < 0 || Number(score) > 10) return 'unknown';
     const value = Number(score);
+    if (value === 0) return 'none';
     if (value >= 9) return 'critical';
     if (value >= 7) return 'high';
     if (value >= 4) return 'medium';
-    return 'low';
+    return value >= 0.1 ? 'low' : 'none';
   }
 
   function epssFor(id) {
@@ -75,7 +79,7 @@
     const lines = [
       `SubZer0 · ${id}`,
       record.title || id,
-      `CVSS ${score} · ${severity === 'unknown' ? 'UNRATED' : severity.toUpperCase()} severity`,
+      `CVSS ${score} · ${severity === 'unknown' ? 'UNRATED' : severity === 'none' ? 'NONE' : severity.toUpperCase()} severity`,
       `EPSS ${epss ? `${epssPercent(epss)} estimated 30-day probability` : 'not available in this snapshot'}`,
       record.kev ? 'Listed in CISA KEV (known-exploited catalog)' : 'Not listed in the current CISA KEV snapshot',
       'GitHub PoC search: unverified',
@@ -87,6 +91,41 @@
   function parseTime(value) {
     const result = value ? Date.parse(value) : NaN;
     return Number.isFinite(result) ? result : null;
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function fetchResponse(url, options = {}, attempts = 3) {
+    const retryableStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
+    let lastError;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        if (response.ok) return response;
+        const error = new Error(`Request returned ${response.status}`);
+        error.status = response.status;
+        if (!retryableStatuses.has(response.status) || attempt === attempts - 1) throw error;
+        const retryAfter = Number(response.headers?.get?.('Retry-After'));
+        await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(5_000, retryAfter * 1000) : 400 * (2 ** attempt));
+      } catch (error) {
+        lastError = error;
+        const retryable = error.name === 'AbortError' || !error.status || retryableStatuses.has(error.status);
+        if (!retryable || attempt === attempts - 1) throw error;
+        await wait(400 * (2 ** attempt));
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+    throw lastError || new Error('Request failed');
+  }
+
+  async function fetchJson(url, options = {}, attempts = 3) {
+    const response = await fetchResponse(url, options, attempts);
+    return response.json();
   }
 
   function fmtDate(value) {
@@ -120,8 +159,12 @@
     if (!booted) booted = true;
     const loader = $('loader');
     if (!loader || loader.classList.contains('done')) return;
-    const wait = Math.max(0, 680 - (Date.now() - loaderStartedAt));
-    window.setTimeout(() => loader.classList.add('done'), wait);
+    loader.classList.add('done');
+  }
+
+  function setLoaderMessage(message) {
+    const element = $('loader-message');
+    if (element) element.textContent = message;
   }
 
   function sourceName(name) {
@@ -148,25 +191,34 @@
 
   async function fetchManifest() {
     const url = `data/manifest.json?check=${Date.now()}`;
-    const response = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
-    if (!response.ok) throw new Error(`Feed index request returned ${response.status}`);
-    const value = await response.json();
+    const value = await fetchJson(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
     if (value.schema_version !== 2 || !Array.isArray(value.days) || !value.window || !value.totals) {
       throw new Error('Feed index has an unsupported schema');
+    }
+    if (!parseTime(value.generated_at) || !parseTime(value.window.start) || !parseTime(value.window.end) || !value.days.length) {
+      throw new Error('Feed index is missing valid timestamps or date shards');
+    }
+    const seenDays = new Set();
+    for (const item of value.days) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(item.date || '')) || seenDays.has(item.date) ||
+          !new RegExp(`^data/${item.date}\\.json$`).test(String(item.path || '')) ||
+          !Number.isInteger(Number(item.count)) || Number(item.count) < 0) {
+        throw new Error('Feed index contains an invalid date shard');
+      }
+      if (item.sha256 && !/^[a-f0-9]{64}$/i.test(item.sha256)) throw new Error(`Feed index contains an invalid fingerprint for ${item.date}`);
+      seenDays.add(item.date);
     }
     return value;
   }
 
-  async function fetchDay(day, version) {
+  async function fetchDay(day, version, sourceManifest = manifest) {
     const jobKey = `${day}:${version}`;
     if (loadJobs.has(jobKey)) return loadJobs.get(jobKey);
-    const summary = manifest.days.find((item) => item.date === day);
+    const summary = sourceManifest.days.find((item) => item.date === day);
     if (!summary || !summary.path) return [];
     const job = (async () => {
       const url = `${summary.path}?v=${encodeURIComponent(version)}`;
-      const response = await fetch(url, { cache: 'default', headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(`Could not load ${day} (${response.status})`);
-      const payload = await response.json();
+      const payload = await fetchJson(url, { cache: 'default', headers: { Accept: 'application/json' } });
       if (!Array.isArray(payload)) throw new Error(`Invalid feed shard for ${day}`);
       return payload;
     })();
@@ -188,16 +240,61 @@
     }
   }
 
+  function showUpdateNotice(message) {
+    const text = $('new-notice-text');
+    const notice = $('new-notice');
+    if (!text || !notice) return;
+    text.textContent = message;
+    notice.hidden = false;
+  }
+
+  function acceptPendingUpdate(resetWindow = false) {
+    if (!pendingFeedUpdate) return;
+    const newCount = pendingNewIds.size;
+    pendingFeedUpdate = false;
+    pendingNewIds.clear();
+    $('new-notice').hidden = true;
+    rebuildRecords();
+    if (resetWindow && manifest) {
+      state.from = String(manifest.window.start).slice(0, 10);
+      state.to = String(manifest.window.end).slice(0, 10);
+      state.severity = 'all';
+      state.query = '';
+      state.sort = 'new';
+      state.exactHours = null;
+      visible = PAGE_SIZE;
+      $('search-input').value = '';
+      $('sort-select').value = 'new';
+      $('date-from').value = state.from;
+      $('date-to').value = state.to;
+      document.querySelectorAll('.severity-filter').forEach((element) => element.classList.toggle('active', element.dataset.severity === 'all'));
+      document.querySelectorAll('.quick-ranges button').forEach((element) => element.classList.toggle('selected', element.dataset.days === '30'));
+    }
+    render();
+    refreshTimestamp();
+    setStatus(newCount ? `${newCount} new CVE${newCount === 1 ? '' : 's'} now included in the feed.` : 'Updated feed data is now displayed.', 'success');
+  }
+
+  async function fetchDays(days, version, sourceManifest = manifest) {
+    const uniqueDays = [...new Set(days)].filter((day) => sourceManifest.days.some((item) => item.date === day));
+    const entries = [];
+    for (let offset = 0; offset < uniqueDays.length; offset += SHARD_CONCURRENCY) {
+      const batch = uniqueDays.slice(offset, offset + SHARD_CONCURRENCY);
+      const result = await Promise.all(batch.map(async (day) => [day, await fetchDay(day, version, sourceManifest)]));
+      entries.push(...result);
+    }
+    return entries;
+  }
+
   async function loadDays(days, options = {}) {
     const force = options.force === true;
-    const uniqueDays = [...new Set(days)].filter((day) => manifest.days.some((item) => item.date === day));
+    const sourceManifest = options.sourceManifest || manifest;
+    const uniqueDays = [...new Set(days)].filter((day) => sourceManifest.days.some((item) => item.date === day));
     const pending = uniqueDays.filter((day) => force || !loadedByDay.has(day));
     if (!pending.length) return;
-    const batchSize = Math.max(1, Math.min(SHARD_CONCURRENCY, pending.length));
-    for (let offset = 0; offset < pending.length; offset += batchSize) {
-      const batch = pending.slice(offset, offset + batchSize);
-      const entries = await Promise.all(batch.map(async (day) => [day, await fetchDay(day, manifest.generated_at)]));
-      entries.forEach(([day, records]) => loadedByDay.set(day, records));
+    const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest);
+    entries.forEach(([day, records]) => loadedByDay.set(day, records));
+    if (!options.deferRender) {
       rebuildRecords();
       render();
     }
@@ -225,7 +322,8 @@
     const query = state.query.trim().toLocaleLowerCase();
     const matching = [...allRecords.values()].filter((record) => {
       if (!recordInRange(record)) return false;
-      if (state.severity !== 'all' && cvssSeverity(record.score) !== state.severity) return false;
+      const severity = cvssSeverity(record.score);
+      if (state.severity !== 'all' && !(state.severity === 'unknown' && ['none', 'unknown'].includes(severity)) && severity !== state.severity) return false;
       if (!query) return true;
       const products = (record.affected || []).map((item) => `${item.vendor || ''} ${item.product || ''} ${item.versions || ''}`).join(' ');
       const searchable = `${record.id || ''} ${record.title || ''} ${record.desc || ''} ${products} ${(record.sources || []).join(' ')}`;
@@ -241,7 +339,7 @@
   }
 
   function summaryForSelection() {
-    if (!manifest) return { count: 0, critical: 0, high: 0, medium: 0, low: 0, unknown: 0, exploited: 0 };
+    if (!manifest) return { count: 0, critical: 0, high: 0, medium: 0, low: 0, none: 0, unknown: 0, exploited: 0 };
     if (state.exactHours === 24) {
       const items = [...allRecords.values()].filter((record) => recordInRange(record));
       return {
@@ -250,6 +348,7 @@
         high: items.filter((item) => cvssSeverity(item.score) === 'high').length,
         medium: items.filter((item) => cvssSeverity(item.score) === 'medium').length,
         low: items.filter((item) => cvssSeverity(item.score) === 'low').length,
+        none: items.filter((item) => cvssSeverity(item.score) === 'none').length,
         unknown: items.filter((item) => cvssSeverity(item.score) === 'unknown').length,
         exploited: items.filter((item) => !!item.kev).length
       };
@@ -261,10 +360,11 @@
       result.high += item.high || 0;
       result.medium += item.medium || 0;
       result.low += item.low || 0;
+      result.none += item.none || 0;
       result.unknown += item.unknown || 0;
       result.exploited += item.exploited || 0;
       return result;
-    }, { count: 0, critical: 0, high: 0, medium: 0, low: 0, unknown: 0, exploited: 0 });
+    }, { count: 0, critical: 0, high: 0, medium: 0, low: 0, none: 0, unknown: 0, exploited: 0 });
   }
 
   function setDateBounds() {
@@ -349,12 +449,13 @@
     $('stat-high').textContent = Number(summary.high || 0).toLocaleString();
     $('stat-kev').textContent = Number(summary.exploited || 0).toLocaleString();
     $('stat-window-label').textContent = state.exactHours === 24 ? '/ LAST 24 HOURS' : ` / ${state.from === String(manifest.window.start).slice(0, 10) && state.to === String(manifest.window.end).slice(0, 10) ? '30 DAY WINDOW' : 'UTC DATE WINDOW'}`;
-    const known = summary.critical + summary.high + summary.medium + summary.low;
+    const known = summary.critical + summary.high + summary.medium + summary.low + summary.none + summary.unknown;
     const pct = (value) => known ? `${Math.max(value > 0 ? 1.2 : 0, value / known * 100)}%` : '0%';
     $('meter-critical').style.width = pct(summary.critical);
     $('meter-high').style.width = pct(summary.high);
     $('meter-medium').style.width = pct(summary.medium);
     $('meter-low').style.width = pct(summary.low);
+    $('meter-neutral').style.width = pct(summary.none + summary.unknown);
   }
 
   function cardProduct(item) {
@@ -409,7 +510,7 @@
     let total;
     if (isSearching || state.exactHours === 24) total = matches.length;
     else if (state.severity === 'all') total = summaryForSelection().count;
-    else total = manifest.days.filter((item) => item.date >= state.from && item.date <= state.to).reduce((sum, item) => sum + Number(item[state.severity] || 0), 0);
+    else total = manifest.days.filter((item) => item.date >= state.from && item.date <= state.to).reduce((sum, item) => sum + (state.severity === 'unknown' ? Number(item.none || 0) + Number(item.unknown || 0) : Number(item[state.severity] || 0)), 0);
     const countLabel = total > visible ? `Showing ${Math.min(visible, matches.length).toLocaleString()} of ${total.toLocaleString()}` : `${total.toLocaleString()} records`;
     $('feed-count').textContent = total.toLocaleString();
     $('feed-list').innerHTML = matches.slice(0, visible).map(cardHtml).join('');
@@ -434,6 +535,7 @@
 
   function setRange(from, to, exactHours = null) {
     if (!manifest) return;
+    acceptPendingUpdate(false);
     const min = String(manifest.window.start).slice(0, 10);
     const max = String(manifest.window.end).slice(0, 10);
     if (!from || !to || from > to || from < min || to > max) {
@@ -485,9 +587,7 @@
     const version = String(config.updated_at || config.score_date || manifest.generated_at || '');
     if (!force && version && version === epssVersion) return;
     try {
-      const response = await fetch(`${config.path}?v=${encodeURIComponent(version)}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(`EPSS snapshot request returned ${response.status}`);
-      const value = await response.json();
+      const value = await fetchJson(`${config.path}?v=${encodeURIComponent(version)}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
       if (value.schema_version !== 1 || !value.scores || typeof value.scores !== 'object' || Array.isArray(value.scores)) throw new Error('EPSS snapshot has an unsupported schema');
       epssSnapshot = value;
       epssVersion = version;
@@ -502,15 +602,61 @@
     polling = true;
     const button = $('refresh-button');
     if (options.force) button.disabled = true;
-    const wasLoaded = new Set(loadedByDay.keys());
-    const previousIdsByDay = new Map(loadedByDay);
+    const previousManifest = manifest;
     const previousVersion = lastSnapshotVersion;
+    const previousLoadedDays = new Set(loadedByDay.keys());
+    const previousDataByDay = new Map(loadedByDay);
     try {
       const next = await fetchManifest();
-      lastBrowserCheck = Date.now();
-      const changed = previousVersion && next.generated_at !== previousVersion;
+      const nextVersion = next.generated_at || '';
+      const changed = !!previousVersion && nextVersion !== previousVersion;
+      let changedDataDays = [];
+      let refreshDays = [];
+      let newIds = [];
+      let uncertainChangedDays = [];
+
+      if (changed) {
+        const oldSummaries = new Map((previousManifest?.days || []).map((item) => [item.date, item]));
+        const summaryChanged = (oldItem, newItem) => {
+          if (!oldItem) return Number(newItem.count || 0) > 0;
+          if (oldItem.sha256 && newItem.sha256) return oldItem.sha256 !== newItem.sha256;
+          return ['count', 'critical', 'high', 'medium', 'low', 'none', 'unknown', 'exploited']
+            .some((key) => Number(oldItem[key] || 0) !== Number(newItem[key] || 0));
+        };
+        changedDataDays = next.days.filter((item) => summaryChanged(oldSummaries.get(item.date), item)).map((item) => item.date);
+        const currentDays = new Set(next.days.map((item) => item.date));
+        const unversionedLoadedDays = [...previousLoadedDays].filter((day) => {
+          const oldItem = oldSummaries.get(day);
+          const newItem = next.days.find((item) => item.date === day);
+          return newItem && (!oldItem?.sha256 || !newItem.sha256);
+        });
+        const recentDays = next.days.slice(-2).map((item) => item.date);
+        refreshDays = [...new Set([...changedDataDays, ...unversionedLoadedDays, ...recentDays])]
+          .filter((day) => currentDays.has(day));
+        setStatus('A newer feed snapshot is available. Checking changed date shards…');
+        await loadDays(refreshDays, { force: true, deferRender: true, sourceManifest: next });
+
+        const detected = new Set();
+        for (const day of refreshDays) {
+          const oldSummary = oldSummaries.get(day);
+          const oldRecords = previousDataByDay.get(day) || [];
+          const newRecords = loadedByDay.get(day) || [];
+          if (previousLoadedDays.has(day) || !oldSummary || Number(oldSummary.count || 0) === 0) {
+            const oldIds = new Set(oldRecords.map((item) => cveId(item.id)));
+            for (const record of newRecords) {
+              const id = cveId(record.id);
+              if (id && !oldIds.has(id)) detected.add(id);
+            }
+          } else if (changedDataDays.includes(day)) {
+            uncertainChangedDays.push(day);
+          }
+        }
+        newIds = [...detected];
+      }
+
       manifest = next;
-      lastSnapshotVersion = next.generated_at || '';
+      lastSnapshotVersion = nextVersion;
+      lastBrowserCheck = Date.now();
       setDateBounds();
       await loadEpssSnapshot();
       const currentDays = new Set(manifest.days.map((day) => day.date));
@@ -518,48 +664,38 @@
         if (!currentDays.has(day)) loadedByDay.delete(day);
       }
       renderSources();
+
       if (changed) {
-        const latestDays = manifest.days.slice(-2).map((item) => item.date).reverse();
-        const refreshDays = [...new Set([...wasLoaded].filter((day) => currentDays.has(day)).concat(latestDays))];
-        setStatus('New snapshot found; refreshing the date shards already in view…');
-        await loadDays(refreshDays, { force: true });
-        const newIds = [];
-        for (const day of refreshDays) {
-          const oldIds = new Set((previousIdsByDay.get(day) || []).map((item) => cveId(item.id)));
-          const values = loadedByDay.get(day) || [];
-          for (const record of values) {
-            const id = cveId(record.id);
-            if (id && wasLoaded.has(day) && !oldIds.has(id)) newIds.push(id);
-          }
-        }
-        const uniqueNew = [...new Set(newIds)];
-        if (uniqueNew.length) {
-          const crit = uniqueNew.find((id) => cvssSeverity(allRecords.get(id)?.score) === 'critical');
-          toast(crit ? `${uniqueNew.length} new CVE${uniqueNew.length === 1 ? '' : 's'} · critical: ${crit}` : `${uniqueNew.length} new CVE${uniqueNew.length === 1 ? '' : 's'} in the refreshed snapshot`);
+        newIds.forEach((id) => pendingNewIds.add(id));
+        const shouldDefer = newIds.length > 0 || uncertainChangedDays.length > 0;
+        if (shouldDefer) {
+          pendingFeedUpdate = true;
+          const count = pendingNewIds.size;
+          const otherChanges = uncertainChangedDays.length
+            ? ` Additional changes were found in ${uncertainChangedDays.length} previously unloaded shard${uncertainChangedDays.length === 1 ? '' : 's'}.`
+            : '';
+          showUpdateNotice(count
+            ? `${count} new CVE${count === 1 ? '' : 's'} detected. Select View updates to apply the refreshed feed.${otherChanges}`
+            : `Feed data changed in ${uncertainChangedDays.length} date shard${uncertainChangedDays.length === 1 ? '' : 's'}. Select View updates to apply it.`);
+        } else if (!pendingFeedUpdate) {
+          rebuildRecords();
+          setStatus('The snapshot updated; no new CVE IDs were found in checked shards.', 'success');
         } else {
-          setStatus(`Snapshot refreshed ${relativeTime(manifest.generated_at)} · no new IDs in the shards previously open.`, 'success');
+          const count = pendingNewIds.size;
+          showUpdateNotice(count ? `${count} new CVE${count === 1 ? '' : 's'} detected. Select View updates to apply the refreshed feed.` : 'Feed updates are ready. Select View updates to apply them.');
         }
-      } else {
-        render();
       }
       render();
       refreshTimestamp();
     } catch (error) {
       lastBrowserCheck = Date.now();
-      if (!manifest) {
-        $('feed-list').innerHTML = '';
-        $('empty-state').hidden = false;
-        $('empty-state').querySelector('strong').textContent = 'The feed is temporarily unavailable.';
-        $('empty-state').querySelector('p').textContent = 'The dashboard will retry automatically; check the source status again shortly.';
-      }
       $('feed-indicator').classList.add('error');
-      $('feed-indicator-text').textContent = manifest ? 'CHECK FAILED' : 'FEED UNAVAILABLE';
+      $('feed-indicator-text').textContent = 'CHECK FAILED';
       setStatus(`Could not verify a fresh snapshot: ${error.message || 'network error'}. The last loaded records remain available.`, 'error');
       if (options.force) toast('Feed check failed. Retrying automatically.', 'warning');
     } finally {
       polling = false;
       button.disabled = false;
-      hideLoader();
     }
   }
 
@@ -588,7 +724,7 @@
       ? `Listed in CISA KEV · added ${fmtDate(record.kev.date_added || record.window_date)}. ${record.kev.required_action || 'CISA identifies this as a known exploited vulnerability.'}${record.kev.due_date ? ` Due date: ${record.kev.due_date}.` : ''}${record.kev.ransomware && record.kev.ransomware.toLowerCase() !== 'unknown' ? ` Ransomware campaign use: ${record.kev.ransomware}.` : ''}`
       : 'Not listed in the current CISA KEV snapshot. Absence from this catalog is not proof that exploitation has never occurred.';
     const poc = `GitHub repository search for ${id} · results are unverified and do not prove exploitation.`;
-    const signalCards = `<section class="detail-section"><h3>Four signals · separate evidence</h3><div class="signal-grid"><article class="signal-card signal-cvss severity-${esc(severity)}"><strong>CVSS / SEVERITY</strong><span>${esc(severity === 'unknown' ? 'UNRATED' : `${Number(record.score).toFixed(1)} · ${severity.toUpperCase()}`)}</span><small>Severity only; this is not an exploitation probability.</small></article><article class="signal-card signal-epss"><strong>EPSS / 30-DAY PROBABILITY</strong><span>${esc(epss ? epssPercent(epss) : 'Not available')}</span><small>${esc(epssDetail)}</small></article><article class="signal-card signal-kev"><strong>CISA KEV / CATALOG EVIDENCE</strong><span>${record.kev ? 'LISTED' : 'NOT LISTED'}</span><small>${esc(kevDetail)}</small></article><article class="signal-card signal-poc"><strong>GITHUB PoC / SEARCH LEAD</strong><span>UNVERIFIED</span><small>${esc(poc)}</small></article></div></section>`;
+    const signalCards = `<section class="detail-section"><h3>Why it matters</h3><div class="signal-grid"><article class="signal-card signal-cvss severity-${esc(severity)}"><strong>CVSS / SEVERITY</strong><span>${esc(severity === 'unknown' ? 'UNRATED' : severity === 'none' ? '0.0 · NONE' : `${Number(record.score).toFixed(1)} · ${severity.toUpperCase()}`)}</span><small>Severity only; this is not an exploitation probability.</small></article><article class="signal-card signal-epss"><strong>EPSS / 30-DAY PROBABILITY</strong><span>${esc(epss ? epssPercent(epss) : 'Not available')}</span><small>${esc(epssDetail)}</small></article><article class="signal-card signal-kev"><strong>CISA KEV / CATALOG EVIDENCE</strong><span>${record.kev ? 'LISTED' : 'NOT LISTED'}</span><small>${esc(kevDetail)}</small></article><article class="signal-card signal-poc"><strong>GITHUB PoC / SEARCH LEAD</strong><span>UNVERIFIED</span><small>${esc(poc)}</small></article></div></section>`;
     const kev = record.kev ? `<section class="detail-section"><h3>CISA KEV catalog detail</h3><div class="kev-callout"><strong>Known exploited vulnerability listing</strong><p>${esc(kevDetail)}</p></div></section>` : '';
     const refs = [...(record.advisories || []).map((item) => ({ label: item.label || 'Security advisory', url: item.url })), ...(record.refs || [])]
       .filter((item, index, all) => safeUrl(item.url) && all.findIndex((other) => other.url === item.url) === index).slice(0, 14);
@@ -634,12 +770,14 @@
     $('severity-filters').addEventListener('click', (event) => {
       const button = event.target.closest('[data-severity]');
       if (!button) return;
+      acceptPendingUpdate(false);
       state.severity = button.dataset.severity;
       document.querySelectorAll('.severity-filter').forEach((element) => element.classList.toggle('active', element === button));
       visible = PAGE_SIZE;
       render();
     });
     $('sort-select').addEventListener('change', (event) => {
+      acceptPendingUpdate(false);
       state.sort = event.target.value;
       render();
       if (state.sort !== 'new' && !rangeDays().every((day) => loadedByDay.has(day))) {
@@ -648,6 +786,7 @@
       }
     });
     $('search-input').addEventListener('input', (event) => {
+      acceptPendingUpdate(false);
       state.query = event.target.value.trim();
       visible = PAGE_SIZE;
       render();
@@ -670,8 +809,10 @@
       setRange(candidate < min ? min : candidate, max, days === 1 ? 24 : null);
       document.querySelectorAll('.quick-ranges button').forEach((element) => element.classList.toggle('selected', element === button));
     }));
+    $('view-new').addEventListener('click', () => acceptPendingUpdate(true));
     $('refresh-button').addEventListener('click', () => refresh({ force: true }));
     $('load-more').addEventListener('click', async () => {
+      acceptPendingUpdate(false);
       const button = $('load-more');
       button.disabled = true;
       const visibleMatches = selectedRecords().length;
@@ -719,30 +860,34 @@
 
   async function boot() {
     bindEvents();
-    setTimeout(hideLoader, 3500);
-    try {
-      manifest = await fetchManifest();
-      lastSnapshotVersion = manifest.generated_at || '';
-      lastBrowserCheck = Date.now();
-      setDateBounds();
-      await loadEpssSnapshot();
-      renderSources();
-      renderStats();
-      const newest = rangeDays().slice(-2).reverse();
-      await loadDays(newest);
-      render();
-      refreshTimestamp();
-      hideLoader();
-    } catch (error) {
-      $('feed-list').innerHTML = '';
-      $('feed-list').setAttribute('aria-busy', 'false');
-      $('empty-state').hidden = false;
-      $('empty-state').querySelector('strong').textContent = 'The feed is temporarily unavailable.';
-      $('empty-state').querySelector('p').textContent = 'This page will retry automatically once the static snapshot is reachable.';
-      $('feed-indicator').classList.add('error');
-      $('feed-indicator-text').textContent = 'FEED UNAVAILABLE';
-      setStatus(`Could not open the feed index: ${error.message || 'network error'}.`, 'error');
-      hideLoader();
+    let retry = BOOT_RETRY_MS;
+    for (;;) {
+      try {
+        setLoaderMessage('Loading vulnerability feed…');
+        manifest = await fetchManifest();
+        setDateBounds();
+        await loadEpssSnapshot();
+        renderSources();
+        renderStats();
+        let newest = manifest.days.slice().reverse().filter((item) => Number(item.count) > 0).slice(0, 2).map((item) => item.date);
+        if (!newest.length) newest = manifest.days.slice(-2).map((item) => item.date).reverse();
+        await loadDays(newest);
+        render();
+        lastSnapshotVersion = manifest.generated_at || '';
+        lastBrowserCheck = Date.now();
+        refreshTimestamp();
+        setLoaderMessage('Feed ready');
+        hideLoader();
+        break;
+      } catch (error) {
+        $('feed-list').setAttribute('aria-busy', 'true');
+        $('feed-indicator').classList.add('error');
+        $('feed-indicator-text').textContent = 'FEED UNAVAILABLE';
+        setStatus(`Feed request failed: ${error.message || 'network error'}. Retrying automatically.`, 'warning');
+        setLoaderMessage(`Feed unavailable. Retrying in ${Math.ceil(retry / 1000)} seconds…`);
+        await wait(retry);
+        retry = Math.min(retry * 2, 60_000);
+      }
     }
     window.setInterval(() => refresh(), POLL_MS);
     document.addEventListener('visibilitychange', () => {

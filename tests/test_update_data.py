@@ -75,6 +75,15 @@ class NormalizeAndMergeTests(unittest.TestCase):
         self.start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         self.end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
 
+    def test_cvss_zero_is_neutral_none_and_thresholds_are_exact(self):
+        self.assertEqual(feed.severity_for(0), "none")
+        self.assertEqual(feed.severity_for(None), "unknown")
+        self.assertEqual(feed.severity_for(0.1), "low")
+        self.assertEqual(feed.severity_for(3.9), "low")
+        self.assertEqual(feed.severity_for(4.0), "medium")
+        self.assertEqual(feed.severity_for(7.0), "high")
+        self.assertEqual(feed.severity_for(9.0), "critical")
+
     def test_sources_merge_once_by_cve_and_preserve_scores_products_and_provenance(self):
         nvd = [{"cve": {
             "id": "CVE-2026-1001",
@@ -255,6 +264,18 @@ class EpssTests(unittest.TestCase):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_day_shard_fingerprint_detects_content_changes_with_same_count(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 1, 23, 59, tzinfo=timezone.utc)
+        generated = datetime(2026, 9, 2, 1, tzinfo=timezone.utc)
+        first = {"id": "CVE-2026-4002", "title": "First description", "sev": "high", "window_date": "2026-09-01"}
+        revised = {**first, "title": "Updated description"}
+        first_manifest, _ = feed.build_manifest([first], start, end, generated, [], 0, 0, 0)
+        revised_manifest, _ = feed.build_manifest([revised], start, end, generated, [], 0, 0, 0)
+        self.assertEqual(first_manifest["days"][0]["count"], revised_manifest["days"][0]["count"])
+        self.assertNotEqual(first_manifest["days"][0]["sha256"], revised_manifest["days"][0]["sha256"])
+        self.assertEqual(first_manifest["days"][0]["sha256"], feed.build_manifest([first], start, end, generated, [], 0, 0, 0)[0]["days"][0]["sha256"])
+
     def test_manifest_advertises_every_calendar_shard_and_exact_source_coverage(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         end = datetime(2026, 9, 3, tzinfo=timezone.utc)

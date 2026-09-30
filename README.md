@@ -1,51 +1,47 @@
-<div align="center">
+# SubZer0
 
-# SUBZER0
+SubZer0 is a vulnerability intelligence hub that collects and deduplicates CVE records into a searchable, date-filtered feed. It presents source-backed descriptions, affected products, CVSS severity, optional EPSS probability, and CISA KEV status separately. The static site and generated data are published from the root of `main` through GitHub Pages.
 
-### ICE / EMBER · VULNERABILITY INTELLIGENCE
+**Live site:** <https://iliya-bashrc.github.io/SubZer0/> · **Repository:** <https://github.com/iliya-bashrc/SubZer0> · **Telegram:** <https://t.me/RootAccessClub>
 
-**A focused 30-day CVE radar for RootAccessClub. Four signals, kept separate.**
+## Data sources and interpretation
 
-[![Open the live radar](https://img.shields.io/badge/OPEN%20THE%20RADAR-ICE%20%2F%20EMBER-101820?style=for-the-badge&labelColor=111923)](https://iliya-bashrc.github.io/SubZer0/)
-[![Telegram @RootAccessClub](https://img.shields.io/badge/Telegram-%40RootAccessClub-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/RootAccessClub)
-[![Source code](https://img.shields.io/badge/SOURCE-GitHub-24292F?style=for-the-badge&logo=github&logoColor=white)](https://github.com/iliya-bashrc/SubZer0)
+The hourly collection pipeline uses three core sources:
 
-</div>
+- [NVD CVE API 2.0](https://nvd.nist.gov/developers/vulnerabilities) supplies CVE descriptions, available CVSS metrics, references, and CPE-based affected-product/version data.
+- [GitHub Global Security Advisory Database](https://docs.github.com/en/rest/security-advisories/global-advisories) supplements records with advisory text, package/version details, numeric CVSS scores where present, and advisory links.
+- [CISA Known Exploited Vulnerabilities catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) identifies catalog-listed vulnerabilities and supplies CISA's date-added, affected-product, and remediation details where provided.
 
-SubZer0 is a lightweight static site: GitHub Pages serves the interface and date-sharded feed, while the browser loads public JSON only. No browser-side vulnerability API credentials, UI framework, analytics, or third-party font are required. The original frost-and-ember visual language is made from custom CSS and SVG—not official game artwork or logos.
+Records are merged by canonical CVE ID, retaining source attribution and unique references rather than showing duplicate source-specific CVEs. The rolling feed covers 30 days of NVD CVE publication, GitHub advisory publication, and CISA KEV additions. A KEV listing is retained for a matching record even when its catalog date is older than the feed window. Records are stored in UTC-date JSON shards; the manifest carries coverage, source status, snapshot timestamps, severity counts, and a SHA-256 fingerprint for each shard.
 
-## Read each signal on its own terms
+[FIRST EPSS](https://www.first.org/epss/data) is separate, optional enrichment. Its daily score set estimates the probability that exploitation activity will be observed in the next 30 days. EPSS scores and their score-set date are shown only when available; missing data is not `0%`. EPSS percentile is a relative rank, not a probability. A missing or stale EPSS set does not block core CVE collection.
 
-| Signal | What it says | What it does not say |
-| --- | --- | --- |
-| **CVSS** | Severity score and severity band, when a numeric score is supplied | Exploit probability, proof of exploitation, or a complete environmental risk score |
-| **EPSS** | FIRST's estimated probability that exploitation activity will be observed in the wild in the next 30 days; refreshed daily | Confirmed exploitation. Its percentile is a relative rank, not the probability |
-| **CISA KEV** | CISA catalog evidence that a vulnerability is known to have been exploited | CVSS severity or an EPSS forecast |
-| **GitHub PoC search** | A convenience search for public repository leads | Verified proof-of-concept code, working exploit, or evidence that a CVE is exploited |
+CVSS is severity, not exploit likelihood. Numeric scores map to **Critical** (9.0–10.0), **High** (7.0–8.9), **Medium** (4.0–6.9), **Low** (0.1–3.9), neutral **None** (0.0), or neutral **Unrated** when a score is unavailable. The neutral filter includes None and Unrated. Severity styling uses red for Critical, amber/orange for High, gold for Medium, icy blue for Low, and neutral gray for None/Unrated. A numeric score from NVD or a GitHub advisory may be displayed; a text-only advisory severity is not substituted for a numeric CVSS score. CISA KEV means the CVE is listed in that catalog; absence from the catalog is not proof that exploitation has never occurred. GitHub repository-search results are unverified leads, not evidence of a working exploit or exploitation. Review linked source records before making security decisions.
 
-A missing EPSS score is shown as unavailable, never as 0%. A vulnerability without a numeric CVSS score remains **unrated**; advisory labels are not substituted for CVSS. Card colour responds to CVSS severity and score—not to EPSS or PoC search results.
+## Feed behavior
 
-## Data and freshness
+The homepage provides the feed, snapshot time, source coverage, and EPSS score-set date. Search matches CVE IDs, descriptions, vendors, products, versions, and source names without reloading the page. Users can filter by severity, select UTC date ranges, sort records, open source-linked details, and load more results. Recent date shards are loaded first; the browser renders at most 24 cards per page, loads additional cards on request, and fetches every shard in the selected range when searching.
 
-The hourly feed job builds a rolling 30-day snapshot from three core sources:
+While open, the page checks the manifest every two minutes and when it becomes visible. Manifest checks bypass the browser cache; shard URLs include the snapshot version. Per-day SHA-256 fingerprints reveal changes even when record totals stay the same. New CVE IDs are counted when they can be compared with loaded records; other changed data is reported as an update without guessing how many IDs are new. The current list remains visible until the user selects the persistent **View updates** notice; accepted records are applied without a full-page reload.
 
-- [NVD CVE API 2.0](https://nvd.nist.gov/developers/vulnerabilities) provides CVE descriptions, CVSS metrics, references, and CPE-based affected-product/version ranges. Pagination continues until the reported result set is covered, with NVD's unauthenticated request pacing respected.
-- [GitHub Global Security Advisory Database](https://docs.github.com/en/rest/security-advisories/global-advisories) supplements CVEs with advisory descriptions, package ranges, patched versions, and direct advisory links. The feed follows pagination cursors and uses advisory publication time when that is the activity that brought an older CVE into the window.
-- [CISA Known Exploited Vulnerabilities catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) contributes catalog status, date added, action/due-date details, and vendor/product information. CISA's date-added value has calendar-day precision.
+Initial loading remains visible until the manifest and initial feed data are usable. Failed or delayed requests have timeouts and automatic retries; the startup loader continues through failures rather than ending on a fixed timer, and no fake progress percentage is shown. Later failures preserve usable records, report status, and are retried by subsequent checks or requests.
 
-Records are deduplicated by CVE ID and sharded by UTC activity date. NVD publication, GitHub advisory publication, and CISA KEV date-added events retain their own date basis. Three core sources must complete before a new core snapshot is published; optional EPSS enrichment cannot discard or block that coverage.
+This is scheduled collection plus browser polling, not a real-time push service. The workflow runs hourly at minute 35 UTC. Upstream publication, API availability, Actions queueing, and Pages/CDN delivery can add delay. FIRST EPSS data is daily and is displayed with its own score-set date.
 
-[FIRST EPSS publishes free daily scores through its API and CSV.](https://www.first.org/epss/data) SubZer0 uses the official compressed daily CSV for its batch update, caches the current-window scores in a separate `data/epss.json` sidecar, and uses small API lookups only for newly surfaced CVEs between daily score-set refreshes. The page shows the score-set date separately from the core snapshot timestamp. EPSS enrichment is optional: if its source is temporarily unavailable, the last available scores are retained and their date remains visible.
+## Repository layout
 
-GitHub Actions collects the core sources hourly. The page checks for a newer static snapshot every two minutes while open. Scheduled runs can queue, and source/API/deployment time adds latency, so this is a scheduled feed—not a real-time push service. The interface shows the last successful core snapshot, the latest browser check, source coverage, and the EPSS score-set date separately.
+- `index.html`, `styles.css`, `app.js` — responsive static interface, accessible controls, feed rendering, polling, and update notices.
+- `data/manifest.json` — rolling-window coverage, totals, source health, timestamps, and shard index.
+- `data/YYYY-MM-DD.json` — normalized CVE records grouped by UTC activity date.
+- `data/epss.json` — optional FIRST EPSS scores and score-set metadata.
+- `scripts/update_data.py` — source fetching, retries, CVE-ID normalization/deduplication, enrichment, validation, fingerprinting, and atomic snapshot writing.
+- `.github/workflows/update.yml` — scheduled/manual feed generation and publication to `main`.
+- `.github/workflows/checks.yml` — Python tests and JavaScript syntax check on pushes and pull requests.
+- `tests/` — frontend-contract and feed-pipeline unit tests.
 
-## Explore and share
+## Run and test locally
 
-Search CVE IDs, products, vendors, or descriptions across the selected window. Filter by CVSS severity, choose a UTC date range, sort by newest or CVSS severity, and load recent shards first; older shards are fetched only when needed. Open a record for affected-version details, source references, and the independent CVSS, EPSS, CISA KEV, and PoC-search signals. Each card can be shared to Telegram with its source link and signal labels.
-
-Join the channel: [![Telegram @RootAccessClub](https://img.shields.io/badge/Telegram-%40RootAccessClub-26A5E4?logo=telegram&logoColor=white)](https://t.me/RootAccessClub)
-
-## Run locally
+The static frontend has no framework or external runtime dependency. With Python 3 and Node.js available:
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -53,13 +49,18 @@ node --check app.js
 python3 -m http.server 8080
 ```
 
-Open `http://localhost:8080/`. The feed generator uses only the Python standard library. An optional `NVD_API_KEY` raises NVD request allowance; the GitHub Actions job uses its built-in token for advisory API requests. To update only the optional EPSS score sidecar for a current snapshot, run `python3 scripts/update_data.py --epss-only`.
+Open <http://localhost:8080/>. To collect a new feed locally, run:
 
-## Project notes
+```sh
+python3 scripts/update_data.py
+```
 
-- GitHub Pages publishes the root of `main`; the existing publishing route is unchanged.
-- No commit history rewrite, external frontend runtime, or client-side upstream polling is used.
-- Reduced-motion preferences, keyboard focus, accessible filter labels, and narrow-phone layouts are supported.
-- CVE IDs and affected versions should be verified with the linked primary/advisory source before taking action.
+The feed generator uses the Python standard library. It uses public NVD, GitHub, CISA, and FIRST endpoints. `GITHUB_TOKEN` or `GH_TOKEN` can be supplied for GitHub API access; GitHub Actions uses its built-in token. `NVD_API_KEY` is optional and can increase NVD request allowance. To refresh only EPSS for an existing snapshot, run `python3 scripts/update_data.py --epss-only`.
 
-> This product uses data from the NVD API but is not endorsed or certified by the NVD.
+## GitHub Pages and Actions
+
+GitHub Pages is configured to publish `/` from the `main` branch. A commit to `main` publishes site changes and triggers the Pages build. **Site and feed checks** runs the Python test suite and `node --check app.js` for pushes and pull requests. **Refresh vulnerability feed** runs hourly and can also be started manually; it requires complete core-source coverage before publishing generated shards and the manifest to `main`. The workflow uses the repository's `GITHUB_TOKEN` with contents-write permission and rebases its commit onto the current branch before a normal push. `NVD_API_KEY` is an optional repository secret.
+
+## Data limitations
+
+Upstream data may be delayed, revised, incomplete, or unavailable. A source's failure or missing field is not treated as proof of absence; product/version coverage depends on source records. CVSS, EPSS, and CISA KEV are distinct signals with different meanings and update schedules. This product uses data from the NVD API but is not endorsed or certified by the NVD.

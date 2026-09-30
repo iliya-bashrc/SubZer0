@@ -33,6 +33,7 @@ jobs:
       - name: Collect and validate the complete 30-day feed
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: python scripts/update_data.py
 
       - name: Publish changed snapshot to the Pages source branch
@@ -42,6 +43,7 @@ jobs:
           git add -A data
           if ! git diff --cached --quiet; then
             git commit -m "Refresh CVE feed $(date -u +%FT%TZ)"
+            git pull --rebase origin main
             git push origin HEAD:main
           else
             echo "Feed snapshot unchanged; no commit required."

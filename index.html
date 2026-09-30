@@ -3,139 +3,112 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#080d13">
-  <meta name="description" content="SubZer0 — a 30-day CVE intelligence arena separating CVSS severity, EPSS probability, CISA KEV evidence, and unverified PoC leads.">
-  <meta property="og:title" content="SubZer0 — Ice / Ember Vulnerability Intel">
-  <meta property="og:description" content="Four independent signals. One clear view of the 30-day vulnerability feed.">
+  <meta name="theme-color" content="#0b1117">
+  <meta name="description" content="SubZer0 is a vulnerability intelligence hub for newly published CVEs, severity, EPSS, CISA KEV, and source references.">
+  <meta property="og:title" content="SubZer0 — Vulnerability Intelligence Hub">
+  <meta property="og:description" content="Search and review vulnerability records from NVD, GitHub advisories, CISA KEV, and FIRST EPSS.">
   <meta property="og:type" content="website">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 45 24 24 45 3 24z' fill='%23080d13' stroke='%238de8ff' stroke-width='2'/%3E%3Cpath d='M24 11v26M12.5 17.5l23 13M35.5 17.5l-23 13' stroke='%23ff7659' stroke-width='2'/%3E%3Ccircle cx='24' cy='24' r='3' fill='%23e9f6ff'/%3E%3C/svg%3E">
-  <title>SubZer0 — Ice / Ember Vulnerability Intel</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 4 44 24 24 44 4 24Z' fill='%230b1117' stroke='%238bdcf0' stroke-width='2'/%3E%3Cpath d='M24 12v24M13.6 18l20.8 12M34.4 18 13.6 30' stroke='%23bfeefa' stroke-width='1.6'/%3E%3C/svg%3E">
+  <title>SubZer0 — Vulnerability Intelligence Hub</title>
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
 </head>
 <body>
-  <div class="loader" id="loader" aria-hidden="true">
-    <div class="loader-mark"><span></span><i></i></div>
-    <div class="loader-wordmark">SUBZER<span>0</span></div>
-    <div class="loader-readout"><span id="loader-temp">−72°</span><i></i> opening the arena</div>
+  <div class="loader" id="loader" role="status" aria-live="polite">
+    <div class="loader-mark" aria-hidden="true"><span></span><i></i></div>
+    <div class="loader-wordmark">SubZer0</div>
+    <div class="loader-readout"><i aria-hidden="true"></i><span id="loader-message">Loading vulnerability feed…</span></div>
   </div>
 
-  <div class="ambient" aria-hidden="true"><span class="ambient-ice"></span><span class="ambient-ember"></span><span class="ambient-grid"></span></div>
   <div class="shell">
     <header class="topbar">
       <a class="brand" href="./" aria-label="SubZer0 home">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 48 48" fill="none"><path d="M24 4 42 24 24 44 6 24 24 4Z"/><path d="M24 11v26M12.5 17.5l23 13M35.5 17.5l-23 13"/><path d="m24 17 7 7-7 7-7-7 7-7Z"/></svg>
-        </span>
-        <span class="brand-copy"><strong>SUBZER<span>0</span></strong><small>VULNERABILITY INTEL</small></span>
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><path d="M24 4 42 24 24 44 6 24 24 4Z"/><path d="M24 11v26M12.5 17.5l23 13M35.5 17.5l-23 13"/></svg></span>
+        <span class="brand-copy"><strong>SubZer0</strong><small>VULNERABILITY INTELLIGENCE HUB</small></span>
       </a>
-      <div class="topbar-right">
-        <span class="edition">ROOTACCESSCLUB <span>/</span> FIELD INTELLIGENCE</span>
-        <span class="feed-indicator" id="feed-indicator"><i class="indicator-dot"></i><span id="feed-indicator-text">CONNECTING</span></span>
-      </div>
+      <span class="feed-indicator" id="feed-indicator"><i class="indicator-dot" aria-hidden="true"></i><span id="feed-indicator-text">FETCHING</span></span>
     </header>
 
     <main>
-      <section class="hero" aria-labelledby="page-title">
-        <div class="hero-copy">
-          <p class="eyebrow"><span class="eyebrow-line"></span> THE 30-DAY THREAT ARENA <span class="eyebrow-coordinate">UTC · SECTOR 01</span></p>
-          <h1 id="page-title"><span>ICE</span><b aria-hidden="true">×</b><em>EMBER</em><small>INTELLIGENCE, WITHOUT THE NOISE.</small></h1>
-          <p class="hero-summary">Severity is not probability. Probability is not proof. Read the signals on their own terms—then follow the source.</p>
-          <div class="hero-links">
-            <a class="hero-cta" href="#feed"><span>ENTER THE FEED</span><b aria-hidden="true">↓</b></a>
-            <span class="hero-note"><i></i> NVD · GITHUB ADVISORIES · CISA KEV · FIRST EPSS</span>
-          </div>
+      <section class="masthead" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">VULNERABILITY INTELLIGENCE</p>
+          <h1 id="page-title">SubZer0</h1>
+          <p class="masthead-summary">New CVEs, severity, exploit probability, and trusted source records in one searchable feed.</p>
         </div>
-        <div class="arena-art" aria-hidden="true">
-          <div class="arena-ring ring-outer"></div><div class="arena-ring ring-middle"></div><div class="arena-ring ring-inner"></div>
-          <svg class="arena-sigil" viewBox="0 0 520 420" fill="none">
-            <defs>
-              <linearGradient id="iceGrad" x1="94" y1="96" x2="255" y2="310" gradientUnits="userSpaceOnUse"><stop stop-color="#E0FAFF"/><stop offset=".45" stop-color="#76DBFF"/><stop offset="1" stop-color="#2176B2"/></linearGradient>
-              <linearGradient id="fireGrad" x1="425" y1="94" x2="263" y2="316" gradientUnits="userSpaceOnUse"><stop stop-color="#FFE6A5"/><stop offset=".45" stop-color="#FF875F"/><stop offset="1" stop-color="#B93335"/></linearGradient>
-              <radialGradient id="coreGrad"><stop stop-color="#F5FCFF"/><stop offset=".3" stop-color="#83DDF5"/><stop offset="1" stop-color="#83DDF5" stop-opacity="0"/></radialGradient>
-            </defs>
-            <path d="M244 71 203 111l18 25-48 28 25 28-52 38 55 13 2 50 43-42 15 67 19-92 38 42-2-51 55-13-52-38 25-28-48-28 18-25-41-40-35 42-34-42Z" fill="url(#iceGrad)" fill-opacity=".12" stroke="url(#iceGrad)" stroke-width="2"/>
-            <path d="M276 71 317 111l-18 25 48 28-25 28 52 38-55 13-2 50-43-42-15 67-19-92-38 42 2-51-55-13 52-38-25-28 48-28-18-25 41-40 35 42 34-42Z" fill="url(#fireGrad)" fill-opacity=".12" stroke="url(#fireGrad)" stroke-width="2"/>
-            <path d="M260 76v267M176 154l168 119M344 154 176 273M207 113l106 210M313 113 207 323" stroke="#D9F6FF" stroke-opacity=".32" stroke-width="1"/>
-            <circle cx="260" cy="211" r="54" fill="url(#coreGrad)"/><path d="m260 181 30 30-30 30-30-30 30-30Z" fill="#0C1118" stroke="#F3FAFF" stroke-opacity=".9" stroke-width="1.5"/><circle cx="260" cy="211" r="5" fill="#fff"/>
-            <path d="M82 211h94m168 0h94M260 50v28m0 267v28" stroke="#E2F6FF" stroke-opacity=".34"/>
-            <circle cx="82" cy="211" r="3" fill="#8DE8FF"/><circle cx="438" cy="211" r="3" fill="#FF8A63"/>
-          </svg>
-          <div class="arena-tag arena-tag-ice"><i></i> FROST / SIGNAL</div><div class="arena-tag arena-tag-fire"><i></i> EMBER / SIGNAL</div>
-          <div class="arena-caption">SEVERITY ↔ PROBABILITY <span>NEVER THE SAME METER</span></div>
-        </div>
-        <div class="hero-readout" aria-label="Feed and EPSS freshness">
-          <div class="readout-head"><span class="readout-kicker"><i></i> SNAPSHOT CONTROL</span><span class="readout-orbit" aria-hidden="true">◉</span></div>
-          <div class="readout-time" id="snapshot-time">Waiting for the first feed snapshot</div>
-          <div class="readout-meta" id="snapshot-meta">Source feeds update on a schedule.</div>
-          <div class="readout-rule"></div>
-          <div class="freshness-line"><span>EPSS SCORE SET</span><strong id="epss-freshness">Waiting for EPSS metadata</strong></div>
-          <div class="readout-bottom"><span><i class="pulse-dot"></i> BROWSER CHECK</span><strong>EVERY 2 MIN</strong></div>
+        <div class="snapshot-panel" aria-label="Feed freshness">
+          <span class="panel-label">LAST FEED UPDATE</span>
+          <strong id="snapshot-time">Waiting for feed data</strong>
+          <span id="snapshot-meta" class="snapshot-meta">The browser checks for updates every 2 minutes.</span>
+          <div class="snapshot-divider"></div>
+          <span class="panel-label">FIRST EPSS SCORE SET</span>
+          <strong id="epss-freshness" class="epss-freshness">Waiting for EPSS metadata</strong>
         </div>
       </section>
 
-      <section class="stats" aria-label="Selected date window totals">
-        <article class="stat-card stat-total"><span class="stat-label">CVE ACTIVITY <small id="stat-window-label">/ 30 DAY WINDOW</small></span><strong class="stat-value" id="stat-total">—</strong><span class="stat-foot">Deduplicated records · all severity levels</span><i class="stat-mark" aria-hidden="true">01</i></article>
-        <article class="stat-card stat-critical"><span class="stat-label">CRITICAL <small>CVSS</small></span><strong class="stat-value" id="stat-critical">—</strong><span class="stat-foot">Severity band · CVSS 9.0–10.0</span><i class="stat-mark" aria-hidden="true">02</i></article>
-        <article class="stat-card stat-high"><span class="stat-label">HIGH <small>CVSS</small></span><strong class="stat-value" id="stat-high">—</strong><span class="stat-foot">Severity band · CVSS 7.0–8.9</span><i class="stat-mark" aria-hidden="true">03</i></article>
-        <article class="stat-card stat-kev"><span class="stat-label">CISA KEV <small>CATALOG</small></span><strong class="stat-value" id="stat-kev">—</strong><span class="stat-foot">Listed as known exploited by CISA</span><i class="stat-mark" aria-hidden="true">04</i></article>
+      <section class="stats" aria-label="Feed totals">
+        <article class="stat-card"><span class="stat-label">CVEs <small id="stat-window-label">/ 30-DAY WINDOW</small></span><strong class="stat-value" id="stat-total">—</strong><span class="stat-foot">Deduplicated records</span></article>
+        <article class="stat-card stat-critical"><span class="stat-label">CRITICAL <small>CVSS</small></span><strong class="stat-value" id="stat-critical">—</strong><span class="stat-foot">CVSS 9.0–10.0</span></article>
+        <article class="stat-card stat-high"><span class="stat-label">HIGH <small>CVSS</small></span><strong class="stat-value" id="stat-high">—</strong><span class="stat-foot">CVSS 7.0–8.9</span></article>
+        <article class="stat-card stat-kev"><span class="stat-label">CISA KEV</span><strong class="stat-value" id="stat-kev">—</strong><span class="stat-foot">Listed in the known exploited catalog</span></article>
       </section>
 
-      <section class="signal-key" aria-label="How to read the four independent signals">
-        <div class="signal-key-heading"><span class="section-kicker">READ THE FIGHT, NOT THE GLOW</span><span class="signal-key-note">FOUR SIGNALS · FOUR DIFFERENT QUESTIONS</span></div>
-        <div class="signal-key-grid">
-          <article class="key-item key-cvss"><span class="key-symbol" aria-hidden="true">◈</span><div><strong>CVSS / SEVERITY</strong><p>How severe the scored vulnerability is. Not exploit likelihood.</p></div></article>
-          <article class="key-item key-epss"><span class="key-symbol" aria-hidden="true">↗</span><div><strong>EPSS / PROBABILITY</strong><p>Estimated chance of observed exploitation in the next 30 days.</p></div></article>
-          <article class="key-item key-kev"><span class="key-symbol" aria-hidden="true">◎</span><div><strong>CISA KEV / EVIDENCE</strong><p>CISA catalog listing for known exploited vulnerabilities.</p></div></article>
-          <article class="key-item key-poc"><span class="key-symbol" aria-hidden="true">?</span><div><strong>GITHUB PoC / LEAD</strong><p>A repository search only. Results are unverified, not proof.</p></div></article>
-        </div>
+      <section class="signal-key" aria-label="Data field definitions">
+        <article><strong>CVSS</strong><span>Severity score; not exploit likelihood.</span></article>
+        <article><strong>EPSS</strong><span>Estimated probability of observed exploitation in the next 30 days.</span></article>
+        <article><strong>CISA KEV</strong><span>CISA catalog listing for a known exploited vulnerability.</span></article>
+        <article><strong>GitHub search</strong><span>Repository results are unverified and are not proof of exploitation.</span></article>
       </section>
 
       <section class="control-panel" aria-label="Search and filter CVEs">
-        <div class="control-heading"><div><span class="section-kicker">01 / FIND YOUR MATCHUP</span><h2>Cut through the feed</h2></div><button class="quiet-button" id="refresh-button" type="button" title="Check for a newer feed snapshot"><span aria-hidden="true">↻</span> Check snapshot</button></div>
+        <div class="control-heading">
+          <div><span class="section-kicker">SEARCH AND FILTER</span><h2>Find vulnerabilities</h2></div>
+          <button class="quiet-button" id="refresh-button" type="button" title="Check for a newer feed snapshot"><span aria-hidden="true">↻</span> Check for updates</button>
+        </div>
         <div class="filter-grid">
-          <label class="search-box"><span class="control-label">SEARCH THE SELECTED WINDOW</span><span class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.8"/><path d="m13 13 4.1 4.1"/></svg><input id="search-input" type="search" placeholder="CVE ID, product, vendor, keyword…" autocomplete="off" spellcheck="false"><kbd>/</kbd></span><small>Searching loads every shard in the selected date range.</small></label>
+          <label class="search-box"><span class="control-label">SEARCH</span><span class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.8"/><path d="m13 13 4.1 4.1"/></svg><input id="search-input" type="search" placeholder="CVE ID, vendor, product, description…" autocomplete="off" spellcheck="false"><kbd>/</kbd></span><small>Search covers every date shard in the selected range.</small></label>
           <div class="date-box"><span class="control-label">ACTIVITY DATE · UTC</span><div class="date-fields"><label><span>FROM</span><input id="date-from" type="date" aria-label="From date"></label><span class="date-arrow" aria-hidden="true">→</span><label><span>TO</span><input id="date-to" type="date" aria-label="To date"></label><button class="apply-button" id="apply-dates" type="button">APPLY</button></div><div class="quick-ranges" aria-label="Quick date ranges"><button type="button" data-days="1">24H</button><button type="button" data-days="7">7D</button><button type="button" data-days="14">14D</button><button class="selected" type="button" data-days="30">30D</button></div></div>
         </div>
         <div class="filter-row">
           <div class="severity-filters" id="severity-filters" aria-label="Filter by CVSS severity">
-            <button class="severity-filter active" type="button" data-severity="all"><span class="filter-mark"></span> ALL</button>
-            <button class="severity-filter" type="button" data-severity="critical"><span class="filter-mark mark-critical"></span> CRITICAL</button>
-            <button class="severity-filter" type="button" data-severity="high"><span class="filter-mark mark-high"></span> HIGH</button>
-            <button class="severity-filter" type="button" data-severity="medium"><span class="filter-mark mark-medium"></span> MEDIUM</button>
-            <button class="severity-filter" type="button" data-severity="low"><span class="filter-mark mark-low"></span> LOW</button>
-            <button class="severity-filter" type="button" data-severity="unknown"><span class="filter-mark mark-unknown"></span> UNRATED</button>
+            <button class="severity-filter active" type="button" data-severity="all">ALL</button>
+            <button class="severity-filter" type="button" data-severity="critical"><i class="filter-mark mark-critical" aria-hidden="true"></i> CRITICAL</button>
+            <button class="severity-filter" type="button" data-severity="high"><i class="filter-mark mark-high" aria-hidden="true"></i> HIGH</button>
+            <button class="severity-filter" type="button" data-severity="medium"><i class="filter-mark mark-medium" aria-hidden="true"></i> MEDIUM</button>
+            <button class="severity-filter" type="button" data-severity="low"><i class="filter-mark mark-low" aria-hidden="true"></i> LOW</button>
+            <button class="severity-filter" type="button" data-severity="unknown"><i class="filter-mark mark-unknown" aria-hidden="true"></i> NONE / UNRATED</button>
           </div>
-          <label class="sort-control"><span>SORT</span><select id="sort-select"><option value="new">Newest first</option><option value="hot">Highest CVSS severity</option><option value="old">Oldest first</option></select></label>
+          <label class="sort-control"><span>SORT</span><select id="sort-select"><option value="new">Newest first</option><option value="hot">Highest severity first</option><option value="old">Oldest first</option></select></label>
         </div>
       </section>
 
+      <div class="new-notice" id="new-notice" role="status" aria-live="polite" hidden><span id="new-notice-text"></span><button id="view-new" type="button">View updates</button></div>
+
       <section class="dashboard" id="feed" aria-label="Vulnerability feed and source status">
         <div class="feed-column">
-          <div class="feed-heading"><div><span class="section-kicker">02 / CURRENT CONDITIONS</span><h2>Vulnerability feed <span id="feed-count" class="feed-count">—</span></h2></div><div class="coverage-note" id="coverage-note">Rolling 30 days · NVD + GitHub advisories + CISA KEV</div></div>
-          <div id="feed-status" class="feed-status" role="status" aria-live="polite">Opening the secure feed…</div>
-          <div id="feed-list" class="feed-list" aria-live="polite" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
-          <div id="empty-state" class="empty-state" hidden><span class="empty-glyph">⌁</span><strong>No records match this cut.</strong><p>Widen the date range or clear the severity and search filters.</p></div>
+          <div class="feed-heading"><div><span class="section-kicker">CVE RECORDS</span><h2>Vulnerability feed <span id="feed-count" class="feed-count">—</span></h2></div><div class="coverage-note" id="coverage-note">Loading feed coverage…</div></div>
+          <div id="feed-status" class="feed-status" role="status" aria-live="polite">Loading feed data…</div>
+          <div id="feed-list" class="feed-list" aria-live="polite" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div></div>
+          <div id="empty-state" class="empty-state" hidden><strong>No vulnerabilities match these filters.</strong><p>Change the date range or clear the search and severity filters.</p></div>
           <button class="load-button" id="load-more" type="button" hidden><span>LOAD MORE</span><small></small><b aria-hidden="true">↓</b></button>
         </div>
 
-        <aside class="side-column" aria-label="Feed metadata and sources">
-          <section class="side-panel window-panel"><div class="side-title"><span class="section-kicker">WINDOW COVERAGE</span><span class="coverage-icon" aria-hidden="true">◌</span></div><div class="window-dates"><span>FROM</span><strong id="window-start">—</strong><span>THROUGH</span><strong id="window-end">—</strong></div><div class="window-caption" id="window-caption">Full rolling window is loaded in dated shards.</div><div class="severity-meter" aria-label="CVSS severity breakdown"><span class="meter-critical" id="meter-critical"></span><span class="meter-high" id="meter-high"></span><span class="meter-medium" id="meter-medium"></span><span class="meter-low" id="meter-low"></span></div><div class="meter-legend"><span><i class="legend-critical"></i>CRIT</span><span><i class="legend-high"></i>HIGH</span><span><i class="legend-medium"></i>MED</span><span><i class="legend-low"></i>LOW</span></div></section>
-          <section class="side-panel sources-panel"><div class="side-title"><span class="section-kicker">SOURCE NETWORK</span><span class="source-state" id="source-state">PENDING</span></div><ul class="source-list" id="source-list"><li><span class="source-state-dot"></span><span>Waiting for source coverage…</span></li></ul><p class="source-footnote">The three core feeds determine CVE coverage. FIRST EPSS is separate, daily probability enrichment; missing EPSS is never treated as zero.</p></section>
-          <section class="side-panel latency-panel"><span class="section-kicker">FRESHNESS, WITHOUT THE HYPE</span><p>Upstream collection runs hourly; the page checks its snapshot every <strong>2 minutes</strong>. A source change can take about <strong>0–60 minutes</strong> plus collection and deployment time. EPSS scores refresh daily.</p><span class="latency-chip"><i></i> SCHEDULED FEED · NOT PUSH</span></section>
+        <aside class="side-column" aria-label="Feed metadata and source status">
+          <section class="side-panel window-panel"><div class="side-title"><span class="section-kicker">DATE COVERAGE</span><span class="source-state" id="source-state">PENDING</span></div><div class="window-dates"><span>FROM</span><strong id="window-start">—</strong><span>THROUGH</span><strong id="window-end">—</strong></div><div class="window-caption" id="window-caption">Date-sharded records load as needed.</div><div class="severity-meter" aria-label="CVSS severity breakdown"><span class="meter-critical" id="meter-critical"></span><span class="meter-high" id="meter-high"></span><span class="meter-medium" id="meter-medium"></span><span class="meter-low" id="meter-low"></span><span class="meter-neutral" id="meter-neutral"></span></div><div class="meter-legend"><span><i class="legend-critical"></i>CRITICAL</span><span><i class="legend-high"></i>HIGH</span><span><i class="legend-medium"></i>MEDIUM</span><span><i class="legend-low"></i>LOW</span><span><i class="legend-neutral"></i>NONE / UNRATED</span></div></section>
+          <section class="side-panel sources-panel"><div class="side-title"><span class="section-kicker">DATA SOURCES</span></div><ul class="source-list" id="source-list"><li><i class="source-state-dot warning"></i><span>Loading source status…</span></li></ul><p class="source-footnote">NVD, GitHub advisories, and CISA KEV provide CVE coverage. FIRST EPSS is separate probability enrichment; a missing score is not zero.</p></section>
+          <section class="side-panel latency-panel"><span class="section-kicker">UPDATE SCHEDULE</span><p>Source collection runs hourly. This page checks its published snapshot every <strong>2 minutes</strong>. Upstream, Actions, and Pages processing add delay; this is scheduled polling, not a push service. EPSS scores are updated daily.</p></section>
         </aside>
       </section>
     </main>
 
     <footer class="footer">
-      <div class="footer-brand"><span class="footer-symbol" aria-hidden="true">◈</span><span>SUBZER<span>0</span></span></div>
-      <p class="footer-note">© RootAccessClub. A community radar, not a vulnerability verdict. CVSS, EPSS, CISA KEV and repository-search results are separate signals; verify important findings with the linked source.</p>
-      <div class="footer-links"><a class="telegram-link" href="https://t.me/RootAccessClub" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.7 3.4-3.3 16c-.2 1.1-.8 1.4-1.7.9l-4.8-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.4-4.9 8.9-8c.4-.4-.1-.6-.6-.2L6.3 13.3l-4.7-1.5c-1-.3-1-1 .2-1.5L20.2 3c.9-.3 1.7.2 1.5.4Z"/></svg><span>@RootAccessClub</span><b aria-hidden="true">↗</b></a><a href="https://github.com/iliya-bashrc/SubZer0" target="_blank" rel="noopener noreferrer">Source code <span aria-hidden="true">↗</span></a></div>
+      <span class="copyright">©RootAccessClub</span>
+      <nav class="footer-links" aria-label="Project links"><a class="footer-button telegram-link" href="https://t.me/RootAccessClub" target="_blank" rel="noopener noreferrer"><span>Telegram</span><b>@RootAccessClub</b><span aria-hidden="true">↗</span></a><a class="footer-button" href="https://github.com/iliya-bashrc/SubZer0" target="_blank" rel="noopener noreferrer"><span>GitHub</span><b>Source repository</b><span aria-hidden="true">↗</span></a></nav>
       <p class="nvd-notice">This product uses data from the NVD API but is not endorsed or certified by the NVD.</p>
     </footer>
   </div>
 
-  <dialog class="detail-dialog" id="detail-dialog" aria-labelledby="detail-title"><div class="detail-shell"><div class="detail-top"><span class="section-kicker">INTELLIGENCE BRIEF <span class="detail-id-label">/</span></span><button class="dialog-close" id="dialog-close" type="button" aria-label="Close details">×</button></div><div id="detail-content"></div></div></dialog>
+  <dialog class="detail-dialog" id="detail-dialog" aria-labelledby="detail-title"><div class="detail-shell"><div class="detail-top"><span class="section-kicker">VULNERABILITY DETAILS</span><button class="dialog-close" id="dialog-close" type="button" aria-label="Close details">×</button></div><div id="detail-content"></div></div></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <noscript><p class="noscript">JavaScript is required to load and filter the public CVE feed.</p></noscript>
 </body>

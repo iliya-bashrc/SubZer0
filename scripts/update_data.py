@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -36,8 +37,8 @@ EPSS_API = "https://api.first.org/data/v1/epss"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
 MAX_NVD_PAGE = 2000
 NVD_PAGE_PAUSE_SECONDS = 6
-USER_AGENT = "SubZer0-Radar/2.0 (+https://github.com/iliya-bashrc/SubZer0)"
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
+USER_AGENT = "SubZer0/1.0 (+https://github.com/iliya-bashrc/SubZer0)"
+SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "unknown": 5}
 SOURCE_CREDITS = [
     {"name": "NVD CVE API 2.0", "url": "https://nvd.nist.gov/developers/vulnerabilities"},
     {"name": "GitHub Security Advisory Database", "url": "https://github.com/advisories"},
@@ -304,14 +305,21 @@ def fetch_epss_api(cve_ids: set[str], request_fn: Callable[..., tuple[Any, Any]]
 def severity_for(score: float | int | None) -> str:
     if score is None:
         return "unknown"
-    score = float(score)
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        return "unknown"
+    if not 0 <= score <= 10:
+        return "unknown"
+    if score == 0:
+        return "none"
     if score >= 9:
         return "critical"
     if score >= 7:
         return "high"
     if score >= 4:
         return "medium"
-    return "low"
+    return "low" if score >= 0.1 else "none"
 
 
 def _cve_id(value: Any) -> str | None:
@@ -636,13 +644,18 @@ def build_manifest(
     while day <= end.date():
         key = day.isoformat()
         items = shards.get(key, [])
+        fingerprint = hashlib.sha256(
+            json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         day_summaries.append({
             "date": key,
             "count": len(items),
+            "sha256": fingerprint,
             "critical": sum(item["sev"] == "critical" for item in items),
             "high": sum(item["sev"] == "high" for item in items),
             "medium": sum(item["sev"] == "medium" for item in items),
             "low": sum(item["sev"] == "low" for item in items),
+            "none": sum(item["sev"] == "none" for item in items),
             "unknown": sum(item["sev"] == "unknown" for item in items),
             "exploited": sum(bool(item.get("kev")) for item in items),
             "path": f"data/{key}.json",
@@ -670,6 +683,7 @@ def build_manifest(
             "high": severity_counts["high"],
             "medium": severity_counts["medium"],
             "low": severity_counts["low"],
+            "none": severity_counts["none"],
             "unknown": severity_counts["unknown"],
             "known_exploited": sum(bool(item.get("kev")) for item in records),
         },
