@@ -148,7 +148,6 @@ main { padding-bottom: 4px; }
 .feed-list { display: grid; gap: 9px; }
 .cve-card { --accent: var(--unknown); --card-accent: var(--accent); --glow-opacity: 4%; --aged-severity: color-mix(in srgb, var(--accent) var(--age-vividness, 100%), #82919a); position: relative; min-width: 0; padding: 14px 15px 12px 17px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--card-accent) var(--age-vividness, 100%), #293a43); border-radius: 8px; background: linear-gradient(112deg, color-mix(in srgb, var(--card-accent) 3.5%, transparent), transparent 46%), linear-gradient(145deg, rgba(17, 26, 38, .98), rgba(11, 18, 29, .98)); box-shadow: inset 0 1px rgba(223, 245, 250, .035), 0 5px 16px rgba(0, 0, 0, .1); transition: transform .16s var(--ease-out), border-color .18s ease, box-shadow .18s ease; }
 .cve-card::before { position: absolute; inset: 0 auto 0 0; width: 3px; background: color-mix(in srgb, var(--card-accent) var(--age-vividness, 100%), #71808a); box-shadow: 0 0 8px color-mix(in srgb, var(--card-accent) var(--glow-opacity), transparent); content: ""; }
-.cve-card:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--card-accent) 43%, #293a43); box-shadow: inset 0 1px rgba(223, 245, 250, .055), 0 9px 24px rgba(0, 0, 0, .19), 0 0 11px rgba(120, 205, 227, .045); }
 .cve-card:focus-within { border-color: color-mix(in srgb, var(--card-accent) 52%, #293a43); box-shadow: inset 0 1px rgba(223, 245, 250, .055), 0 0 0 1px rgba(120, 205, 227, .08); }
 .cve-card.kev-listed { --card-accent: var(--critical); border-color: color-mix(in srgb, var(--low) 72%, #293a43); box-shadow: inset 0 0 0 1px rgba(120, 205, 227, .12), 0 5px 16px rgba(0, 0, 0, .1); }
 .cve-card.kev-listed:hover, .cve-card.kev-listed:focus-within { border-color: var(--low); }
@@ -399,7 +398,7 @@ main { padding-bottom: 4px; }
   .brand-copy small { font-size: 5px; letter-spacing: .055em; }
   .section-nav-link { padding: 0 12px; }
   .feed-indicator { padding: 0 6px; font-size: 6px; }
-  .stat-total .stat-value { font-size: 23px; }
+  .stat-total .stat-value { font-size: 29px; }
   .stat-foot { font-size: 6px; }
   .date-fields { gap: 3px; }
   .date-fields > label { padding: 0 3px; }

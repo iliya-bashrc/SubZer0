@@ -84,6 +84,7 @@ class StaticSiteTests(unittest.TestCase):
     def test_cards_use_subtle_pointer_hover_and_critical_only_pulse(self):
         self.assertIn("@media (hover: hover) and (pointer: fine)", CSS)
         self.assertIn(".cve-card:hover { transform: translateY(-2px);", CSS)
+        self.assertNotIn(".cve-card:hover { transform: translateY(-1px);", CSS)
         self.assertIn("0 0 13px rgba(120, 205, 227, .055)", CSS)
         self.assertIn(".severity-critical::before { animation: criticalEmber 7s ease-in-out infinite; }", CSS)
         self.assertIn("@keyframes criticalEmber", CSS)
@@ -118,6 +119,7 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn(".stats { display: grid; grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr)); gap: 11px;", CSS)
         self.assertIn(".stat-total .stat-value", CSS)
         self.assertIn("font-size: 40px", CSS)
+        self.assertIn(".stat-total .stat-value { font-size: 29px; }", CSS)
         self.assertIn(".stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;", CSS)
         self.assertIn(".stat-total { grid-column: 1 / -1; }", CSS)
 
