@@ -78,6 +78,8 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("BOOT_RETRY_MS", JS)
         self.assertIn("FETCH_TIMEOUT_MS", JS)
         self.assertIn("retryableStatuses", JS)
+        self.assertIn("void loadEpssSnapshot().then", JS)
+        self.assertNotIn("await loadEpssSnapshot()", JS)
         self.assertIn("setLoaderMessage(`Feed unavailable. Retrying", JS)
         self.assertNotIn("setTimeout(hideLoader", JS)
         self.assertNotIn("hideLoader();", JS[JS.index("async function refresh"):JS.index("function renderDetail")])

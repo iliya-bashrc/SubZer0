@@ -592,8 +592,7 @@
       epssSnapshot = value;
       epssVersion = version;
     } catch (_) {
-      epssSnapshot = null;
-      epssVersion = '';
+      // Keep the last usable optional score set; missing data is not zero.
     }
   }
 
@@ -658,7 +657,9 @@
       lastSnapshotVersion = nextVersion;
       lastBrowserCheck = Date.now();
       setDateBounds();
-      await loadEpssSnapshot();
+      void loadEpssSnapshot().then(() => {
+        if (booted && manifest) render();
+      });
       const currentDays = new Set(manifest.days.map((day) => day.date));
       for (const day of [...loadedByDay.keys()]) {
         if (!currentDays.has(day)) loadedByDay.delete(day);
@@ -866,13 +867,15 @@
         setLoaderMessage('Loading vulnerability feed…');
         manifest = await fetchManifest();
         setDateBounds();
-        await loadEpssSnapshot();
         renderSources();
         renderStats();
         let newest = manifest.days.slice().reverse().filter((item) => Number(item.count) > 0).slice(0, 2).map((item) => item.date);
         if (!newest.length) newest = manifest.days.slice(-2).map((item) => item.date).reverse();
         await loadDays(newest);
         render();
+        void loadEpssSnapshot().then(() => {
+          if (booted && manifest) render();
+        });
         lastSnapshotVersion = manifest.generated_at || '';
         lastBrowserCheck = Date.now();
         refreshTimestamp();
