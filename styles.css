@@ -199,7 +199,7 @@ main { padding-bottom: var(--space-2); }
 .feed-list { display: grid; gap: 16px; }
 .cve-card { --accent: var(--unknown); --card-accent: var(--accent); --aged-severity: color-mix(in srgb, var(--accent) var(--age-vividness, 100%), #9ca3af); position: relative; min-width: 0; padding: 20px; overflow: hidden; border: 1px solid var(--line); border-left: 3px solid color-mix(in srgb, var(--card-accent) var(--age-vividness, 100%), #6b7280); border-radius: var(--radius-md); background: var(--surface); transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
 .cve-card:focus-within { border-color: var(--line-strong); box-shadow: 0 0 0 1px rgba(34, 211, 238, .12); }
-.cve-card.kev-listed { --card-accent: var(--critical); border-color: color-mix(in srgb, var(--low) 58%, var(--line)); box-shadow: inset 0 0 0 1px rgba(56, 189, 248, .08); }
+.cve-card.kev-listed { border-color: color-mix(in srgb, var(--low) 58%, var(--line)); box-shadow: inset 0 0 0 1px rgba(56, 189, 248, .08); }
 .cve-card.kev-listed:hover, .cve-card.kev-listed:focus-within { border-color: var(--low); }
 .severity-critical { --accent: var(--critical); }
 .severity-high { --accent: var(--high); }
@@ -700,16 +700,66 @@ body { background: linear-gradient(180deg, #0a0e17 0, #070b14 24rem); }
 @media (max-width: 380px) {
   .masthead .eyebrow { display: none; }
   .date-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 4px; }
-  .date-fields > label { min-width: 0; gap: 2px; padding-right: 4px; padding-left: 4px; }
-  .date-fields > label > span { font-size: 7px; }
-  .date-fields input { font-size: 8px; }
+  .date-fields > label { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: center; gap: 2px; padding-right: 4px; padding-left: 4px; }
+  .date-fields > label > span { font-size: 10px; }
+  .date-fields input { font-size: 12px; }
   .date-fields input::-webkit-calendar-picker-indicator { display: none; }
-  .apply-button { grid-column: auto; width: 46px; min-height: 44px; padding: 0 3px; font-size: 8px; }
+  .apply-button { grid-column: auto; width: 46px; min-height: 44px; padding: 0 3px; font-size: 12px; }
 }
 
 @media (max-width: 760px) {
-  .severity-filter { font-size: 9px; letter-spacing: -.02em; }
+  .control-panel { padding: 14px; }
+  .filter-grid { gap: 8px; }
+  .filter-row { margin-top: 8px; padding-top: 8px; }
+  .control-label, .date-fields > label > span { font-size: 10px; }
+  .date-fields > label { display: grid; grid-template-columns: minmax(0, 1fr); align-content: center; gap: 2px; padding: 0 6px; }
+  .date-fields input { font-size: 11px; }
+  .apply-button { font-size: 12px; }
+  .quiet-button { font-size: 11px; }
+  .quick-ranges button { font-size: 11px; }
+  .severity-filters {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .severity-filter {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 4px;
+    border-color: var(--line);
+    border-radius: 8px;
+    background: var(--surface-well);
+    color: var(--soft);
+    font-size: 12px;
+    letter-spacing: 0;
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
+  }
+  .severity-filter.active, .severity-filter[aria-pressed="true"] {
+    border-color: #155e75;
+    background: #0c1a27;
+    color: var(--text-strong);
+  }
+  .severity-filter .filter-mark { width: 7px; height: 7px; }
 }
 @media (max-width: 380px) {
-  .severity-filter { gap: 3px; padding-right: 2px; padding-left: 2px; font-size: 8.5px; letter-spacing: -.03em; }
+  .control-panel { padding: 10px; }
+  .date-fields input { font-size: 12px; }
+  .control-heading h2 { font-size: 15px; }
+  .quiet-button { font-size: 10px; }
+  .severity-filter { font-size: 12px; }
+}
+
+/* Fit the first result on extra-narrow screens without shrinking controls. */
+@media (max-width: 340px) {
+  .masthead { padding-top: 8px; padding-bottom: 8px; }
+  .control-panel { padding: 8px; }
+  .filter-grid { gap: 4px; margin-top: 6px; }
+  .filter-row { margin-top: 4px; padding-top: 4px; }
+  .dashboard { margin-top: 6px; }
 }

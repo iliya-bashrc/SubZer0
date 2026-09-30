@@ -678,6 +678,11 @@ def build_facets(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _json_bytes(value: Any) -> bytes:
+    """Serialize the exact compact UTF-8 JSON bytes published to the static feed."""
+    return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def build_manifest(
     records: list[dict[str, Any]],
     start: datetime,
@@ -703,9 +708,7 @@ def build_manifest(
     while day <= end.date():
         key = day.isoformat()
         items = shards.get(key, [])
-        fingerprint = hashlib.sha256(
-            json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        fingerprint = hashlib.sha256(_json_bytes(items)).hexdigest()
         day_summaries.append({
             "date": key,
             "count": len(items),
@@ -875,9 +878,7 @@ def add_epss_metadata(manifest: dict[str, Any], snapshot: dict[str, Any], status
 
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as stream:
-        json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
-        stream.write("\n")
+    path.write_bytes(_json_bytes(value))
 
 
 def _load_snapshot_records(output_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:

@@ -41,6 +41,9 @@ class StaticSiteTests(unittest.TestCase):
                 self.assertIn(f'id="{element_id}"', HTML)
         self.assertIn('aria-live="polite"', HTML)
         self.assertIn('aria-label="Search and filter CVEs"', HTML)
+        self.assertIn('aria-label="Search CVE IDs, titles, descriptions, vendors, products, versions, and source names"', HTML)
+        self.assertNotIn('id="feed-list" class="feed-list" aria-live=', HTML)
+        self.assertIn('id="feed-status" class="feed-status" role="status" aria-live="polite"', HTML)
         self.assertIn("NONE / UNRATED", HTML)
 
     def test_compact_footer_attribution_and_links_are_accurate(self):
@@ -93,7 +96,8 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("if (timestamp == null) return null;", JS)
         self.assertIn("class=\"cve-card severity-${severity}${record.kev ? ' kev-listed' : ''}${isRead ? ' is-read' : ''}\"", JS)
         self.assertIn("const ageStyle = ageVividness == null ? '' : ` style=\"--age-vividness:${ageVividness}%\"`;", JS)
-        self.assertIn(".cve-card.kev-listed { --card-accent: var(--critical);", CSS)
+        self.assertIn(".cve-card.kev-listed { border-color:", CSS)
+        self.assertNotIn(".cve-card.kev-listed { --card-accent: var(--critical);", CSS)
         self.assertIn("color: var(--aged-severity, var(--accent));", CSS)
         self.assertIn(".priority-chip { width: fit-content; max-width: 100%;", CSS)
         self.assertIn(".priority-chip > span { color: var(--text-strong);", CSS)
