@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#080f14">
+  <meta name="theme-color" content="#070b14">
   <meta name="description" content="SubZer0 is a vulnerability intelligence hub for newly published CVEs, severity, EPSS, CISA KEV, and source references.">
   <meta property="og:title" content="SubZer0 — Vulnerability Intelligence Hub">
   <meta property="og:description" content="Search and review vulnerability records from NVD, GitHub advisories, CISA KEV, and FIRST EPSS.">
   <meta property="og:type" content="website">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 4 44 24 24 44 4 24Z' fill='%23080f14' stroke='%2378cde3' stroke-width='2'/%3E%3Cpath d='M24 12v24M13.6 18l20.8 12M34.4 18 13.6 30' stroke='%23bfeefa' stroke-width='1.6'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 4 44 24 24 44 4 24Z' fill='%23070b14' stroke='%2322d3ee' stroke-width='2'/%3E%3Cpath d='M24 12v24M13.6 18l20.8 12M34.4 18 13.6 30' stroke='%23e5e7eb' stroke-width='1.6'/%3E%3C/svg%3E">
   <title>SubZer0 — Vulnerability Intelligence Hub</title>
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
@@ -84,14 +84,17 @@
           </div>
           <label class="sort-control"><span>SORT</span><select id="sort-select" aria-label="Sort vulnerability records"><option value="new">Newest first</option><option value="hot">Highest severity first</option><option value="priority">Composite priority first</option><option value="old">Oldest first</option></select></label>
         </div>
-        <div class="feed-tools" aria-label="Additional feed filters and display options">
-          <label class="facet-control"><span>EXACT VENDOR</span><input id="vendor-filter" type="search" list="vendor-suggestions" placeholder="All vendors" autocomplete="off" aria-label="Filter by exact sourced vendor"><datalist id="vendor-suggestions"></datalist></label>
-          <label class="facet-control"><span>EXACT PRODUCT</span><input id="product-filter" type="search" list="product-suggestions" placeholder="All products" autocomplete="off" aria-label="Filter by exact sourced product"><datalist id="product-suggestions"></datalist></label>
-          <label class="group-control"><span>GROUP RESULTS</span><select id="group-select" aria-label="Group results by sourced vendor or product"><option value="none">No grouping</option><option value="vendor">Vendor</option><option value="product">Product</option></select></label>
-          <button class="mode-button" id="absolute-zero" type="button" aria-pressed="false">Absolute Zero <small>Critical + KEV</small></button>
-          <button class="mode-button" id="compact-toggle" type="button" aria-pressed="false">Compact cards</button>
-        </div>
-        <p class="filter-provenance-note">Combined vendor + product filters match the same sourced pair. Grouped CVEs appear once, under one source-priority affected pair.</p>
+        <details class="advanced-filters" id="advanced-filters">
+          <summary>Vendor, product &amp; display filters</summary>
+          <div class="feed-tools" aria-label="Additional feed filters and display options">
+            <label class="facet-control"><span>EXACT VENDOR</span><input id="vendor-filter" type="search" list="vendor-suggestions" placeholder="All vendors" autocomplete="off" aria-label="Filter by exact sourced vendor"><datalist id="vendor-suggestions"></datalist></label>
+            <label class="facet-control"><span>EXACT PRODUCT</span><input id="product-filter" type="search" list="product-suggestions" placeholder="All products" autocomplete="off" aria-label="Filter by exact sourced product"><datalist id="product-suggestions"></datalist></label>
+            <label class="group-control"><span>GROUP RESULTS</span><select id="group-select" aria-label="Group results by sourced vendor or product"><option value="none">No grouping</option><option value="vendor">Vendor</option><option value="product">Product</option></select></label>
+            <button class="mode-button" id="absolute-zero" type="button" aria-pressed="false">Absolute Zero <small>Critical + KEV</small></button>
+            <button class="mode-button" id="compact-toggle" type="button" aria-pressed="false">Compact cards</button>
+          </div>
+          <p class="filter-provenance-note">Combined vendor + product filters match the same sourced pair. Grouped CVEs appear once, under one source-priority affected pair.</p>
+        </details>
         <details class="workspace-tools" id="workspace-tools">
           <summary>Saved views, watchlist &amp; export</summary>
           <div class="workspace-tools-body">

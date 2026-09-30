@@ -59,7 +59,7 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("FIRST EPSS is separate probability enrichment", HTML)
 
     def test_severity_color_mapping_is_severity_controlled(self):
-        for color in ("--critical: #ed5558", "--high: #ee9b4c", "--medium: #d8bd59", "--low: #78cde3", "--unknown: #8d999f"):
+        for color in ("--critical: #ef4444", "--high: #f97316", "--medium: #eab308", "--low: #38bdf8", "--unknown: #6b7280"):
             with self.subTest(color=color):
                 self.assertIn(color, CSS)
         for rule in (
@@ -80,15 +80,17 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("const ageStyle = ageVividness == null ? '' : ` style=\"--age-vividness:${ageVividness}%\"`;", JS)
         self.assertIn(".cve-card.kev-listed { --card-accent: var(--critical);", CSS)
         self.assertIn("color: var(--aged-severity, var(--accent));", CSS)
+        self.assertIn(".priority-chip { width: fit-content; max-width: 100%;", CSS)
+        self.assertIn(".priority-chip > span { color: var(--text-strong);", CSS)
 
-    def test_cards_use_subtle_pointer_hover_and_critical_only_pulse(self):
+    def test_cards_use_subtle_pointer_hover_without_decorative_severity_motion(self):
         self.assertIn("@media (hover: hover) and (pointer: fine)", CSS)
-        self.assertIn(".cve-card:hover { transform: translateY(-2px);", CSS)
-        self.assertNotIn(".cve-card:hover { transform: translateY(-1px);", CSS)
-        self.assertIn("0 0 13px rgba(120, 205, 227, .055)", CSS)
-        self.assertIn(".severity-critical::before { animation: criticalEmber 7s ease-in-out infinite; }", CSS)
-        self.assertIn("@keyframes criticalEmber", CSS)
-        self.assertIn(".loader-mark, .loader-readout i, .skeleton, .severity-critical::before, .quiet-button.is-checking .refresh-icon, .cve-card.filter-arrive { animation: none; }", CSS)
+        self.assertIn(".cve-card:hover { border-color: color-mix(in srgb, var(--card-accent) 48%, var(--line));", CSS)
+        self.assertNotIn(".cve-card:hover { transform:", CSS)
+        self.assertIn(".cve-card.kev-listed:hover { border-color: var(--low); }", CSS)
+        self.assertNotIn("criticalEmber", CSS)
+        self.assertIn("body.critical-arrival .stat-critical { animation: criticalArrival 1.7s ease-out both; }", CSS)
+        self.assertIn(".loader-mark, .loader-readout i, .skeleton, .quiet-button.is-checking .refresh-icon, .cve-card.filter-arrive { animation: none; }", CSS)
 
     def test_microinteraction_states_include_filter_loading_refresh_and_copy_feedback(self):
         self.assertIn("render({ animateCards: true });", JS)
@@ -99,29 +101,40 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("const outstanding = days.length - completedShards;", JS)
         self.assertIn("button.classList.add('is-checking')", JS)
         self.assertIn("class=\"refresh-icon\"", HTML)
-        self.assertIn("animation: coldRing 2.2s linear infinite", CSS)
+        self.assertIn("animation: coldRing 1s linear infinite", CSS)
         self.assertIn("toast('Copied');", JS)
         self.assertIn("const duration = message === 'Copied' ? 1_800 : 4_600;", JS)
-        self.assertIn(".control-panel { position: sticky;", CSS)
+        self.assertIn(".control-panel { position: relative; z-index: auto;", CSS)
+        self.assertNotIn(".control-panel { position: sticky;", CSS)
         self.assertIn(".cve-card.filter-arrive { animation: filterCardsIn .14s", CSS)
         self.assertIn(".skeleton.loading-skeleton { min-height: 118px; }", CSS)
 
     def test_mobile_first_breakpoints_touch_sizes_and_reduced_motion(self):
-        self.assertIn("@media (max-width: 900px)", CSS)
-        self.assertIn("@media (max-width: 720px)", CSS)
+        self.assertIn("@media (max-width: 1000px)", CSS)
+        self.assertIn("@media (max-width: 760px)", CSS)
         self.assertIn("@media (max-width: 560px)", CSS)
         self.assertIn("@media (max-width: 360px)", CSS)
         self.assertIn("@media (prefers-reduced-motion: reduce)", CSS)
         self.assertIn("min-height: 44px", CSS)
         self.assertIn("grid-template-columns: 1fr", CSS)
+        self.assertRegex(CSS, re.compile(r"\.section-nav-link\s*\{\s*min-height:\s*44px"))
+        self.assertRegex(CSS, re.compile(r"\.quick-ranges button\s*\{[^}]*min-height:\s*44px"))
+        self.assertRegex(CSS, re.compile(r"\.severity-filter\s*\{\s*min-height:\s*44px"))
 
     def test_stats_use_larger_separated_cards_and_preserve_mobile_reflow(self):
-        self.assertIn(".stats { display: grid; grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr)); gap: 11px;", CSS)
+        self.assertIn(".stats { display: grid; grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr)); gap: 12px;", CSS)
         self.assertIn(".stat-total .stat-value", CSS)
         self.assertIn("font-size: 40px", CSS)
         self.assertIn(".stat-total .stat-value { font-size: 29px; }", CSS)
-        self.assertIn(".stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;", CSS)
-        self.assertIn(".stat-total { grid-column: 1 / -1; }", CSS)
+        self.assertIn(".stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;", CSS)
+
+    def test_filter_panel_is_nonsticky_and_advanced_controls_are_disclosed(self):
+        self.assertIn('.control-panel { position: relative; z-index: auto;', CSS)
+        self.assertNotRegex(CSS, re.compile(r"\.control-panel\s*\{[^}]*position:\s*sticky", re.S))
+        self.assertIn('<details class="advanced-filters" id="advanced-filters">', HTML)
+        self.assertIn('<summary>Vendor, product &amp; display filters</summary>', HTML)
+        self.assertIn('id="vendor-filter"', HTML)
+        self.assertIn('id="product-filter"', HTML)
 
     def test_hero_stat_count_up_runs_after_initial_data_and_respects_reduced_motion(self):
         self.assertIn("function animateCountUp(element, target)", JS)
