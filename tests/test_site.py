@@ -20,7 +20,8 @@ class StaticSiteTests(unittest.TestCase):
 
     def test_required_attribution_and_unverified_poc_label_are_visible(self):
         self.assertIn('href="https://t.me/RootAccessClub"', HTML)
-        self.assertIn('RootAccessClub', HTML)
+        self.assertIn('@RootAccessClub', HTML)
+        self.assertIn('© RootAccessClub', HTML)
         self.assertIn('UNVERIFIED', HTML + JS)
         self.assertIn('NOT PUSH', HTML)
         self.assertIn('NVD API but is not endorsed or certified by the NVD', HTML)
