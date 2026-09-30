@@ -25,6 +25,7 @@
   let toastTimer = 0;
   let booted = false;
   let pendingFeedUpdate = false;
+  let pendingSnapshot = null;
   const pendingNewIds = new Set();
 
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
@@ -249,12 +250,23 @@
   }
 
   function acceptPendingUpdate(resetWindow = false) {
-    if (!pendingFeedUpdate) return;
+    if (!pendingFeedUpdate || !pendingSnapshot) return;
     const newCount = pendingNewIds.size;
+    const staged = pendingSnapshot;
     pendingFeedUpdate = false;
+    pendingSnapshot = null;
     pendingNewIds.clear();
     $('new-notice').hidden = true;
+    manifest = staged.manifest;
+    lastSnapshotVersion = manifest.generated_at || lastSnapshotVersion;
+    for (const [day, records] of staged.days) loadedByDay.set(day, records);
+    const currentDays = new Set(manifest.days.map((day) => day.date));
+    for (const day of [...loadedByDay.keys()]) {
+      if (!currentDays.has(day)) loadedByDay.delete(day);
+    }
     rebuildRecords();
+    renderSources();
+    setDateBounds();
     if (resetWindow && manifest) {
       state.from = String(manifest.window.start).slice(0, 10);
       state.to = String(manifest.window.end).slice(0, 10);
@@ -267,12 +279,23 @@
       $('sort-select').value = 'new';
       $('date-from').value = state.from;
       $('date-to').value = state.to;
-      document.querySelectorAll('.severity-filter').forEach((element) => element.classList.toggle('active', element.dataset.severity === 'all'));
-      document.querySelectorAll('.quick-ranges button').forEach((element) => element.classList.toggle('selected', element.dataset.days === '30'));
+      document.querySelectorAll('.severity-filter').forEach((element) => {
+        const selected = element.dataset.severity === 'all';
+        element.classList.toggle('active', selected);
+        element.setAttribute('aria-pressed', String(selected));
+      });
+      document.querySelectorAll('.quick-ranges button').forEach((element) => {
+        const selected = element.dataset.days === '30';
+        element.classList.toggle('selected', selected);
+        element.setAttribute('aria-pressed', String(selected));
+      });
     }
     render();
     refreshTimestamp();
     setStatus(newCount ? `${newCount} new CVE${newCount === 1 ? '' : 's'} now included in the feed.` : 'Updated feed data is now displayed.', 'success');
+    void loadEpssSnapshot(true).then(() => {
+      if (booted && manifest) render();
+    });
   }
 
   async function fetchDays(days, version, sourceManifest = manifest) {
@@ -289,13 +312,14 @@
   async function loadDays(days, options = {}) {
     const force = options.force === true;
     const sourceManifest = options.sourceManifest || manifest;
+    const destination = options.stageTo || loadedByDay;
     const uniqueDays = [...new Set(days)].filter((day) => sourceManifest.days.some((item) => item.date === day));
-    const pending = uniqueDays.filter((day) => force || !loadedByDay.has(day));
+    const pending = uniqueDays.filter((day) => force || !destination.has(day));
     if (!pending.length) return;
     const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest);
-    entries.forEach(([day, records]) => loadedByDay.set(day, records));
+    entries.forEach(([day, records]) => destination.set(day, records));
     if (!options.deferRender) {
-      rebuildRecords();
+      if (destination === loadedByDay) rebuildRecords();
       render();
     }
   }
@@ -538,7 +562,6 @@
 
   function setRange(from, to, exactHours = null) {
     if (!manifest) return;
-    acceptPendingUpdate(false);
     const min = String(manifest.window.start).slice(0, 10);
     const max = String(manifest.window.end).slice(0, 10);
     if (!from || !to || from > to || from < min || to > max) {
@@ -553,7 +576,11 @@
     visible = PAGE_SIZE;
     $('date-from').value = from;
     $('date-to').value = to;
-    document.querySelectorAll('.quick-ranges button').forEach((button) => button.classList.toggle('selected', button.dataset.days === (exactHours === 24 ? '1' : '')));
+    document.querySelectorAll('.quick-ranges button').forEach((button) => {
+      const selected = button.dataset.days === (exactHours === 24 ? '1' : '');
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
     render();
     const days = rangeDays().slice(-2).reverse();
     if (state.query || state.sort !== 'new') loadAllSelectedDays(rangeGeneration).catch(showLoadError);
@@ -604,10 +631,14 @@
     polling = true;
     const button = $('refresh-button');
     if (options.force) button.disabled = true;
-    const previousManifest = manifest;
+    const priorPending = pendingSnapshot;
+    const previousManifest = priorPending?.manifest || manifest;
     const previousVersion = lastSnapshotVersion;
-    const previousLoadedDays = new Set(loadedByDay.keys());
     const previousDataByDay = new Map(loadedByDay);
+    if (priorPending) {
+      for (const [day, records] of priorPending.days) previousDataByDay.set(day, records);
+    }
+    const previousLoadedDays = new Set(previousDataByDay.keys());
     try {
       const next = await fetchManifest();
       const nextVersion = next.generated_at || '';
@@ -616,6 +647,7 @@
       let refreshDays = [];
       let newIds = [];
       let uncertainChangedDays = [];
+      const stagedDays = new Map(priorPending?.days || []);
 
       if (changed) {
         const oldSummaries = new Map((previousManifest?.days || []).map((item) => [item.date, item]));
@@ -636,13 +668,13 @@
         refreshDays = [...new Set([...changedDataDays, ...unversionedLoadedDays, ...recentDays])]
           .filter((day) => currentDays.has(day));
         setStatus('A newer feed snapshot is available. Checking changed date shards…');
-        await loadDays(refreshDays, { force: true, deferRender: true, sourceManifest: next });
+        await loadDays(refreshDays, { force: true, deferRender: true, sourceManifest: next, stageTo: stagedDays });
 
         const detected = new Set();
         for (const day of refreshDays) {
           const oldSummary = oldSummaries.get(day);
           const oldRecords = previousDataByDay.get(day) || [];
-          const newRecords = loadedByDay.get(day) || [];
+          const newRecords = stagedDays.get(day) || [];
           if (previousLoadedDays.has(day) || !oldSummary || Number(oldSummary.count || 0) === 0) {
             const oldIds = new Set(oldRecords.map((item) => cveId(item.id)));
             for (const record of newRecords) {
@@ -656,41 +688,40 @@
         newIds = [...detected];
       }
 
-      manifest = next;
+      const contentChanged = changed && (changedDataDays.length > 0 || uncertainChangedDays.length > 0 || newIds.length > 0);
+      if (priorPending || contentChanged) {
+        pendingSnapshot = { manifest: next, days: stagedDays };
+        pendingFeedUpdate = true;
+        newIds.forEach((id) => pendingNewIds.add(id));
+        const count = pendingNewIds.size;
+        const changedShards = Math.max(changedDataDays.length, uncertainChangedDays.length);
+        const message = count
+          ? `${count} new CVE${count === 1 ? '' : 's'} detected. Your current results stay in place until you select View updates.`
+          : `Feed data changed in ${changedShards} date shard${changedShards === 1 ? '' : 's'}. Your current results stay in place until you select View updates.`;
+        showUpdateNotice(message);
+        if (contentChanged) {
+          toast(count
+            ? `${count} new CVE${count === 1 ? '' : 's'} ready. Current results remain unchanged until you apply updates.`
+            : 'Feed data changed. Current results remain unchanged; select View updates to apply it.');
+        }
+      } else {
+        manifest = next;
+        setDateBounds();
+        renderSources();
+        void loadEpssSnapshot().then(() => {
+          if (booted && manifest) render();
+        });
+      }
+
       lastSnapshotVersion = nextVersion;
       lastBrowserCheck = Date.now();
-      setDateBounds();
-      void loadEpssSnapshot().then(() => {
-        if (booted && manifest) render();
-      });
-      const currentDays = new Set(manifest.days.map((day) => day.date));
-      for (const day of [...loadedByDay.keys()]) {
-        if (!currentDays.has(day)) loadedByDay.delete(day);
+      if (pendingFeedUpdate) {
+        refreshTimestamp();
+        setStatus('A newer feed snapshot is ready. Current results remain unchanged until you select View updates.', 'warning');
+      } else {
+        render();
+        refreshTimestamp();
       }
-      renderSources();
-
-      if (changed) {
-        newIds.forEach((id) => pendingNewIds.add(id));
-        const shouldDefer = newIds.length > 0 || uncertainChangedDays.length > 0;
-        if (shouldDefer) {
-          pendingFeedUpdate = true;
-          const count = pendingNewIds.size;
-          const otherChanges = uncertainChangedDays.length
-            ? ` Additional changes were found in ${uncertainChangedDays.length} previously unloaded shard${uncertainChangedDays.length === 1 ? '' : 's'}.`
-            : '';
-          showUpdateNotice(count
-            ? `${count} new CVE${count === 1 ? '' : 's'} detected. Select View updates to apply the refreshed feed.${otherChanges}`
-            : `Feed data changed in ${uncertainChangedDays.length} date shard${uncertainChangedDays.length === 1 ? '' : 's'}. Select View updates to apply it.`);
-        } else if (!pendingFeedUpdate) {
-          rebuildRecords();
-          setStatus('The snapshot updated; no new CVE IDs were found in checked shards.', 'success');
-        } else {
-          const count = pendingNewIds.size;
-          showUpdateNotice(count ? `${count} new CVE${count === 1 ? '' : 's'} detected. Select View updates to apply the refreshed feed.` : 'Feed updates are ready. Select View updates to apply them.');
-        }
-      }
-      render();
-      refreshTimestamp();
     } catch (error) {
       lastBrowserCheck = Date.now();
       $('feed-indicator').classList.add('error');
@@ -774,14 +805,16 @@
     $('severity-filters').addEventListener('click', (event) => {
       const button = event.target.closest('[data-severity]');
       if (!button) return;
-      acceptPendingUpdate(false);
       state.severity = button.dataset.severity;
-      document.querySelectorAll('.severity-filter').forEach((element) => element.classList.toggle('active', element === button));
+      document.querySelectorAll('.severity-filter').forEach((element) => {
+        const selected = element === button;
+        element.classList.toggle('active', selected);
+        element.setAttribute('aria-pressed', String(selected));
+      });
       visible = PAGE_SIZE;
       render();
     });
     $('sort-select').addEventListener('change', (event) => {
-      acceptPendingUpdate(false);
       state.sort = event.target.value;
       render();
       if (state.sort !== 'new' && !rangeDays().every((day) => loadedByDay.has(day))) {
@@ -790,7 +823,6 @@
       }
     });
     $('search-input').addEventListener('input', (event) => {
-      acceptPendingUpdate(false);
       state.query = event.target.value.trim();
       visible = PAGE_SIZE;
       render();
@@ -811,12 +843,15 @@
       else fromDate.setUTCDate(fromDate.getUTCDate() - (days === 1 ? 1 : Math.max(0, days - 1)));
       const candidate = fromDate.toISOString().slice(0, 10);
       setRange(candidate < min ? min : candidate, max, days === 1 ? 24 : null);
-      document.querySelectorAll('.quick-ranges button').forEach((element) => element.classList.toggle('selected', element === button));
+      document.querySelectorAll('.quick-ranges button').forEach((element) => {
+        const selected = element === button;
+        element.classList.toggle('selected', selected);
+        element.setAttribute('aria-pressed', String(selected));
+      });
     }));
     $('view-new').addEventListener('click', () => acceptPendingUpdate(true));
     $('refresh-button').addEventListener('click', () => refresh({ force: true }));
     $('load-more').addEventListener('click', async () => {
-      acceptPendingUpdate(false);
       const button = $('load-more');
       button.disabled = true;
       const visibleMatches = selectedRecords().length;

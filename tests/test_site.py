@@ -31,7 +31,7 @@ class StaticSiteTests(unittest.TestCase):
     def test_compact_footer_attribution_and_links_are_accurate(self):
         self.assertIn('href="https://t.me/RootAccessClub"', HTML)
         self.assertIn("@RootAccessClub", HTML)
-        self.assertIn("©RootAccessClub", HTML)
+        self.assertIn("© RootAccessClub", HTML)
         self.assertIn('href="https://github.com/iliya-bashrc/SubZer0"', HTML)
         self.assertNotIn("img.shields.io", HTML + README)
         self.assertIn("not endorsed or certified by the NVD", HTML)
@@ -101,6 +101,15 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("$('view-new').addEventListener('click', () => acceptPendingUpdate(true))", JS)
         self.assertIn("new CVE", JS)
         self.assertNotIn("window.location.reload", JS)
+
+    def test_filters_do_not_silently_apply_a_staged_snapshot(self):
+        self.assertIn("let pendingSnapshot = null;", JS)
+        self.assertIn("const destination = options.stageTo || loadedByDay;", JS)
+        self.assertIn("stageTo: stagedDays", JS)
+        self.assertIn("if (!pendingFeedUpdate || !pendingSnapshot) return;", JS)
+        self.assertNotIn("acceptPendingUpdate(false)", JS)
+        self.assertIn("aria-pressed=\"true\"", HTML)
+        self.assertIn("setAttribute('aria-pressed', String(selected))", JS)
 
     def test_manifest_and_shards_are_cache_busted_and_rendering_is_incremental(self):
         self.assertIn("const POLL_MS = 120_000", JS)
