@@ -13,21 +13,25 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.x"
       - name: Unit and static-site tests
         run: python -m unittest discover -s tests -v
+      - name: Verify committed data snapshot
+        run: python scripts/verify_data_snapshot.py
       - name: Check browser script syntax
-        run: node --check app.js
+        run: |
+          node --check app.js
+          node --check community.js
 
   browser-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
       - name: Install pinned Playwright and Chromium

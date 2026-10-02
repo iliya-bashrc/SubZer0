@@ -1,6 +1,6 @@
 # SubZer0
 
-SubZer0 is a vulnerability intelligence hub that collects and deduplicates CVE records into a searchable, date-filtered feed. It presents source-backed descriptions, affected products and versions, CVSS severity, optional EPSS probability, and CISA KEV status as distinct signals. The static site and generated data are published from the root of `main` through GitHub Pages.
+SubZer0 is a vulnerability intelligence hub that collects and deduplicates CVE records into a searchable, date-filtered feed. Its accessible Overview, CVE center, and Community views present source-backed descriptions, affected products and versions, CVSS severity, optional EPSS probability, and CISA KEV status as distinct signals. The static site and generated data are published from the root of `main` through GitHub Pages.
 
 **Live site:** <https://iliya-bashrc.github.io/SubZer0/> · **Repository:** <https://github.com/iliya-bashrc/SubZer0> · **Telegram:** <https://t.me/RootAccessClub>
 
@@ -22,11 +22,11 @@ CVSS is severity, not exploit likelihood. Numeric scores map to **Critical** (9.
 
 ## Feed behavior
 
-The homepage provides the feed, snapshot time, source coverage, and EPSS score-set date. Search matches CVE IDs, descriptions, vendors, products, versions, and source names. Users can filter by severity, UTC date range, and exact source-backed vendor/product values; when both facets are selected they must match the same affected pair. Grouping places each CVE once under one source-priority affected pair to avoid duplicate cards. Users can also sort by date, severity, or the custom priority heuristic and open source-linked details. `Absolute Zero` means **Critical and listed in CISA KEV**. Filtered JSON and CSV exports include the filters and available records; CSV fields are escaped to reduce spreadsheet-formula injection risk.
+Overview shows the published snapshot, core-source status, newest loaded records, and compact source/methodology context. The CVE center provides the full searchable feed. Search matches CVE IDs, descriptions, vendors, products, versions, and source names. Users can filter by severity, UTC date range, and exact source-backed vendor/product values; when both facets are selected they must match the same affected pair. Grouping places each CVE once under one source-priority affected pair to avoid duplicate cards. Users can also sort by date, severity, or the custom priority heuristic and open source-linked details. `Absolute Zero` means **Critical and listed in CISA KEV**. Filtered JSON and CSV exports include the filters and available records; CSV fields are escaped to reduce spreadsheet-formula injection risk.
 
-The two newest date shards inside the selected range load first. Each request reveals up to 24 more cards (records); after 200 cards are mounted, the displayed window advances instead of continually growing the DOM. Older-shard loading shows one skeleton per outstanding shard request; usable data is retained if a later request fails. A search, vendor/product filter, Absolute Zero selection, non-new sort, or export loads every shard in the selected range before reporting a complete result.
+The two newest date shards inside the selected range load first. Each request reveals up to 24 more cards (records); after 200 cards are mounted, the displayed window advances instead of continually growing the DOM. Older-shard loading shows one skeleton per outstanding shard request; usable data is retained if a later request fails. Search, severity/date filtering, exact vendor/product filtering, Absolute Zero selection, non-new sort, and export load every shard in the selected range before reporting complete results or totals. Every downloaded shard is checked against its manifest SHA-256, row count, daily severity totals, and KEV count before use.
 
-Saved filter views, stars, read/unread markers, compact mode, and vendor/product watchlists are stored locally in this browser only. They are not sent to the feed pipeline. Share links contain only structured, public filters (date, severity, sort, vendor/product, grouping, Absolute Zero, and compact mode); free-text search and local stars/read/watch data are excluded. `/` focuses search; `j`/`k` move between visible records and `c` copies the focused CVE ID. These shortcuts are inactive in text-entry controls and while the detail dialog is open.
+Saved filter views, stars, read/unread markers, compact mode, and vendor/product watchlists are stored locally in this browser only. They are not sent to the feed pipeline. Share links contain the selected page, current search and public filters (date, severity, sort, vendor/product, grouping, Absolute Zero, compact mode, and a selected CVE detail link); saved views, stars, read markers, and watchlists remain local. Browser Back/Forward restores the route and public filter/search state. `/` focuses search; `j`/`k` move between visible records and `c` copies the focused CVE ID. These shortcuts work only in the CVE center, are inactive in text-entry controls, and pause while the detail dialog is open.
 
 The details panel can make an explicit, on-demand GitHub repository search. It displays the API's raw matching repository count and up to three repository results, marked unverified. The count is not the number of confirmed PoCs; API errors and rate limits are reported as unavailable rather than as zero. NVD-tagged Exploit references are highlighted separately and are not asserted to be working exploits.
 
@@ -44,7 +44,7 @@ The 0–100 composite is a **SubZer0 heuristic**, not an official CVSS, FIRST, N
 | PoC reference | 15% | 60 when an NVD reference is explicitly tagged `Exploit`; this does not verify code |
 | Recency | 10% | 100 at the sourced activity timestamp, declining linearly to 0 over 30 days |
 
-Only available component weights are renormalized. Missing EPSS is not zero; missing PoC tags are not proof of absence; a missing CVSS score is not low severity; and absence from KEV is not evidence of no exploitation. The score is shown only when at least 3 of the 5 inputs are available, with its input coverage and missing components. GitHub search counts are not used as a score input. The card and detail view identify it as custom; methodology and component notes are available in the page.
+Only available component weights are renormalized. Missing EPSS is not zero; missing PoC tags are not proof of absence; a missing CVSS score is not low severity; and absence from KEV is not evidence of no exploitation. The score is shown only when at least 3 of the 5 inputs are available, with its input coverage and missing components. EPSS contributes only when the manifest marks the dated score set current and its source timestamp is no more than 36 hours old; stale or unverified scores can be disclosed but do not affect priority. GitHub search counts are not used as a score input. The card and detail view identify it as custom; methodology and component notes are available on Overview.
 
 ## Retained changes, freshness, and trends
 
@@ -62,7 +62,8 @@ The core-source snapshot timestamp is the collection run time, not an upstream p
 
 ## Repository layout
 
-- `index.html`, `styles.css`, `app.js` — responsive static interface, accessible controls, feed rendering, polling, and update notices.
+- `index.html`, `styles.css`, `app.js` — responsive static interface, accessible page routes, feed rendering, polling, and update notices.
+- `community.css`, `community.js` — the Zsh-inspired Community terminal and fixed, user-triggered Telegram links.
 - `data/manifest.json` — rolling-window coverage, totals, source health, timestamps, facets/history links, and shard index.
 - `data/YYYY-MM-DD.json` — normalized CVE records grouped by UTC activity date, including source-backed CPE, references/tags, and direct related CVE links when available.
 - `data/facets.json` — exact source-backed vendor and product suggestions.
@@ -71,9 +72,11 @@ The core-source snapshot timestamp is the collection run time, not an upstream p
 - `api/v1/manifest.json` — static API index mirroring the published feed manifest.
 - `scripts/update_data.py` — source fetching, retries, CVE-ID normalization/deduplication, enrichment, validation, fingerprinting, and atomic snapshot writing.
 - `scripts/backfill_history.py` — one-time backfill from verifiable complete feed snapshots committed to Git.
-- `.github/workflows/update.yml` — scheduled/manual feed generation and publication to `main`.
-- `.github/workflows/checks.yml` — Python tests and JavaScript syntax check on pushes and pull requests.
-- `tests/` — frontend-contract, feed-pipeline, retained-history, and backfill unit tests.
+- `scripts/verify_data_snapshot.py` — offline full-shard, totals, sidecar, and manifest-mirror release gate.
+- `scripts/verify_pages.py` — credential-free public Pages freshness and latest-shard smoke checker.
+- `.github/workflows/update.yml` — scheduled/manual feed generation, integrity and browser gates, publication to `main`, and public Pages freshness verification.
+- `.github/workflows/checks.yml` — pinned Python/snapshot/JavaScript checks and a real-browser regression job on pushes and pull requests.
+- `tests/` — frontend-contract, source-pipeline, integrity, Pages-smoke, retained-history, backfill, and browser regression tests.
 
 ## Run and test locally
 
@@ -81,11 +84,13 @@ The static frontend has no framework or external runtime dependency. With Python
 
 ```sh
 python3 -m unittest discover -s tests -v
+python3 scripts/verify_data_snapshot.py
 node --check app.js
+node --check community.js
 python3 -m http.server 8080
 ```
 
-Open <http://localhost:8080/>. To collect a new feed locally, run:
+Open <http://localhost:8080/> for Overview or <http://localhost:8080/?page=center> for the CVE center. To collect a new feed locally, run:
 
 ```sh
 python3 scripts/update_data.py
@@ -95,7 +100,7 @@ The feed generator uses the Python standard library. It uses public NVD, GitHub,
 
 ## GitHub Pages and Actions
 
-GitHub Pages is configured to publish `/` from the `main` branch. A commit to `main` publishes site changes and triggers the Pages build. **Site and feed checks** runs the Python test suite and `node --check app.js` for pushes and pull requests. **Refresh vulnerability feed** runs hourly and can also be started manually; it requires complete core-source coverage before publishing generated shards, sidecars, and both manifest indexes to `main`. The workflow uses the repository's `GITHUB_TOKEN` with contents-write permission and rebases its commit onto the current branch before a normal push. `NVD_API_KEY` is an optional repository secret.
+GitHub Pages is configured to publish `/` from the `main` branch. A commit to `main` publishes site changes and triggers the Pages build. **Site and feed checks** runs the Python suite, snapshot validator, and JavaScript syntax checks for pushes and pull requests, plus a separate real-Chromium regression job. **Refresh vulnerability feed** runs hourly and can also be started manually; it requires complete core-source coverage, validates all published shard/sidecar integrity, and runs the real-browser suite before publishing generated data. After the normal push, it polls the public Pages URL (without a token) until the deployed manifest and both static indexes match the committed snapshot and the newest public shard passes checksum and row-count verification. The workflow uses the repository's `GITHUB_TOKEN` with contents-write permission and rebases its commit onto the current branch before a normal push. `NVD_API_KEY` is an optional repository secret.
 
 ## Data limitations
 

@@ -19,6 +19,11 @@
   let lastBrowserCheck = null;
   let lastSnapshotVersion = '';
   let state = { from: '', to: '', severity: 'all', query: '', sort: 'new', exactHours: null, vendor: '', product: '', absoluteZero: false, group: 'none' };
+  let activePage = 'overview';
+  let pendingCveId = '';
+  let strictCompleteness = false;
+  let completeRangeLoading = false;
+  let historyTimer = 0;
   let visible = PAGE_SIZE;
   let windowStart = 0;
   let polling = false;
@@ -111,6 +116,17 @@
     return { score: Number(value.score), percentile: Number.isFinite(percentile) ? percentile : null };
   }
 
+  function epssStatus() {
+    return (manifest?.source_status || []).find((source) => source.name === 'FIRST EPSS') || {};
+  }
+
+  function epssIsCurrent() {
+    const status = epssStatus();
+    const sourceTime = parseTime(manifest?.epss?.source_updated_at || status.source_updated_at || epssSnapshot?.source_updated_at);
+    const age = sourceTime == null ? null : Date.now() - sourceTime;
+    return status.ok === true && !!manifest?.epss?.score_date && age != null && age >= 0 && age <= 36 * 60 * 60_000;
+  }
+
   function priorityScore(record, id = cveId(record.id)) {
     const components = [];
     const weights = { cvss: 25, epss: 25, kev: 25, poc: 15, recency: 10 };
@@ -119,7 +135,7 @@
       components.push({ key: 'CVSS', value: cvss * 10, weight: weights.cvss, note: 'CVSS base score ÷ 10 × 100' });
     }
     const epss = epssFor(id);
-    if (epss) components.push({ key: 'EPSS', value: epss.score * 100, weight: weights.epss, note: 'FIRST EPSS probability × 100' });
+    if (epss && epssIsCurrent()) components.push({ key: 'EPSS', value: epss.score * 100, weight: weights.epss, note: 'FIRST EPSS probability × 100 from a current verified score set' });
     const cisa = (manifest?.source_status || []).find((source) => source.name === 'CISA KEV');
     if (cisa?.ok === true) components.push({ key: 'CISA KEV', value: record.kev ? 100 : 0, weight: weights.kev, note: 'Listed = 100; not listed = 0 in this catalog snapshot' });
     const taggedExploit = (record.refs || []).some((ref) => ref.source === 'NVD' && Array.isArray(ref.tags) && ref.tags.some((tag) => String(tag).toLowerCase() === 'exploit'));
@@ -150,7 +166,7 @@
       `SubZer0 · ${id}`,
       record.title || id,
       `CVSS ${score} · ${severity === 'unknown' ? 'UNRATED' : severity === 'none' ? 'NONE' : severity.toUpperCase()} severity`,
-      `EPSS ${epss ? `${epssPercent(epss)} estimated 30-day probability` : 'not available in this snapshot'}`,
+      `EPSS ${epss ? `${epssPercent(epss)} estimated 30-day probability${epssIsCurrent() ? '' : ' · STALE/UNVERIFIED; not used in priority'}` : 'not available in this snapshot'}`,
       record.kev ? 'Listed in CISA KEV (known-exploited catalog)' : 'Not listed in the current CISA KEV snapshot',
       'GitHub PoC search: unverified',
       `Source: ${safeUrl(record.primary_url) || `https://www.cve.org/CVERecord?id=${encodeURIComponent(id)}`}`
@@ -273,13 +289,31 @@
     for (const item of value.days) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(item.date || '')) || seenDays.has(item.date) ||
           !new RegExp(`^data/${item.date}\\.json$`).test(String(item.path || '')) ||
-          !Number.isInteger(Number(item.count)) || Number(item.count) < 0) {
-        throw new Error('Feed index contains an invalid date shard');
+          !Number.isInteger(Number(item.count)) || Number(item.count) < 0 || !/^[a-f0-9]{64}$/i.test(String(item.sha256 || ''))) {
+        throw new Error('Feed index contains an invalid date shard or missing SHA-256 fingerprint');
       }
-      if (item.sha256 && !/^[a-f0-9]{64}$/i.test(item.sha256)) throw new Error(`Feed index contains an invalid fingerprint for ${item.date}`);
       seenDays.add(item.date);
     }
     return value;
+  }
+
+  async function digestSha256(buffer) {
+    if (!window.crypto?.subtle) throw new Error('This browser cannot verify SHA-256 integrity; no unverified shard was displayed.');
+    const digest = await window.crypto.subtle.digest('SHA-256', buffer);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  function validateUniqueShards(dayMap) {
+    const ownerById = new Map();
+    for (const [day, records] of dayMap) {
+      for (const record of records) {
+        const id = cveId(record?.id);
+        if (!id) throw new Error(`Invalid CVE ID in the verified ${day} shard`);
+        const previousDay = ownerById.get(id);
+        if (previousDay && previousDay !== day) throw new Error(`Duplicate ${id} appears in both ${previousDay} and ${day}; the conflicting shard was not displayed.`);
+        ownerById.set(id, day);
+      }
+    }
   }
 
   async function fetchDay(day, version, sourceManifest = manifest) {
@@ -289,8 +323,33 @@
     if (!summary || !summary.path) return [];
     const job = (async () => {
       const url = `${summary.path}?v=${encodeURIComponent(version)}`;
-      const payload = await fetchJson(url, { cache: 'default', headers: { Accept: 'application/json' } });
+      const response = await fetchResponse(url, { cache: 'default', headers: { Accept: 'application/json' } });
+      const bytes = await response.arrayBuffer();
+      const actualHash = await digestSha256(bytes);
+      const expectedHash = String(summary.sha256 || '').toLowerCase();
+      if (actualHash !== expectedHash) throw new Error(`SHA-256 mismatch for ${day}; the shard was not displayed. Retry the feed check.`);
+      let payload;
+      try {
+        payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+      } catch (_) {
+        throw new Error(`Invalid JSON in the integrity-verified ${day} shard`);
+      }
       if (!Array.isArray(payload)) throw new Error(`Invalid feed shard for ${day}`);
+      if (payload.length !== Number(summary.count)) throw new Error(`Declared row count mismatch for ${day}: expected ${summary.count}, received ${payload.length}; the shard was not displayed.`);
+      const ids = new Set();
+      const totals = { critical: 0, high: 0, medium: 0, low: 0, none: 0, unknown: 0, exploited: 0 };
+      for (const record of payload) {
+        const id = cveId(record?.id);
+        if (!id || ids.has(id)) throw new Error(`Invalid or duplicate CVE ID in the ${day} shard; the shard was not displayed.`);
+        ids.add(id);
+        totals[cvssSeverity(record.score)] += 1;
+        if (record.kev) totals.exploited += 1;
+      }
+      for (const key of Object.keys(totals)) {
+        if (summary[key] != null && Number(summary[key]) !== totals[key]) {
+          throw new Error(`Declared ${key} total mismatch for ${day}; the shard was not displayed.`);
+        }
+      }
       return payload;
     })();
     loadJobs.set(jobKey, job);
@@ -302,13 +361,21 @@
   }
 
   function rebuildRecords() {
-    allRecords.clear();
+    validateUniqueShards(loadedByDay);
+    const next = new Map();
     for (const values of loadedByDay.values()) {
-      for (const record of values) {
-        const id = cveId(record.id);
-        if (id) allRecords.set(id, record);
-      }
+      for (const record of values) next.set(cveId(record.id), record);
     }
+    allRecords.clear();
+    next.forEach((record, id) => allRecords.set(id, record));
+  }
+
+  function storeLoadedDay(day, records) {
+    const proposed = new Map(loadedByDay);
+    proposed.set(day, records);
+    validateUniqueShards(proposed);
+    loadedByDay.set(day, records);
+    rebuildRecords();
   }
 
   function showUpdateNotice(message) {
@@ -361,6 +428,8 @@
       state.product = '';
       state.absoluteZero = false;
       state.group = 'none';
+      strictCompleteness = false;
+      completeRangeLoading = false;
       visible = PAGE_SIZE;
       windowStart = 0;
       $('search-input').value = '';
@@ -378,6 +447,7 @@
         element.setAttribute('aria-pressed', String(selected));
       });
       updateControlState();
+      writeUrlState('push');
     }
     render();
     refreshTimestamp();
@@ -417,7 +487,12 @@
     const uniqueDays = [...new Set(days)].filter((day) => sourceManifest.days.some((item) => item.date === day));
     const pending = uniqueDays.filter((day) => force || !destination.has(day));
     if (!pending.length) return;
-    const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest, options.onShardLoaded);
+    const onVerifiedShard = options.onShardLoaded || (destination === loadedByDay ? async (day, records) => {
+      if (manifest?.generated_at !== sourceManifest.generated_at) return;
+      storeLoadedDay(day, records);
+      if (!options.deferRender) render();
+    } : null);
+    const entries = await fetchDays(pending, sourceManifest.generated_at, sourceManifest, onVerifiedShard);
     if (destination === loadedByDay && manifest?.generated_at !== sourceManifest.generated_at) return;
     entries.forEach(([day, records]) => destination.set(day, records));
     if (!options.deferRender) {
@@ -541,13 +616,54 @@
     const epssFreshness = $('epss-freshness');
     if (epssFreshness) {
       const scoreDate = manifest.epss?.score_date;
-      const scoreTime = manifest.epss?.source_updated_at;
-      epssFreshness.textContent = scoreDate ? `DAILY · ${fmtDate(scoreDate)}` : 'No dated score set';
-      epssFreshness.title = scoreTime ? `FIRST EPSS source timestamp: ${fmtTimestamp(scoreTime)}` : 'FIRST EPSS source timestamp unavailable';
+      const scoreTime = manifest.epss?.source_updated_at || epssStatus().source_updated_at;
+      const sourceTimestamp = parseTime(scoreTime);
+      const sourceAge = sourceTimestamp == null ? null : Date.now() - sourceTimestamp;
+      const label = !scoreDate ? 'UNSCORED · unavailable' : epssIsCurrent() ? `CURRENT · ${fmtDate(scoreDate)}` : sourceAge != null && sourceAge > 36 * 60 * 60_000 ? `STALE · ${fmtDate(scoreDate)}` : `UNVERIFIED · ${fmtDate(scoreDate)}`;
+      epssFreshness.textContent = label;
+      epssFreshness.title = `${epssStatus().note || (scoreTime ? `FIRST EPSS source timestamp: ${fmtTimestamp(scoreTime)}` : 'FIRST EPSS source timestamp unavailable')} EPSS is excluded from composite priority unless its dated source status is current and verified.`;
     }
+    renderOverviewSummary(generated, sourceComplete);
     if (age != null && Date.now() - age > 90 * 60_000) setStatus('The last successful snapshot is older than 90 minutes. Keeping the last complete data while checks continue.', 'warning');
     else if (!sourceComplete) setStatus('One or more sources did not report complete coverage in this snapshot.', 'warning');
     else if (rangeDays().every((day) => loadedByDay.has(day))) setStatus(`Last complete snapshot ${relativeTime(generated)} · browser checks every 2 minutes.`, 'success');
+  }
+
+  function renderOverviewSummary(generated = manifest?.last_successful_update || manifest?.generated_at, sourceComplete = manifest?.complete === true && manifest?.coverage?.sources_complete === true) {
+    if (!manifest) return;
+    if ($('overview-total')) $('overview-total').textContent = Number(manifest.totals?.cves || 0).toLocaleString();
+    if ($('overview-kev')) $('overview-kev').textContent = Number(manifest.totals?.known_exploited || 0).toLocaleString();
+    if ($('overview-window')) $('overview-window').textContent = `${fmtDate(String(manifest.window.start).slice(0, 10))} – ${fmtDate(String(manifest.window.end).slice(0, 10))} UTC`;
+    if ($('overview-updated')) $('overview-updated').textContent = fmtTimestamp(generated);
+    const coreNames = new Set(['NVD CVE API 2.0', 'GitHub Security Advisory Database', 'CISA KEV']);
+    const coreStatuses = (manifest.source_status || []).filter((source) => coreNames.has(source.name) || source.name === 'CISA Known Exploited Vulnerabilities catalog');
+    const coreOk = coreStatuses.length >= 3 && coreStatuses.every((source) => source.ok === true);
+    const age = parseTime(generated);
+    const stale = age != null && Date.now() - age > 90 * 60_000;
+    const statusText = !sourceComplete || !coreOk ? 'Core-source coverage has a reported gap' : stale ? 'The last complete core-source snapshot is aging' : 'Core-source coverage reported complete';
+    const freshnessText = age == null ? 'Snapshot time unavailable' : `Collected ${relativeTime(generated)}`;
+    if ($('overview-coverage')) $('overview-coverage').textContent = `${statusText}. ${freshnessText}. Collection is scheduled; source publication and Pages delivery can add delay.`;
+    renderOverviewLatest();
+  }
+
+  function renderOverviewLatest() {
+    const list = $('overview-latest');
+    if (!list || !manifest) return;
+    const candidates = [];
+    for (const item of [...manifest.days].reverse()) {
+      const records = loadedByDay.get(item.date);
+      if (!records?.length) continue;
+      candidates.push(...records);
+      if (candidates.length >= 12) break;
+    }
+    candidates.sort((a, b) => (parseTime(b.activity_at) || parseTime(b.published) || 0) - (parseTime(a.activity_at) || parseTime(a.published) || 0) || String(b.id).localeCompare(String(a.id)));
+    const top = candidates.slice(0, 3);
+    list.innerHTML = top.length ? top.map((record) => {
+      const id = cveId(record.id);
+      const severity = cvssSeverity(record.score);
+      const label = severity === 'unknown' ? 'Unrated' : severity === 'none' ? 'None' : `${severity[0].toUpperCase()}${severity.slice(1)}`;
+      return `<li><a class="overview-latest-id" href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span class="overview-latest-title">${esc(record.title || id)}</span><small>${esc(label)}${record.kev ? ' · CISA KEV listed' : ''}</small></li>`;
+    }).join('') : '<li class="overview-latest-empty">Loading the newest source-verified CVE records…</li>';
   }
 
   function renderSources() {
@@ -563,9 +679,13 @@
       let facts = '';
       if (source.name === 'NVD CVE API 2.0') facts = `${Number(status.records || 0).toLocaleString()} records · ${Number(status.pages || 0)} pages`;
       else if (source.name === 'GitHub Security Advisory Database') facts = `${Number(status.advisories || 0).toLocaleString()} advisories · ${Number(status.pages || 0)} pages`;
-      else if (source.name === 'FIRST EPSS') facts = status.score_date ? `${Number(status.scores || 0).toLocaleString()} scores · dated ${status.score_date}` : 'Daily probability snapshot unavailable';
+      else if (source.name === 'FIRST EPSS') facts = status.score_date
+        ? `${Number(status.scores || 0).toLocaleString()} scores · ${ok && epssIsCurrent() ? 'current' : 'stale or unverified'} · dated ${status.score_date}`
+        : 'Unscored · no dated probability set available';
       else facts = `${Number(status.catalog_records || 0).toLocaleString()} catalog entries`;
-      return `<li><i class="source-state-dot${ok ? '' : ' warning'}"></i><span><a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a><span class="source-facts">${esc(ok ? facts : 'Coverage unavailable')}</span></span></li>`;
+      const epSsSource = source.name === 'FIRST EPSS';
+      const visibleFacts = ok || epSsSource ? facts : 'Coverage unavailable';
+      return `<li><i class="source-state-dot${ok ? '' : ' warning'}"></i><span><a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">${esc(source.name)}</a><span class="source-facts">${esc(visibleFacts)}</span></span></li>`;
     }).join('');
     const coreSourceNames = ['NVD CVE API 2.0', 'GitHub Security Advisory Database', 'CISA KEV'];
     const coreSources = coreSourceNames.map((name) => sourceDefs.find((source) => (statusAliases[source.name] || source.name) === name));
@@ -606,8 +726,79 @@
     return values.find((item) => normalizeFacet(item) === candidate) || '';
   }
 
+  function pageFromLocation() {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get('page');
+    if (['overview', 'center', 'community'].includes(requested)) return requested;
+    return ['q', 'cve', 'from', 'to', 'severity', 'sort', 'vendor', 'product', 'az', 'group', 'hours'].some((key) => params.has(key)) ? 'center' : 'overview';
+  }
+
+  function routePage(page, { historyMode = 'push', focusTab = false } = {}) {
+    const normalized = ['overview', 'center', 'community'].includes(page) ? page : 'overview';
+    activePage = normalized;
+    if (normalized !== 'center') pendingCveId = '';
+    document.querySelectorAll('.page[role="tabpanel"]').forEach((panel) => { panel.hidden = panel.id !== `page-${normalized}`; });
+    document.querySelectorAll('.page-tab[role="tab"]').forEach((tab) => {
+      const selected = tab.dataset.page === normalized;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      tab.classList.toggle('is-active', selected);
+      if (selected && focusTab) tab.focus();
+    });
+    document.body.dataset.activePage = normalized;
+    const title = normalized === 'center' ? 'CVE center' : normalized === 'community' ? 'Community' : 'Overview';
+    document.title = `SubZer0 — ${title}`;
+    window.dispatchEvent(new CustomEvent('subzero:pagechange', { detail: { page: normalized } }));
+    if (historyMode !== 'none') writeUrlState(historyMode);
+  }
+
+  function makeStateParams({ page = activePage, share = false } = {}) {
+    const params = new URLSearchParams();
+    params.set('page', page);
+    const min = String(manifest?.window?.start || '').slice(0, 10);
+    const max = String(manifest?.window?.end || '').slice(0, 10);
+    if (state.from && state.to && (share || state.from !== min || state.to !== max)) {
+      params.set('from', state.from);
+      params.set('to', state.to);
+    }
+    if (state.exactHours === 24) params.set('hours', '24');
+    if (state.severity !== 'all') params.set('severity', state.severity);
+    if (state.query.trim()) params.set('q', state.query.trim().slice(0, 200));
+    if (state.sort !== 'new') params.set('sort', state.sort);
+    if (state.absoluteZero) params.set('az', '1');
+    if (state.group !== 'none') params.set('group', state.group);
+    if (state.vendor && canonicalFacet(state.vendor, facets.vendors)) params.set('vendor', canonicalFacet(state.vendor, facets.vendors));
+    if (state.product && canonicalFacet(state.product, facets.products)) params.set('product', canonicalFacet(state.product, facets.products));
+    if (page === 'center' && pendingCveId) params.set('cve', pendingCveId);
+    if (compactCards) params.set('compact', '1');
+    return params;
+  }
+
+  function writeUrlState(mode = 'push', options = {}) {
+    const url = new URL(window.location.href);
+    url.hash = '';
+    url.search = makeStateParams(options).toString();
+    const next = `${url.pathname}${url.search}`;
+    if (`${window.location.pathname}${window.location.search}` === next) return false;
+    if (mode === 'replace') history.replaceState(history.state, '', next);
+    else history.pushState(history.state, '', next);
+    return true;
+  }
+
+  function scheduleHistoryUpdate() {
+    window.clearTimeout(historyTimer);
+    historyTimer = window.setTimeout(() => writeUrlState('push'), 450);
+  }
+
+  function requiresCompleteRange() {
+    return strictCompleteness || !!state.query || !!state.vendor || !!state.product || state.absoluteZero || state.sort !== 'new' || state.severity !== 'all' || state.exactHours === 24;
+  }
+
   function restorePermalink() {
     const params = new URLSearchParams(window.location.search);
+    state = { ...state, from: '', to: '', severity: 'all', query: '', sort: 'new', exactHours: null, vendor: '', product: '', absoluteZero: false, group: 'none' };
+    preAbsoluteSeverity = 'all';
+    pendingCveId = cveId(params.get('cve'));
     const min = String(manifest?.window?.start || '').slice(0, 10);
     const max = String(manifest?.window?.end || '').slice(0, 10);
     const isDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
@@ -621,6 +812,8 @@
     if (severities.includes(params.get('severity'))) state.severity = params.get('severity');
     const sorts = ['new', 'old', 'hot', 'priority'];
     if (sorts.includes(params.get('sort'))) state.sort = params.get('sort');
+    state.query = String(params.get('q') || '').slice(0, 200).trim();
+    state.exactHours = params.get('hours') === '24' ? 24 : null;
     state.absoluteZero = params.get('az') === '1';
     if (state.absoluteZero) {
       preAbsoluteSeverity = state.severity;
@@ -630,7 +823,8 @@
     state.vendor = canonicalFacet(params.get('vendor') || '', facets.vendors);
     state.product = canonicalFacet(params.get('product') || '', facets.products);
     if (state.vendor && state.product && facets.product_pairs.length && !facets.product_pairs.some((item) => normalizeFacet(item.vendor) === normalizeFacet(state.vendor) && normalizeFacet(item.product) === normalizeFacet(state.product))) state.product = '';
-    compactCards = params.get('compact') === '1' || (params.has('compact') ? false : compactCards);
+    compactCards = params.has('compact') ? params.get('compact') === '1' : readStored('subzero:compact', false) === true;
+    strictCompleteness = !!state.query || !!state.vendor || !!state.product || state.absoluteZero || state.sort !== 'new' || state.severity !== 'all' || state.exactHours === 24 || (!!state.from && !!state.to && (state.from !== min || state.to !== max));
     updateControlState();
   }
 
@@ -650,6 +844,15 @@
     if ($('absolute-zero')) $('absolute-zero').setAttribute('aria-pressed', String(state.absoluteZero));
     if ($('compact-toggle')) $('compact-toggle').setAttribute('aria-pressed', String(compactCards));
     document.body.classList.toggle('compact-cards', compactCards);
+    const min = String(manifest?.window?.start || '').slice(0, 10);
+    const max = String(manifest?.window?.end || '').slice(0, 10);
+    const dayDelta = state.from && state.to ? Math.round((Date.parse(`${max}T00:00:00Z`) - Date.parse(`${state.from}T00:00:00Z`)) / 86_400_000) : -1;
+    const quickDays = state.exactHours === 24 ? '1' : state.to === max && state.from === min ? '30' : dayDelta === 6 ? '7' : dayDelta === 13 ? '14' : '';
+    document.querySelectorAll('.quick-ranges button').forEach((button) => {
+      const selected = button.dataset.days === quickDays;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
   }
 
   function renderSavedViews() {
@@ -758,18 +961,8 @@
 
   function buildPermalink() {
     const url = new URL(window.location.href);
-    url.search = '';
+    url.search = makeStateParams({ page: 'center', share: true }).toString();
     url.hash = '';
-    const params = new URLSearchParams();
-    if (state.from && state.to) { params.set('from', state.from); params.set('to', state.to); }
-    if (state.severity !== 'all') params.set('severity', state.severity);
-    if (state.sort !== 'new') params.set('sort', state.sort);
-    if (state.absoluteZero) params.set('az', '1');
-    if (state.group !== 'none') params.set('group', state.group);
-    if (state.vendor && canonicalFacet(state.vendor, facets.vendors)) params.set('vendor', canonicalFacet(state.vendor, facets.vendors));
-    if (state.product && canonicalFacet(state.product, facets.products)) params.set('product', canonicalFacet(state.product, facets.products));
-    if (compactCards) params.set('compact', '1');
-    url.search = params.toString();
     return url.toString();
   }
 
@@ -777,7 +970,7 @@
     const link = buildPermalink();
     try {
       await copyText(link);
-      setToolStatus('Share link copied. The free-text search is not included.');
+      setToolStatus('Share link copied with the current search and public filters. Local saved views and watchlists stay in this browser.');
       toast('Share link copied.');
     } catch (_) {
       setToolStatus(link);
@@ -846,13 +1039,17 @@
       ['stat-high', summary.high],
       ['stat-kev', summary.exploited]
     ];
+    const canPublishCounts = !strictCompleteness || rangeDays().every((day) => loadedByDay.has(day));
     const targetKey = counts.map(([, value]) => Number(value || 0)).join(':');
-    const animate = countUp && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const currentAnimationStillMatches = !countUp && statAnimationFrames.size && statAnimationKey === targetKey;
+    const animate = canPublishCounts && countUp && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const currentAnimationStillMatches = canPublishCounts && !countUp && statAnimationFrames.size && statAnimationKey === targetKey;
     if (!currentAnimationStillMatches) {
       statAnimationFrames.forEach((frame) => window.cancelAnimationFrame(frame));
       statAnimationFrames.clear();
-      if (animate) {
+      if (!canPublishCounts) {
+        statAnimationKey = '';
+        counts.forEach(([id]) => { $(id).textContent = '—'; });
+      } else if (animate) {
         statAnimationKey = targetKey;
         counts.forEach(([id, value]) => animateCountUp($(id), Number(value || 0)));
       } else {
@@ -862,7 +1059,7 @@
     }
     $('stat-window-label').textContent = state.exactHours === 24 ? '/ LAST 24 HOURS' : ` / ${state.from === String(manifest.window.start).slice(0, 10) && state.to === String(manifest.window.end).slice(0, 10) ? '30 DAY WINDOW' : 'UTC DATE WINDOW'}`;
     const known = summary.critical + summary.high + summary.medium + summary.low + summary.none + summary.unknown;
-    const pct = (value) => known ? `${Math.max(value > 0 ? 1.2 : 0, value / known * 100)}%` : '0%';
+    const pct = (value) => !canPublishCounts ? '0%' : known ? `${Math.max(value > 0 ? 1.2 : 0, value / known * 100)}%` : '0%';
     $('meter-critical').style.width = pct(summary.critical);
     $('meter-high').style.width = pct(summary.high);
     $('meter-medium').style.width = pct(summary.medium);
@@ -921,7 +1118,7 @@
       ? `<div class="priority-chip unavailable" title="At least 3 of 5 sourced inputs are required; missing: ${esc(priority.missing.join(', '))}"><strong>COMPOSITE PRIORITY</strong><span>Not enough inputs</span><small>Custom · ${priority.available}/5</small></div>`
       : `<div class="priority-chip" title="Custom SubZer0 triage heuristic; not an official score. Available inputs: ${esc(priority.components.map((item) => `${item.key} ${item.value.toFixed(1)}`).join(' · '))}"><strong>COMPOSITE PRIORITY</strong><span>${priority.value.toFixed(1)} <small>/ 100</small></span><small>Custom · ${priority.available}/5 inputs</small></div>`;
     const epssHtml = epss
-      ? `<span class="epss-chip" title="FIRST EPSS estimated probability for observed exploitation in the next 30 days"><i class="epss-dot"></i><strong>EPSS</strong><b>${esc(epssPercent(epss))}</b><small>30D PROBABILITY</small></span>`
+      ? `<span class="epss-chip${epssIsCurrent() ? '' : ' epss-stale'}" title="FIRST EPSS estimated probability for observed exploitation in the next 30 days${epssIsCurrent() ? '' : '; this stale or unverified score is excluded from composite priority'}"><i class="epss-dot"></i><strong>EPSS</strong><b>${esc(epssPercent(epss))}</b><small>${epssIsCurrent() ? '30D PROBABILITY' : 'STALE · NOT IN PRIORITY'}</small></span>`
       : '<span class="epss-chip unavailable" title="No EPSS score is present; this is not a zero probability"><i class="epss-dot"></i><strong>EPSS</strong><b>—</b><small>NOT AVAILABLE</small></span>';
     const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
     const share = telegramShareUrl(record, id);
@@ -969,34 +1166,34 @@
     renderStats({ countUp: animateStats });
     const matches = selectedRecords();
     const completeRange = rangeDays().every((day) => loadedByDay.has(day));
-    const isSearching = state.query.trim().length > 0;
-    const needsCompleteRange = isSearching || !!state.vendor || !!state.product || state.absoluteZero || state.sort !== 'new';
-    let total;
-    if (needsCompleteRange || state.exactHours === 24) total = matches.length;
-    else if (state.severity === 'all') total = summaryForSelection().count;
-    else total = manifest.days.filter((item) => item.date >= state.from && item.date <= state.to).reduce((sum, item) => sum + (state.severity === 'unknown' ? Number(item.none || 0) + Number(item.unknown || 0) : Number(item[state.severity] || 0)), 0);
+    const needsCompleteRange = requiresCompleteRange();
+    const waitingForCompleteRange = needsCompleteRange && !completeRange;
+    const presentedMatches = waitingForCompleteRange ? [] : matches;
+    const total = waitingForCompleteRange ? null : matches.length;
     const renderCount = Math.min(visible, MAX_DOM_RECORDS);
-    const pageRecords = matches.slice(windowStart, windowStart + renderCount);
-    const countLabel = needsCompleteRange && !completeRange
-      ? `Showing ${pageRecords.length.toLocaleString()} loaded · scanning selected dates`
-      : total > windowStart + renderCount ? `Showing ${Math.min(renderCount, matches.length).toLocaleString()} of ${total.toLocaleString()}` : `${total.toLocaleString()} records`;
-    $('feed-count').textContent = needsCompleteRange && !completeRange ? '…' : total.toLocaleString();
-    $('feed-list').innerHTML = renderGroupedCards(pageRecords);
-    $('feed-list').setAttribute('aria-busy', 'false');
+    const pageRecords = presentedMatches.slice(windowStart, windowStart + renderCount);
+    const countLabel = waitingForCompleteRange
+      ? `Verifying all ${rangeDays().length} selected date shards`
+      : total > windowStart + renderCount ? `Showing ${Math.min(renderCount, presentedMatches.length).toLocaleString()} of ${total.toLocaleString()}` : `${Number(total || 0).toLocaleString()} records`;
+    $('feed-count').textContent = waitingForCompleteRange ? '—' : Number(total || 0).toLocaleString();
+    $('feed-list').innerHTML = waitingForCompleteRange ? '<div class="skeleton loading-skeleton" aria-hidden="true"></div>' : renderGroupedCards(pageRecords);
+    $('feed-list').setAttribute('aria-busy', String(waitingForCompleteRange || completeRangeLoading));
     if (animateCards && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       feedList.querySelectorAll('.cve-card').forEach((card) => {
         card.classList.add('filter-arrive');
         card.addEventListener('animationend', () => card.classList.remove('filter-arrive'), { once: true });
       });
     }
-    const noLoadedRecords = matches.length === 0;
+    const noLoadedRecords = presentedMatches.length === 0;
     const couldLoadMore = !completeRange && !needsCompleteRange;
-    $('empty-state').hidden = !(noLoadedRecords && completeRange);
+    $('empty-state').hidden = waitingForCompleteRange || !(noLoadedRecords && completeRange);
     const button = $('load-more');
-    const hasNextCards = matches.length > windowStart + renderCount;
-    button.hidden = !(hasNextCards || couldLoadMore);
-    button.disabled = false;
-    if (hasNextCards && visible >= MAX_DOM_RECORDS) {
+    const hasNextCards = presentedMatches.length > windowStart + renderCount;
+    button.hidden = !(waitingForCompleteRange || hasNextCards || couldLoadMore);
+    button.disabled = waitingForCompleteRange && completeRangeLoading;
+    if (waitingForCompleteRange) {
+      button.innerHTML = `<span>${completeRangeLoading ? 'VERIFYING SELECTED DATES…' : 'RETRY FULL DATE RANGE'}</span><small>${loadedByDay.size} of ${rangeDays().length} verified shards loaded</small><b aria-hidden="true">↻</b>`;
+    } else if (hasNextCards && visible >= MAX_DOM_RECORDS) {
       button.innerHTML = `<span>SHOW NEXT 24</span><small>DOM capped at ${MAX_DOM_RECORDS}; use filters or export for the full range</small><b aria-hidden="true">↓</b>`;
     } else if (hasNextCards) {
       button.innerHTML = `<span>LOAD MORE</span><small>${countLabel}</small><b aria-hidden="true">↓</b>`;
@@ -1004,7 +1201,7 @@
       button.innerHTML = `<span>LOAD OLDER CVEs</span><small>${loadedByDay.size} of ${rangeDays().length} date shards loaded</small><b aria-hidden="true">↓</b>`;
     }
     if (needsCompleteRange && completeRange) setStatus(`Filters cover all ${rangeDays().length} selected UTC date shards.`, 'success');
-    else if (needsCompleteRange && !completeRange) setStatus(`Loading all ${rangeDays().length} selected date shards to complete these filters…`);
+    else if (needsCompleteRange && !completeRange) setStatus(`Verifying all ${rangeDays().length} selected date shards before showing results or totals…`);
     else if (!state.query && !completeRange && noLoadedRecords) setStatus('Loading records for this date range…');
     else if (!state.query && !completeRange && matches.length) setStatus(`Showing recent records first · ${loadedByDay.size} of ${rangeDays().length} date shards loaded.`);
     else if (!state.query && !completeRange) setStatus('All selected dates loaded.');
@@ -1022,6 +1219,7 @@
     state.from = from;
     state.to = to;
     state.exactHours = exactHours;
+    strictCompleteness = true;
     searchGeneration += 1;
     const rangeGeneration = searchGeneration;
     visible = PAGE_SIZE;
@@ -1034,29 +1232,44 @@
       button.setAttribute('aria-pressed', String(selected));
     });
     render({ animateCards: true });
-    const days = rangeDays().slice(-2).reverse();
-    if (state.query || state.vendor || state.product || state.absoluteZero || state.sort !== 'new') loadAllSelectedDays(rangeGeneration).catch(showLoadError);
-    else loadDays(days).then(() => render()).catch(showLoadError);
+    writeUrlState('push');
+    loadAllSelectedDays(rangeGeneration).catch(showLoadError);
   }
 
   async function loadAllSelectedDays(generation) {
     const days = rangeDays().reverse();
     const missing = days.filter((day) => !loadedByDay.has(day));
-    if (!missing.length) return;
-    setStatus(`Searching all ${days.length} date shards…`);
-    for (let i = 0; i < missing.length; i += SHARD_CONCURRENCY) {
-      if (generation !== searchGeneration) return;
-      await loadDays(missing.slice(i, i + SHARD_CONCURRENCY));
+    if (!missing.length) {
+      if (generation === searchGeneration) completeRangeLoading = false;
+      return;
     }
     if (generation === searchGeneration) {
+      completeRangeLoading = true;
       render();
-      const purpose = state.query ? 'Search covers' : state.vendor || state.product ? 'Exact vendor/product filters cover' : state.absoluteZero ? 'Absolute Zero mode covers' : 'Selected view covers';
-      setStatus(`${purpose} all ${days.length} selected UTC date shards.`, 'success');
+      setStatus(`Verifying all ${days.length} selected date shards before showing results or totals…`);
+    }
+    try {
+      for (let i = 0; i < missing.length; i += SHARD_CONCURRENCY) {
+        if (generation !== searchGeneration) return;
+        await loadDays(missing.slice(i, i + SHARD_CONCURRENCY));
+      }
+      if (generation === searchGeneration) {
+        completeRangeLoading = false;
+        render();
+        const purpose = state.query ? 'Search covers' : state.vendor || state.product ? 'Exact vendor/product filters cover' : state.absoluteZero ? 'Absolute Zero mode covers' : 'Selected view covers';
+        setStatus(`${purpose} all ${days.length} selected UTC date shards.`, 'success');
+      }
+    } catch (error) {
+      if (generation === searchGeneration) {
+        completeRangeLoading = false;
+        render();
+      }
+      throw error;
     }
   }
 
   function showLoadError(error) {
-    setStatus(`Some feed data could not be loaded: ${error.message || 'network error'}. Retry with “Load older CVEs”.`, 'error');
+    setStatus(`Some feed data could not be loaded or verified: ${error.message || 'network error'}. Retry the full selected date range.`, 'error');
   }
 
   function appendLoadingSkeletons(count) {
@@ -1065,6 +1278,10 @@
   }
 
   async function loadEpssSnapshot(force = false) {
+    if (force) {
+      epssSnapshot = null;
+      epssVersion = '';
+    }
     const config = manifest?.epss;
     if (!config?.path || typeof config.path !== 'string' || !config.path.startsWith('data/') || config.path.includes('..')) {
       epssSnapshot = null;
@@ -1079,7 +1296,8 @@
       epssSnapshot = value;
       epssVersion = version;
     } catch (_) {
-      // Keep the last usable optional score set; missing data is not zero.
+      epssSnapshot = null;
+      epssVersion = '';
     }
   }
 
@@ -1226,7 +1444,7 @@
     const epss = epssFor(id);
     const percentile = epss?.percentile == null ? '' : ` · P${Math.round(epss.percentile * 100)} relative percentile rank`;
     const epssDetail = epss
-      ? `${epssPercent(epss)} estimated chance that exploitation activity will be observed in the next 30 days${percentile}. Score set dated ${fmtDate(epssSnapshot?.score_date || manifest.epss?.score_date)}.`
+      ? `${epssPercent(epss)} estimated chance that exploitation activity will be observed in the next 30 days${percentile}. Score set dated ${fmtDate(epssSnapshot?.score_date || manifest.epss?.score_date)}.${epssIsCurrent() ? '' : ' This score set is stale or unverified and is excluded from composite priority.'}`
       : 'No EPSS score is available in this snapshot. Missing data is not a 0% forecast.';
     const kevDetail = record.kev
       ? `Listed in CISA KEV · added ${fmtDate(record.kev.date_added || record.window_date)}. ${record.kev.required_action || 'CISA identifies this as a known exploited vulnerability.'}${record.kev.due_date ? ` Due date: ${record.kev.due_date}.` : ''}${record.kev.ransomware && record.kev.ransomware.toLowerCase() !== 'unknown' ? ` Ransomware campaign use: ${record.kev.ransomware}.` : ''}`
@@ -1264,8 +1482,9 @@
       : '';
     const severityLabel = severity === 'unknown' ? 'UNRATED' : severity.toUpperCase();
     const share = telegramShareUrl(record, id);
+    $('detail-title').textContent = `${id} · ${record.title || 'Vulnerability details'}`;
     $('detail-content').innerHTML = `<div class="detail-id-row"><a class="cve-id" href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span class="severity-badge ${esc(severity)}">${esc(severityLabel)}</span>${record.kev ? '<span class="kev-badge">CISA KEV · LISTED</span>' : ''}</div>
-      <h2 id="detail-title">${esc(record.title || id)}</h2><p class="detail-score">${esc(score)} · ${esc(activity)}</p><p class="detail-description">${esc(record.desc || 'No summary has been published by the available sources.')}</p>
+      <h2 id="detail-content-title">${esc(record.title || id)}</h2><p class="detail-score">${esc(score)} · ${esc(activity)}</p><p class="detail-description">${esc(record.desc || 'No summary has been published by the available sources.')}</p>
       ${signalCards}
       ${priorityDetail}
       <section class="detail-section"><h3>Affected products and versions</h3><div class="detail-products">${products}</div></section>
@@ -1397,8 +1616,9 @@
     const loadForFilters = () => {
       window.clearTimeout(searchTimer);
       const generation = ++searchGeneration;
-      if (state.query || state.vendor || state.product || state.absoluteZero || state.sort !== 'new') {
-        searchTimer = window.setTimeout(() => loadAllSelectedDays(generation).catch(showLoadError), 180);
+      if (requiresCompleteRange()) {
+        completeRangeLoading = false;
+        searchTimer = window.setTimeout(() => loadAllSelectedDays(generation).catch(showLoadError), 120);
       }
     };
     const setFacetFilter = (key, raw) => {
@@ -1406,36 +1626,80 @@
       const input = $(key === 'vendor' ? 'vendor-filter' : 'product-filter');
       const canonical = canonicalFacet(raw, values);
       state[key] = canonical;
+      strictCompleteness = true;
       resetWindow();
       if (raw.trim() && !canonical) setToolStatus(`Choose an exact ${key} from the source-backed suggestions, or clear this field.`);
       render({ animateCards: true });
       loadForFilters();
+      writeUrlState('push');
+      scheduleHistoryUpdate();
       if (input.value !== raw) input.value = raw;
     };
     renderSavedViews();
     renderWatchlist();
     updateControlState();
+    document.querySelector('.page-nav')?.addEventListener('click', (event) => {
+      const tab = event.target.closest('[role="tab"][data-page]');
+      if (tab) routePage(tab.dataset.page);
+    });
+    document.querySelector('.page-nav')?.addEventListener('keydown', (event) => {
+      const tabs = [...document.querySelectorAll('.page-tab[role="tab"]')];
+      const current = tabs.indexOf(event.target.closest('[role="tab"]'));
+      if (current < 0) return;
+      const next = event.key === 'ArrowRight' ? (current + 1) % tabs.length : event.key === 'ArrowLeft' ? (current - 1 + tabs.length) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      routePage(tabs[next].dataset.page, { focusTab: true });
+    });
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest('[data-page-link]');
+      if (!link) return;
+      event.preventDefault();
+      routePage(link.dataset.pageLink);
+    });
+    window.addEventListener('popstate', () => {
+      window.clearTimeout(historyTimer);
+      window.clearTimeout(searchTimer);
+      if ($('detail-dialog').open) $('detail-dialog').close();
+      restorePermalink();
+      setDateBounds();
+      routePage(pageFromLocation(), { historyMode: 'none' });
+      resetWindow();
+      render();
+      const generation = ++searchGeneration;
+      if (requiresCompleteRange()) loadAllSelectedDays(generation).catch(showLoadError);
+      if (pendingCveId) loadAllSelectedDays(generation).then(() => {
+        if (pendingCveId && allRecords.has(pendingCveId)) renderDetail(pendingCveId);
+      }).catch(showLoadError);
+    });
     $('severity-filters').addEventListener('click', (event) => {
       const button = event.target.closest('[data-severity]');
       if (!button) return;
       state.severity = button.dataset.severity;
       if (state.absoluteZero && state.severity !== 'critical') state.absoluteZero = false;
+      strictCompleteness = true;
       updateControlState();
       resetWindow();
       render({ animateCards: true });
+      writeUrlState('push');
+      loadForFilters();
     });
     $('sort-select').addEventListener('change', (event) => {
       state.sort = event.target.value;
       updateControlState();
       resetWindow();
+      strictCompleteness = true;
       render({ animateCards: true });
       loadForFilters();
+      writeUrlState('push');
     });
     $('search-input').addEventListener('input', (event) => {
-      state.query = event.target.value.trim();
+      state.query = event.target.value.trim().slice(0, 200);
+      strictCompleteness = true;
       resetWindow();
       render({ animateCards: true });
       loadForFilters();
+      scheduleHistoryUpdate();
     });
     $('vendor-filter').addEventListener('input', (event) => setFacetFilter('vendor', event.target.value));
     $('product-filter').addEventListener('input', (event) => setFacetFilter('product', event.target.value));
@@ -1443,6 +1707,7 @@
       state.group = ['none', 'vendor', 'product'].includes(event.target.value) ? event.target.value : 'none';
       resetWindow();
       render();
+      writeUrlState('push');
     });
     $('absolute-zero').addEventListener('click', () => {
       if (!state.absoluteZero) {
@@ -1453,15 +1718,18 @@
         state.absoluteZero = false;
         state.severity = preAbsoluteSeverity || 'all';
       }
+      strictCompleteness = true;
       updateControlState();
       resetWindow();
       render({ animateCards: true });
       loadForFilters();
+      writeUrlState('push');
     });
     $('compact-toggle').addEventListener('click', () => {
       compactCards = !compactCards;
       updateControlState();
       writeStored('subzero:compact', compactCards);
+      writeUrlState('push');
     });
     $('save-view').addEventListener('click', saveCurrentView);
     $('saved-view-select').addEventListener('change', () => {
@@ -1496,6 +1764,14 @@
     $('refresh-button').addEventListener('click', () => refresh({ force: true }));
     $('load-more').addEventListener('click', async () => {
       const button = $('load-more');
+      if (requiresCompleteRange() && !rangeDays().every((day) => loadedByDay.has(day))) {
+        if (completeRangeLoading) return;
+        const generation = ++searchGeneration;
+        completeRangeLoading = false;
+        button.disabled = true;
+        try { await loadAllSelectedDays(generation); } catch (error) { showLoadError(error); }
+        return;
+      }
       button.disabled = true;
       const visibleMatches = selectedRecords().length;
       if (visibleMatches > windowStart + Math.min(visible, MAX_DOM_RECORDS)) {
@@ -1515,9 +1791,8 @@
           await loadDays(days, {
             deferRender: true,
             onShardLoaded: (day, records) => {
-              loadedByDay.set(day, records);
+              storeLoadedDay(day, records);
               completedShards += 1;
-              rebuildRecords();
               render();
               const outstanding = days.length - completedShards;
               if (outstanding) appendLoadingSkeletons(outstanding);
@@ -1577,8 +1852,10 @@
       if (action.dataset.action === 'close-methodology') {
         event.preventDefault();
         $('detail-dialog').close();
-        $('methodology').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        history.replaceState(null, '', `${window.location.pathname}${window.location.search}#methodology`);
+        routePage('overview');
+        const disclosure = document.querySelector('.overview-methodology');
+        if (disclosure) disclosure.open = true;
+        $('methodology').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
       }
     });
     $('workspace-tools').addEventListener('click', (event) => {
@@ -1596,10 +1873,13 @@
         state.vendor = canonicalFacet(watchedPair.vendor, facets.vendors) || String(watchedPair.vendor || '').trim().slice(0, 160);
         state.product = canonicalFacet(watchedPair.product, facets.products) || String(watchedPair.product || '').trim().slice(0, 200);
         state.query = '';
+        strictCompleteness = true;
         updateControlState();
         resetWindow();
+        routePage('center');
         render({ animateCards: true });
         loadForFilters();
+        writeUrlState('push');
         $('feed').scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
@@ -1610,6 +1890,7 @@
     document.addEventListener('keydown', (event) => {
       const target = document.activeElement;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (activePage !== 'center') return;
       if (event.key === '/' && !isTextTarget(target)) {
         event.preventDefault();
         $('search-input').focus();
@@ -1640,6 +1921,7 @@
         manifest = await fetchManifest();
         await loadFacets();
         restorePermalink();
+        routePage(pageFromLocation(), { historyMode: 'replace' });
         setDateBounds();
         renderSources();
         const selectedDays = rangeDays();
@@ -1647,6 +1929,7 @@
         if (!newest.length) newest = selectedDays.slice(-2).reverse();
         await loadDays(newest, { deferRender: true });
         rebuildRecords();
+        renderOverviewLatest();
         render({ animateStats: true });
         void loadEpssSnapshot().then(() => {
           if (booted && manifest) render();
@@ -1657,9 +1940,12 @@
         refreshTimestamp();
         setLoaderMessage('Feed ready');
         hideLoader();
-        if (state.query || state.vendor || state.product || state.absoluteZero || state.sort !== 'new') {
+        if (requiresCompleteRange() || pendingCveId) {
           const generation = ++searchGeneration;
-          void loadAllSelectedDays(generation).catch(showLoadError);
+          void loadAllSelectedDays(generation).then(() => {
+            if (pendingCveId && allRecords.has(pendingCveId)) renderDetail(pendingCveId);
+            else if (pendingCveId) toast(`${pendingCveId} is not present in the available 30-day feed.`, 'warning');
+          }).catch(showLoadError);
         }
         break;
       } catch (error) {

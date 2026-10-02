@@ -16,18 +16,21 @@ class StaticSiteTests(unittest.TestCase):
         self.assertNotRegex(HTML + CSS + JS + README, re.compile(r"ice\s*[×x/]\s*ember|frost signal|\barena\b|\bmatchup\b", re.I))
         self.assertNotIn("SUBZER0", HTML + CSS + JS + README)
 
-    def test_task_first_document_order_preserves_secondary_tools(self):
+    def test_route_document_order_preserves_feed_and_source_information(self):
+        overview = HTML.index('id="page-overview"')
+        overview_latest = HTML.index('id="overview-latest"')
+        methodology = HTML.index('id="methodology"')
+        center = HTML.index('id="page-center"')
         masthead = HTML.index('<section class="masthead"')
         search = HTML.index('<section class="control-panel"')
         feed = HTML.index('<section class="dashboard"')
-        totals = HTML.index('<section class="stats"')
         workspace = HTML.index('class="post-feed-tools"')
-        methodology = HTML.index('<section class="methodology-panel"')
+        self.assertLess(overview, overview_latest)
+        self.assertLess(overview_latest, methodology)
+        self.assertLess(methodology, center)
         self.assertLess(masthead, search)
         self.assertLess(search, feed)
-        self.assertLess(feed, totals)
         self.assertLess(feed, workspace)
-        self.assertLess(workspace, methodology)
         self.assertIn('id="advanced-filters"', HTML)
         self.assertIn('id="snapshot-time"', HTML)
 
@@ -201,7 +204,7 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("?v=${encodeURIComponent(version)}", JS)
         self.assertIn("const PAGE_SIZE = 24", JS)
         self.assertIn("const MAX_DOM_RECORDS = 200", JS)
-        self.assertIn("matches.slice(windowStart, windowStart + renderCount)", JS)
+        self.assertIn("presentedMatches.slice(windowStart, windowStart + renderCount)", JS)
         self.assertIn("const SHARD_CONCURRENCY = 4", JS)
         self.assertIn("Each request reveals up to 24 more cards", README)
         self.assertIn("one skeleton per outstanding shard request", README)
@@ -261,15 +264,15 @@ class StaticSiteTests(unittest.TestCase):
         start = JS.index("function buildPermalink()")
         end = JS.index("async function copyPermalink()", start)
         builder = JS[start:end]
-        self.assertIn("url.search = ''", builder)
+        self.assertIn("makeStateParams({ page: 'center', share: true })", builder)
         self.assertIn("url.hash = ''", builder)
-        self.assertIn("params.set('vendor'", builder)
-        self.assertIn("params.set('product'", builder)
-        self.assertIn("params.set('severity'", builder)
-        self.assertIn("params.set('compact'", builder)
-        self.assertNotIn("state.query", builder)
-        self.assertNotIn("starredIds", builder)
-        self.assertNotIn("watchlist", builder)
+        state_start = JS.index("function makeStateParams(")
+        state_end = JS.index("function writeUrlState(", state_start)
+        serializer = JS[state_start:state_end]
+        for key in ("page", "from", "to", "hours", "severity", "q", "sort", "az", "group", "vendor", "product", "compact", "cve"):
+            self.assertIn(f"params.set('{key}'", serializer)
+        self.assertNotIn("starredIds", serializer)
+        self.assertNotIn("watchlist", serializer)
 
     def test_poc_search_is_constructed_only_from_validated_cve_id(self):
         self.assertIn("^CVE-\\d{4,}-\\d+$", JS)

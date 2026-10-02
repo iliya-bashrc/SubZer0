@@ -7,6 +7,7 @@ SUBZERO_CHROMIUM. Install Playwright plus Chromium to run this module locally.
 import copy
 from datetime import datetime, timedelta
 from functools import partial
+import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
@@ -15,7 +16,7 @@ from pathlib import Path
 import shutil
 import threading
 import unittest
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 CHROMIUM = os.environ.get("SUBZERO_CHROMIUM") or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
@@ -37,7 +38,8 @@ class BrowserRegressionTests(unittest.TestCase):
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
-        cls.base_url = f"http://127.0.0.1:{cls.server.server_port}/"
+        cls.origin_url = f"http://127.0.0.1:{cls.server.server_port}/"
+        cls.base_url = f"{cls.origin_url}?page=center"
         cls.playwright_manager = sync_playwright()
         cls.playwright = cls.playwright_manager.start()
         cls.browser = cls.playwright.chromium.launch(
@@ -57,12 +59,13 @@ class BrowserRegressionTests(unittest.TestCase):
         cls.server.server_close()
         cls.server_thread.join(timeout=2)
 
-    def open_page(self, width, height, mobile=False):
+    def open_page(self, width, height, mobile=False, reduced_motion=None):
         context = self.browser.new_context(
             viewport={"width": width, "height": height},
             device_scale_factor=2.75 if mobile else 1,
             is_mobile=mobile,
             has_touch=mobile,
+            reduced_motion=reduced_motion,
             user_agent=(
                 "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36"
@@ -175,6 +178,10 @@ class BrowserRegressionTests(unittest.TestCase):
                         "document.querySelector('#feed-status')?.textContent.startsWith('Search covers all')",
                         timeout=30000,
                     )
+                    page.wait_for_function(
+                        "new URL(location.href).searchParams.get('q') === document.querySelector('#search-input').value",
+                        timeout=10000,
+                    )
                     self.assertEqual(page.locator("#feed-count").inner_text(), "1")
                     self.assertEqual(
                         page.locator("#feed-list .cve-card").first.get_attribute("data-cve-id"),
@@ -206,6 +213,61 @@ class BrowserRegressionTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_three_routes_restore_tabs_and_community_terminal(self):
+        context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        opened = []
+        context.route("https://www.t.me/**", lambda route: (opened.append(route.request.url), route.fulfill(status=200, body="OK")))
+        page = context.new_page()
+        try:
+            page.goto(self.origin_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
+            page.keyboard.press("Tab")
+            self.assertEqual(page.evaluate("document.activeElement?.id"), "skip-link")
+            page.keyboard.press("Enter")
+            self.assertEqual(page.evaluate("document.activeElement?.id"), "main-content")
+            self.assertTrue(page.locator("#page-overview").is_visible())
+            self.assertEqual(page.title(), "SubZer0 — Overview")
+
+            page.locator("#tab-center").click()
+            page.wait_for_function("new URL(location.href).searchParams.get('page') === 'center'")
+            self.assertTrue(page.locator("#page-center").is_visible())
+            page.locator("#tab-community").click()
+            page.wait_for_function("new URL(location.href).searchParams.get('page') === 'community'")
+            page.wait_for_function("!document.querySelector('#terminal-info')?.hidden", timeout=10000)
+            self.assertTrue(page.locator("#page-community").is_visible())
+            self.assertIn("rendered in ANSI Shadow", page.locator(".terminal-banner").get_attribute("aria-label"))
+            self.assertIn("CVE Intelligence & Vulnerability Research", page.locator("#terminal-info").inner_text())
+            self.assertIn("@BugCod3", page.locator("#terminal-info").inner_text())
+            self.assertIn("@RootAccessClub", page.locator("#terminal-info").inner_text())
+            self.assertEqual(page.locator("#action-session").is_visible(), False)
+            self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), 390)
+
+            metrics = page.evaluate("({height:innerHeight, documentHeight:document.documentElement.scrollHeight, pageHeight:document.querySelector('#page-community').getBoundingClientRect().height, footerHeight:document.querySelector('.footer').getBoundingClientRect().height})")
+            self.assertLessEqual(metrics["documentHeight"], metrics["height"] + 2, metrics)
+
+            page.locator("#join-bugcod3").click()
+            page.wait_for_url("https://www.t.me/BugCod3", timeout=5000)
+            self.assertEqual(opened[-1], "https://www.t.me/BugCod3")
+
+            page.goto(f"{self.origin_url}?page=community", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
+            page.wait_for_function("!document.querySelector('#terminal-info')?.hidden", timeout=10000)
+            page.locator("#join-rootaccessclub").click()
+            page.wait_for_url("https://www.t.me/RootAccessClub", timeout=5000)
+            self.assertEqual(opened[-1], "https://www.t.me/RootAccessClub")
+        finally:
+            context.close()
+
+        reduced = self.browser.new_context(viewport={"width": 390, "height": 844}, reduced_motion="reduce")
+        reduced_page = reduced.new_page()
+        try:
+            reduced_page.goto(f"{self.origin_url}?page=community", wait_until="domcontentloaded", timeout=30000)
+            reduced_page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
+            reduced_page.wait_for_function("!document.querySelector('#terminal-info')?.hidden", timeout=10000)
+            self.assertEqual(reduced_page.locator("#typing-caret").evaluate("element => getComputedStyle(element).animationName"), "none")
+        finally:
+            reduced.close()
+
     def test_clear_search_and_permalink_survive_back_forward(self):
         context, page = self.open_page(390, 844, True)
         try:
@@ -215,6 +277,10 @@ class BrowserRegressionTests(unittest.TestCase):
                 "document.querySelector('#feed-status')?.textContent.startsWith('Search covers all')",
                 timeout=30000,
             )
+            page.wait_for_function(
+                "new URL(location.href).searchParams.get('q') === document.querySelector('#search-input').value",
+                timeout=10000,
+            )
             page.locator("#search-input").fill("")
             page.wait_for_function(
                 "document.querySelector('#search-input').value === '' && "
@@ -222,10 +288,16 @@ class BrowserRegressionTests(unittest.TestCase):
                 "document.querySelectorAll('#feed-list .cve-card').length > 0",
                 timeout=10000,
             )
+            page.wait_for_function("!new URL(location.href).searchParams.has('q')", timeout=10000)
+            page.go_back(wait_until="domcontentloaded", timeout=30000)
+            self.assertEqual(page.locator("#search-input").input_value(), first_id)
+            self.assertEqual(page.locator("#feed-count").inner_text(), "1")
+            page.go_forward(wait_until="domcontentloaded", timeout=30000)
+            self.assertEqual(page.locator("#search-input").input_value(), "")
             self.assertTrue(page.locator("#empty-state").is_hidden())
 
             permalink = (
-                f"{self.base_url}?from={self.start_date}&to={self.end_date}&severity=critical"
+                f"{self.origin_url}?from={self.start_date}&to={self.end_date}&severity=critical"
             )
             page.goto(permalink, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_function(
@@ -244,7 +316,7 @@ class BrowserRegressionTests(unittest.TestCase):
                 "document.querySelector('#loader')?.classList.contains('done')",
                 timeout=30000,
             )
-            self.assertEqual(urlparse(page.url).query, "")
+            self.assertEqual(urlparse(page.url).query, "page=center")
             page.go_forward(wait_until="domcontentloaded", timeout=30000)
             page.wait_for_function(
                 "document.querySelector('#loader')?.classList.contains('done')",
@@ -254,7 +326,76 @@ class BrowserRegressionTests(unittest.TestCase):
                 page.locator('.severity-filter[aria-pressed="true"]').get_attribute("data-severity"),
                 "critical",
             )
-            self.assertEqual(urlparse(page.url).query, urlparse(permalink).query)
+            restored = parse_qs(urlparse(page.url).query)
+            self.assertEqual(restored.get("page"), ["center"])
+            self.assertEqual(restored.get("severity"), ["critical"])
+            self.assertEqual(page.locator("#date-from").input_value(), self.start_date)
+            self.assertEqual(page.locator("#date-to").input_value(), self.end_date)
+        finally:
+            context.close()
+
+    def test_integrity_failure_withholds_results_and_retry_recovers(self):
+        manifest = json.loads((ROOT / "data" / "manifest.json").read_text(encoding="utf-8"))
+        nonempty = [item for item in manifest["days"] if int(item.get("count", 0)) > 0]
+        target = nonempty[-3]
+        context = self.browser.new_context(viewport={"width": 1280, "height": 900})
+        context.add_init_script(f"""(() => {{
+          const nativeFetch = window.fetch.bind(window);
+          let attempts = 0;
+          window.__integrityShardAttempts = () => attempts;
+          window.fetch = (input, init) => {{
+            const raw = typeof input === 'string' ? input : input.url || String(input);
+            const url = new URL(raw, window.location.href);
+            if (url.pathname.endsWith('/{target['date']}.json')) {{
+              attempts += 1;
+              if (attempts === 1) return Promise.resolve(new Response('', {{status:404}}));
+              if (attempts === 2) return nativeFetch(input, init).then(async response => {{
+                const rows = await response.json();
+                rows[0].title = 'TAMPERED INTEGRITY TEST RECORD';
+                return new Response(JSON.stringify(rows) + '\\n', {{status:200, headers:{{'Content-Type':'application/json'}}}});
+              }});
+            }}
+            return nativeFetch(input, init);
+          }};
+        }})();""")
+        page = context.new_page()
+        try:
+            page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
+            first_id = page.locator("#feed-list .cve-card").first.get_attribute("data-cve-id")
+            page.locator("#search-input").fill(first_id)
+            page.wait_for_function("document.querySelector('#feed-status')?.textContent.includes('Some feed data could not be loaded or verified')", timeout=30000)
+            self.assertEqual(page.locator("#feed-count").inner_text(), "—")
+            self.assertEqual(page.locator("#feed-list .cve-card").count(), 0)
+            self.assertTrue(page.locator("#feed-list").get_attribute("aria-busy") == "true")
+
+            page.locator("#load-more").click()
+            page.wait_for_function("document.querySelector('#feed-status')?.textContent.includes('SHA-256 mismatch')", timeout=30000)
+            self.assertEqual(page.locator("#feed-count").inner_text(), "—")
+            self.assertEqual(page.locator("#feed-list .cve-card").count(), 0)
+
+            page.locator("#load-more").click()
+            page.wait_for_function("document.querySelector('#feed-status')?.textContent.startsWith('Search covers all')", timeout=60000)
+            self.assertEqual(page.locator("#feed-count").inner_text(), "1")
+            self.assertEqual(page.locator("#feed-list .cve-card").first.get_attribute("data-cve-id"), first_id)
+            self.assertEqual(page.evaluate("window.__integrityShardAttempts()"), 3)
+        finally:
+            context.close()
+
+    def test_direct_cve_url_opens_a_named_detail_dialog(self):
+        manifest = json.loads((ROOT / "data" / "manifest.json").read_text(encoding="utf-8"))
+        latest = next(item for item in reversed(manifest["days"]) if int(item.get("count", 0)) > 0)
+        records = json.loads((ROOT / latest["path"]).read_text(encoding="utf-8"))
+        cve_id = records[0]["id"]
+        context = self.browser.new_context(viewport={"width": 1280, "height": 900})
+        page = context.new_page()
+        try:
+            page.goto(f"{self.origin_url}?cve={cve_id}", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
+            page.wait_for_function("document.querySelector('#detail-dialog')?.open", timeout=60000)
+            self.assertTrue(page.locator("#detail-title").inner_text().startswith(cve_id))
+            self.assertEqual(page.locator("#detail-dialog").get_attribute("aria-labelledby"), "detail-title")
+            self.assertEqual(parse_qs(urlparse(page.url).query).get("cve", [""])[0], cve_id)
         finally:
             context.close()
 
@@ -319,7 +460,6 @@ class BrowserRegressionTests(unittest.TestCase):
         updated_manifest = copy.deepcopy(manifest)
         updated_manifest["generated_at"] = new_version
         updated_manifest_target = next(item for item in updated_manifest["days"] if item["date"] == day)
-        updated_manifest_target["sha256"] = "0" * 64 if target["sha256"] != "0" * 64 else "1" * 64
 
         old_records = json.loads((ROOT / "data" / f"{day}.json").read_text(encoding="utf-8"))
         record_id = old_records[0]["id"]
@@ -329,6 +469,10 @@ class BrowserRegressionTests(unittest.TestCase):
         fresh_record = next(item for item in fresh_records if item["id"] == record_id)
         stale_record["title"] = "STALE SNAPSHOT REGRESSION MARKER"
         fresh_record["title"] = "FRESH SNAPSHOT REGRESSION MARKER"
+        stale_bytes = (json.dumps(stale_records, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        fresh_bytes = (json.dumps(fresh_records, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        updated_manifest_target["count"] = len(fresh_records)
+        updated_manifest_target["sha256"] = hashlib.sha256(fresh_bytes).hexdigest()
 
         bootstrap = """(() => {
           const nativeFetch = window.fetch.bind(window);
@@ -364,8 +508,8 @@ class BrowserRegressionTests(unittest.TestCase):
             "__NEW_VERSION__": json.dumps(new_version),
             "__DAY__": day,
             "__NEW_MANIFEST__": json.dumps(json.dumps(updated_manifest, ensure_ascii=False, separators=(",", ":"))),
-            "__STALE_PAYLOAD__": json.dumps(json.dumps(stale_records, ensure_ascii=False, separators=(",", ":"))),
-            "__FRESH_PAYLOAD__": json.dumps(json.dumps(fresh_records, ensure_ascii=False, separators=(",", ":"))),
+            "__STALE_PAYLOAD__": json.dumps(stale_bytes.decode("utf-8")),
+            "__FRESH_PAYLOAD__": json.dumps(fresh_bytes.decode("utf-8")),
         }
         for token, value in replacements.items():
             bootstrap = bootstrap.replace(token, value)
