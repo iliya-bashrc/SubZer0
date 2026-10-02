@@ -124,6 +124,25 @@ class BrowserRegressionTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_rows_per_page_controls_incremental_feed_batch(self):
+        context, page = self.open_page(1280, 900)
+        try:
+            page.wait_for_function(
+                "document.querySelector('#feed-status')?.textContent.startsWith('Selected view covers all')",
+                timeout=60000,
+            )
+            self.assertEqual(page.locator("#page-size").input_value(), "24")
+            self.assertEqual(page.locator("#feed-list .cve-card").count(), 24)
+
+            page.select_option("#page-size", "48")
+            page.wait_for_function("document.querySelectorAll('#feed-list .cve-card').length === 48")
+            page.select_option("#page-size", "12")
+            page.wait_for_function("document.querySelectorAll('#feed-list .cve-card').length === 12")
+            page.locator("#load-more").click()
+            page.wait_for_function("document.querySelectorAll('#feed-list .cve-card').length === 24")
+        finally:
+            context.close()
+
     def test_mobile_center_heading_retains_copy_and_stacked_counters(self):
         context, page = self.open_page(360, 800, True)
         try:

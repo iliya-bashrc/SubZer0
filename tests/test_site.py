@@ -209,11 +209,13 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn("const POLL_MS = 120_000", JS)
         self.assertIn("data/manifest.json?check=${Date.now()}", JS)
         self.assertIn("?v=${encodeURIComponent(version)}", JS)
-        self.assertIn("const PAGE_SIZE = 24", JS)
+        self.assertIn("let PAGE_SIZE = 24", JS)
+        self.assertIn('id="page-size"', HTML)
+        self.assertIn("[12, 24, 48, 96].includes(requested)", JS)
         self.assertIn("const MAX_DOM_RECORDS = 200", JS)
         self.assertIn("presentedMatches.slice(windowStart, windowStart + renderCount)", JS)
         self.assertIn("const SHARD_CONCURRENCY = 4", JS)
-        self.assertIn("Each request reveals up to 24 more cards", README)
+        self.assertIn("Users choose 12, 24, 48, or 96 rows per page", README)
         self.assertIn("one skeleton per outstanding shard request", README)
 
     def test_static_frontend_has_no_external_runtime_and_source_specific_dates(self):

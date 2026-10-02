@@ -1232,3 +1232,16 @@ body { background: linear-gradient(180deg, #0a0e17 0, #070b14 24rem); }
   .page-center .masthead.center-heading { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
   .page-center .masthead-summary { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 }
+
+
+/* Keep paging controls beside feed metadata, not in a separate filter gate. */
+.page-center .feed-heading-meta { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 11px; }
+.page-center .feed-heading-meta .coverage-note { flex: 0 1 auto; }
+.rows-per-page-control { flex: none; display: inline-flex; align-items: center; gap: 6px; color: #9aa7ab; font-size: 9px; white-space: nowrap; }
+.rows-per-page-control select { min-width: 60px; min-height: 32px; padding: 0 7px; border: 1px solid #35434a; border-radius: 4px; background: #0e1518; color: #dce5e7; font: 11px var(--mono); font-variant-numeric: tabular-nums; }
+.rows-per-page-control select:focus-visible { outline: 2px solid #69d9e8; outline-offset: 2px; }
+@media (max-width: 720px) {
+  .page-center .feed-heading-meta { width: 100%; min-height: 36px; }
+  .page-center .feed-heading-meta .coverage-note { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .rows-per-page-control select { min-height: 36px; }
+}

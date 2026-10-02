@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const PAGE_SIZE = 24;
+  let PAGE_SIZE = 24;
   const MAX_DOM_RECORDS = 200;
   const POLL_MS = 120_000;
   const SHARD_CONCURRENCY = 4;
@@ -1245,7 +1245,7 @@
     if (waitingForCompleteRange) {
       button.innerHTML = `<span>${completeRangeLoading ? 'VERIFYING SELECTED DATES…' : 'RETRY FULL DATE RANGE'}</span><small>${loadedByDay.size} of ${rangeDays().length} verified shards loaded</small><b aria-hidden="true">↻</b>`;
     } else if (hasNextCards && visible >= MAX_DOM_RECORDS) {
-      button.innerHTML = `<span>SHOW NEXT 24</span><small>DOM capped at ${MAX_DOM_RECORDS}; use filters or export for the full range</small><b aria-hidden="true">↓</b>`;
+      button.innerHTML = `<span>SHOW NEXT ${PAGE_SIZE}</span><small>DOM capped at ${MAX_DOM_RECORDS}; use filters or export for the full range</small><b aria-hidden="true">↓</b>`;
     } else if (hasNextCards) {
       button.innerHTML = `<span>LOAD MORE</span><small>${countLabel}</small><b aria-hidden="true">↓</b>`;
     } else if (couldLoadMore) {
@@ -1759,6 +1759,17 @@
       resetWindow();
       render();
       writeUrlState('push');
+    });
+    $('page-size').addEventListener('change', (event) => {
+      const requested = Number(event.target.value);
+      if (![12, 24, 48, 96].includes(requested)) {
+        event.target.value = String(PAGE_SIZE);
+        return;
+      }
+      PAGE_SIZE = requested;
+      visible = PAGE_SIZE;
+      windowStart = 0;
+      render({ animateCards: true });
     });
     $('absolute-zero').addEventListener('click', () => {
       if (!state.absoluteZero) {

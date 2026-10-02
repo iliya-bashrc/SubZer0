@@ -144,7 +144,10 @@
 
         <section class="dashboard" id="feed" aria-label="Vulnerability feed">
           <div class="feed-column">
-            <div class="feed-heading"><div><span class="section-kicker">CVE RECORDS</span><h2>30-day vulnerability feed <span id="feed-count" class="feed-count">—</span></h2></div><div class="coverage-note" id="coverage-note">Loading feed coverage…</div></div>
+            <div class="feed-heading">
+              <div><span class="section-kicker">CVE RECORDS</span><h2>30-day vulnerability feed <span id="feed-count" class="feed-count">—</span></h2></div>
+              <div class="feed-heading-meta"><div class="coverage-note" id="coverage-note">Loading feed coverage…</div><label class="rows-per-page-control"><span>Rows per page</span><select id="page-size" aria-label="Rows per page"><option value="12">12</option><option value="24" selected>24</option><option value="48">48</option><option value="96">96</option></select></label></div>
+            </div>
             <p class="keyboard-hint">Keyboard: <kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous visible record · <kbd>c</kbd> copy the focused CVE ID</p>
             <div id="feed-status" class="feed-status" role="status" aria-live="polite">Loading feed data…</div>
             <div id="feed-list" class="feed-list" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div></div>
