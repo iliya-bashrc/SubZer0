@@ -184,6 +184,64 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
     return {'page': page_name, 'viewport': [width, height], 'changed_pixels': changed_pixels, 'baseline_record_rows': counts[0] if counts else None, 'preview_record_rows': counts[1] if counts else None, 'overview_action_record_rows': overview_action_counts if overview_action_counts else None}
 
 
+def install_action_trace(page: Page, button_id: str) -> None:
+    page.evaluate('''(buttonId) => {
+      const trace = {clickedAt: null, characters: [], openingAt: null};
+      const button = document.getElementById(buttonId);
+      const command = document.querySelector('#action-command');
+      const status = document.querySelector('#action-status');
+      button.addEventListener('click', () => { trace.clickedAt = performance.now(); }, {capture: true, once: true});
+      let lastCommand = '';
+      new MutationObserver(() => {
+        const text = command.textContent;
+        if (text && text !== lastCommand) {
+          trace.characters.push({text, at: performance.now()});
+          lastCommand = text;
+        }
+      }).observe(command, {childList: true, characterData: true, subtree: true});
+      new MutationObserver(() => {
+        if (status.textContent.startsWith('Opening ') && trace.openingAt === null) {
+          trace.openingAt = performance.now();
+        }
+      }).observe(status, {childList: true, characterData: true, subtree: true});
+      window.__communityActionTrace = trace;
+    }''', button_id)
+
+
+def wait_for_action_opening(page: Page, destination: str, reduced: bool = False) -> dict[str, Any]:
+    expected_command = f'xdg-open "{destination}"'
+    expected_status = f'Opening {destination}...'
+    page.wait_for_function(
+        "destination => document.querySelector('#action-status').textContent === `Opening ${destination}...`",
+        arg=destination,
+        timeout=6000,
+    )
+    status = page.locator('#action-status')
+    command = page.locator('#action-command').inner_text()
+    assert command == expected_command, f'Wrong simulated command: {command!r}'
+    assert status.inner_text() == expected_status, f'Wrong simulated status: {status.inner_text()!r}'
+    assert status.is_visible(), 'Opening status is not visible.'
+    assert status.get_attribute('role') == 'status', 'Opening status is not exposed as a status announcement.'
+    assert status.get_attribute('aria-live') == 'polite', 'Opening status is missing aria-live="polite".'
+    trace = page.evaluate('window.__communityActionTrace')
+    assert trace['clickedAt'] is not None, 'The Community action click was not traced.'
+    if reduced:
+        assert [item['text'] for item in trace['characters']] == [expected_command], 'Reduced motion should fill the display command immediately.'
+        typing_seconds = 0.0
+        character_interval_ms = 0.0
+    else:
+        expected_prefixes = [expected_command[:index] for index in range(1, len(expected_command) + 1)]
+        observed_prefixes = [item['text'] for item in trace['characters']]
+        assert observed_prefixes == expected_prefixes, f'Command was not typed one visible character at a time: {observed_prefixes!r}'
+        last_character_at = trace['characters'][-1]['at']
+        assert trace['openingAt'] is not None and trace['openingAt'] >= last_character_at, 'Opening state began before the command finished.'
+        typing_seconds = (last_character_at - trace['clickedAt']) / 1000
+        minimum_typing_seconds = max(0.5, (len(expected_command) - 1) * 0.020)
+        assert typing_seconds >= minimum_typing_seconds, f'Command did not remain visibly staged long enough: {typing_seconds:.3f}s.'
+        character_interval_ms = (last_character_at - trace['characters'][0]['at']) / (len(trace['characters']) - 1)
+    return {'command': expected_command, 'status': expected_status, 'character_count': len(expected_command), 'typing_seconds': round(typing_seconds, 3), 'average_character_interval_ms': round(character_interval_ms, 1), 'opening_status_live': True}
+
+
 def test_actions(browser: Browser, base_url: str, reduced: bool = False) -> dict[str, Any]:
     results: dict[str, Any] = {}
     destination_map = {
@@ -200,22 +258,31 @@ def test_actions(browser: Browser, base_url: str, reduced: bool = False) -> dict
         load(page, f'{base_url}/?page=community')
         wait_idle(page)
         button = page.locator(f'#{button_id}')
-        started = time.monotonic()
+        install_action_trace(page, button_id)
         button.click()
         assert button.is_disabled(), f'{button_id} was not disabled during navigation.'
-        command = page.locator('#action-command').inner_text()
-        status = page.locator('#action-status').inner_text()
         expected_name = 'BugCod3' if button_id == 'join-bugcod3' else 'RootAccessClub'
-        assert command == f'xdg-open "{destination}"', f'Wrong simulated command: {command!r}'
-        assert status == f'Opening {destination}...', f'Wrong simulated status: {status!r}'
-        if not reduced and button_id == 'join-bugcod3':
-            page.screenshot(path=str(SCREENSHOTS / 'community-opening-bugcod3-390.png'), animations='disabled')
-        # A second activation is deliberately attempted while the real button is disabled.
-        page.evaluate('(id) => document.getElementById(id).click()', button_id)
-        elapsed = wait_for_local_destination(page, destination, attempts, started)
+        if reduced:
+            flow = wait_for_action_opening(page, destination, reduced=True)
+        else:
+            assert page.locator('#action-status').inner_text() == 'Typing command...', 'The terminal did not expose its typing state.'
+            page.wait_for_function(
+                'length => { const value = document.querySelector("#action-command").textContent; return value.length >= 4 && value.length < length; }',
+                arg=len(f'xdg-open "{destination}"'),
+                timeout=3000,
+            )
+            if button_id == 'join-bugcod3':
+                page.screenshot(path=str(SCREENSHOTS / 'community-opening-bugcod3-390.png'), animations='disabled')
+            # Dispatch a synthetic second click to verify the handler's duplicate-action guard,
+            # even though a real second activation is already blocked by the disabled button.
+            page.evaluate("id => document.getElementById(id).dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}))", button_id)
+            flow = wait_for_action_opening(page, destination)
+        opening_observed_at = time.monotonic()
+        elapsed = wait_for_local_destination(page, destination, attempts, opening_observed_at)
+        flow['navigation_delay_after_opening_seconds'] = round(elapsed, 3)
         assert page.locator('#local-intercept').inner_text() == 'Local Telegram destination intercepted for this test.'
         assert_no_page_errors(page, errors)
-        results[expected_name] = {'destination': destination, 'simulated_command': command, 'delay_seconds': round(elapsed, 3), 'intercepted_locally': True, 'navigation_attempts': len(attempts), 'reduced_motion': reduced}
+        results[expected_name] = {'destination': destination, **flow, 'intercepted_locally': True, 'navigation_attempts': len(attempts), 'reduced_motion': reduced}
         context.close()
     return results
 
@@ -264,12 +331,14 @@ def test_keyboard_activation(browser: Browser, base_url: str) -> dict[str, Any]:
         else:
             button.focus()
             assert page.evaluate("document.activeElement.matches(':focus-visible')"), 'Focused Community action has no visible focus state.'
-        started = time.monotonic()
+        install_action_trace(page, button_id)
         page.keyboard.press(key)
         assert button.is_disabled(), f'{button_id} did not enter its disabled state on {key}.'
-        wait_for_local_destination(page, destination, attempts, started)
+        flow = wait_for_action_opening(page, destination)
+        opening_observed_at = time.monotonic()
+        flow['navigation_delay_after_opening_seconds'] = round(wait_for_local_destination(page, destination, attempts, opening_observed_at), 3)
         assert_no_page_errors(page, errors)
-        results[button_id] = {'key': key, 'visible_focus': True, 'destination': destination, 'intercepted_locally': True}
+        results[button_id] = {'key': key, 'visible_focus': True, 'destination': destination, **flow, 'intercepted_locally': True}
         context.close()
     return results
 
@@ -283,10 +352,12 @@ def test_leave_and_return(browser: Browser, base_url: str) -> dict[str, Any]:
     page.route('https://www.t.me/**', local_interceptor(attempted))
     load(page, f'{base_url}/?page=community')
     wait_idle(page)
+    install_action_trace(page, 'join-bugcod3')
     page.locator('#join-bugcod3').click()
-    assert page.locator('#action-status').inner_text() == 'Opening https://www.t.me/BugCod3...'
+    assert page.locator('#join-bugcod3').is_disabled()
+    assert page.locator('#action-status').inner_text() == 'Typing command...'
     page.locator('#tab-overview').click()
-    page.wait_for_timeout(1050)
+    page.wait_for_timeout(2400)
     assert page.url == f'{base_url}/?page=community', 'Navigation continued after leaving the Community page.'
     assert not attempted, f'Unexpected external destination after leaving page: {attempted}'
     page.locator('#tab-community').click()
@@ -294,9 +365,15 @@ def test_leave_and_return(browser: Browser, base_url: str) -> dict[str, Any]:
     assert page.locator('#action-session').is_hidden(), 'A previous opening state survived return to Community.'
     assert not page.locator('#join-bugcod3').is_disabled()
     assert page.locator('#info-command').inner_text() == './info'
+    install_action_trace(page, 'join-rootaccessclub')
+    page.locator('#join-rootaccessclub').click()
+    wait_for_action_opening(page, 'https://www.t.me/RootAccessClub')
+    page.locator('#tab-overview').click()
+    page.wait_for_timeout(1100)
+    assert not attempted, f'Navigation continued after leaving during the Opening delay: {attempted}'
     assert_no_page_errors(page, errors)
     context.close()
-    return {'leaving_cancels_pending_navigation': True, 'return_replays_clean_info_session': True}
+    return {'leaving_cancels_typing_and_opening_navigation': True, 'return_replays_clean_info_session': True}
 
 
 def test_history_return_after_action(browser: Browser, base_url: str) -> dict[str, Any]:
@@ -308,9 +385,13 @@ def test_history_return_after_action(browser: Browser, base_url: str) -> dict[st
     page.route('https://www.t.me/**', local_interceptor(attempts))
     load(page, f'{base_url}/?page=community')
     wait_idle(page)
-    started = time.monotonic()
+    install_action_trace(page, 'join-rootaccessclub')
     page.locator('#join-rootaccessclub').click()
-    wait_for_local_destination(page, 'https://www.t.me/RootAccessClub', attempts, started)
+    flow = wait_for_action_opening(page, 'https://www.t.me/RootAccessClub')
+    opening_observed_at = time.monotonic()
+    flow['navigation_delay_after_opening_seconds'] = round(
+        wait_for_local_destination(page, 'https://www.t.me/RootAccessClub', attempts, opening_observed_at), 3
+    )
     page.go_back(wait_until='domcontentloaded')
     page.wait_for_url(f'{base_url}/?page=community', timeout=5000)
     wait_idle(page)
@@ -318,7 +399,7 @@ def test_history_return_after_action(browser: Browser, base_url: str) -> dict[st
     assert not page.locator('#join-rootaccessclub').is_disabled(), 'Community actions stayed disabled after browser history return.'
     assert_no_page_errors(page, errors)
     context.close()
-    return {'same_tab_back_returns_to_clean_terminal': True, 'community_actions_reenabled': True, 'destination_intercepted_locally': True}
+    return {'same_tab_back_returns_to_clean_terminal': True, 'community_actions_reenabled': True, 'destination_intercepted_locally': True, **flow}
 
 
 def main() -> None:
