@@ -93,6 +93,16 @@
 .idle-prompt { margin-top: 9px; }
 .action-session { margin-top: 11px; padding-top: 9px; border-top: 1px solid #202a2f; }
 .action-command-line code { color: #e8d6a1; }
+.action-command-line code.is-typing::after {
+  content: "";
+  display: inline-block;
+  width: .55em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -.16em;
+  background: #79aebd;
+  animation: community-caret-blink 1.2s steps(2, start) infinite;
+}
 .terminal-status { margin: 4px 0 0; color: #b6c8cd; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .community-actions {
   display: grid;
@@ -153,5 +163,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .terminal-caret { animation: none; }
+  .action-command-line code.is-typing::after { animation: none; }
   .community-action { transition: none; }
 }

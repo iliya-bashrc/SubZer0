@@ -2,6 +2,8 @@
   'use strict';
 
   const INFO_COMMAND = './info';
+  const COMMUNITY_TYPE_DELAY_MS = 32;
+  const OPENING_DELAY_MS = 1000;
   const CHANNELS = Object.freeze({
     bugcod3: Object.freeze({ label: 'BugCod3', url: 'https://www.t.me/BugCod3' }),
     rootAccessClub: Object.freeze({ label: 'RootAccessClub', url: 'https://www.t.me/RootAccessClub' })
@@ -60,7 +62,9 @@
   let typingTimer = 0;
   let outputTimer = 0;
   let navigationTimer = 0;
+  let actionTypingTimer = 0;
   let typingIndex = 0;
+  let actionTypingIndex = 0;
   let active = false;
   let navigating = false;
 
@@ -69,12 +73,14 @@
     window.clearTimeout(typingTimer);
     window.clearTimeout(outputTimer);
     window.clearTimeout(navigationTimer);
-    readyTimer = typingTimer = outputTimer = navigationTimer = 0;
+    window.clearTimeout(actionTypingTimer);
+    readyTimer = typingTimer = outputTimer = navigationTimer = actionTypingTimer = 0;
   }
 
   function reset() {
     clearTimers();
     typingIndex = 0;
+    actionTypingIndex = 0;
     navigating = false;
     commandLine.hidden = false;
     commandOutput.textContent = '';
@@ -82,6 +88,7 @@
     infoOutput.hidden = true;
     idlePrompt.hidden = true;
     actionSession.hidden = true;
+    actionCommand.classList.remove('is-typing');
     actionCommand.textContent = '';
     actionStatus.textContent = '';
     actions.forEach((button) => { button.disabled = true; });
@@ -139,12 +146,40 @@
     actions.forEach((candidate) => { candidate.disabled = true; });
     idlePrompt.hidden = true;
     actionSession.hidden = false;
-    actionCommand.textContent = `xdg-open "${channel.url}"`;
+    const command = `xdg-open "${channel.url}"`;
+    actionTypingIndex = 0;
+    actionCommand.textContent = '';
+    actionCommand.classList.add('is-typing');
+    actionStatus.textContent = 'Typing command...';
+    if (reducedMotion.matches) {
+      actionCommand.textContent = command;
+      finishCommunityCommand(channel);
+      return;
+    }
+    actionTypingTimer = window.setTimeout(() => typeCommunityCharacter(channel, command), COMMUNITY_TYPE_DELAY_MS);
+  }
+
+  function typeCommunityCharacter(channel, command) {
+    actionTypingTimer = 0;
+    if (!active || !navigating) return;
+    actionTypingIndex += 1;
+    actionCommand.textContent = command.slice(0, actionTypingIndex);
+    if (actionTypingIndex >= command.length) {
+      finishCommunityCommand(channel);
+      return;
+    }
+    actionTypingTimer = window.setTimeout(() => typeCommunityCharacter(channel, command), COMMUNITY_TYPE_DELAY_MS);
+  }
+
+  function finishCommunityCommand(channel) {
+    actionTypingTimer = 0;
+    actionCommand.classList.remove('is-typing');
     actionStatus.textContent = `Opening ${channel.url}...`;
     navigationTimer = window.setTimeout(() => {
+      navigationTimer = 0;
       if (!active || !navigating) return;
       window.location.assign(channel.url);
-    }, 950);
+    }, OPENING_DELAY_MS);
   }
 
   actions.forEach((button) => button.addEventListener('click', () => openCommunity(button)));
