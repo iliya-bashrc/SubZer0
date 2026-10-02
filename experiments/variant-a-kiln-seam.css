@@ -1,0 +1,104 @@
+/* Private candidate A: a concentrated kiln-seam bloom. CSS only; no content or geometry changes. */
+.record-open {
+  --glow-rgb: 239 68 68;
+  --hot-rgb: 255 117 82;
+  --rim-rgb: 255 176 137;
+  --pool-a: 14% 52%;
+  --pool-b: 83% 14%;
+  isolation: isolate;
+  border-radius: 6px;
+  background-color: #0a1013;
+  background-image:
+    radial-gradient(ellipse 42% 150% at var(--pool-a), rgb(var(--glow-rgb) / .24) 0%, rgb(var(--glow-rgb) / .13) 35%, transparent 78%),
+    radial-gradient(ellipse 23% 112% at var(--pool-b), rgb(var(--hot-rgb) / .16) 0%, rgb(var(--glow-rgb) / .07) 42%, transparent 78%),
+    linear-gradient(104deg, rgb(var(--glow-rgb) / .12) 0%, rgb(var(--glow-rgb) / .075) 31%, rgb(var(--glow-rgb) / .018) 68%, transparent 100%);
+  box-shadow:
+    inset 0 1px 0 rgb(var(--rim-rgb) / .15),
+    inset 0 -1px 0 rgb(var(--glow-rgb) / .09),
+    inset 0 0 25px rgb(var(--glow-rgb) / .08),
+    0 0 0 1px rgb(var(--glow-rgb) / .19),
+    0 0 16px 1px rgb(var(--glow-rgb) / .16),
+    0 0 29px -9px rgb(var(--glow-rgb) / .24);
+  transition: box-shadow 200ms ease, background-image 200ms ease;
+}
+.record-open::before,
+.record-open::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.record-open::before {
+  opacity: .95;
+  background:
+    radial-gradient(ellipse 32% 132% at var(--pool-a), rgb(var(--hot-rgb) / .16), transparent 73%),
+    radial-gradient(ellipse 19% 86% at var(--pool-b), rgb(var(--glow-rgb) / .12), transparent 76%),
+    linear-gradient(180deg, rgb(var(--rim-rgb) / .055), transparent 31%, rgb(0 0 0 / .12));
+  transition: opacity 180ms ease;
+}
+.record-open::after {
+  opacity: .84;
+  background-repeat: no-repeat;
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+.record-open > * { position: relative; z-index: 1; }
+
+.record-row.severity-critical .record-open { --glow-rgb: 239 68 68; --hot-rgb: 255 111 80; --rim-rgb: 255 188 158; --pool-a: 14% 52%; --pool-b: 82% 15%; border-left-color: var(--critical); }
+.record-row.severity-critical .record-open::after { background-image:
+  radial-gradient(circle at 9% 26%, rgb(255 244 225 / .98) 0 .65px, rgb(255 128 91 / .9) 1px 1.45px, rgb(239 68 68 / .28) 2px 4.7px, transparent 6px),
+  radial-gradient(circle at 34% 78%, #24110f 0 .75px, rgb(255 111 80 / .85) 1.1px 1.55px, rgb(239 68 68 / .28) 2.2px 4.3px, transparent 5.8px),
+  radial-gradient(circle at 66% 33%, rgb(255 231 207 / .93) 0 .55px, rgb(255 121 88 / .75) .9px 1.35px, transparent 4.7px),
+  radial-gradient(circle at 91% 72%, #241310 0 .65px, rgb(255 101 76 / .75) 1px 1.4px, rgb(239 68 68 / .22) 2px 3.7px, transparent 5.2px),
+  radial-gradient(circle at 52% 92%, rgb(255 236 211 / .9) 0 .5px, rgb(255 97 76 / .72) .85px 1.25px, transparent 4.2px); }
+.record-row.severity-high .record-open { --glow-rgb: 249 115 22; --hot-rgb: 255 153 50; --rim-rgb: 255 206 146; --pool-a: 82% 53%; --pool-b: 17% 10%; border-left-color: var(--high); }
+.record-row.severity-high .record-open::after { background-image:
+  radial-gradient(circle at 17% 71%, rgb(255 247 220 / .98) 0 .6px, rgb(255 168 66 / .9) 1px 1.5px, rgb(249 115 22 / .25) 2px 4.6px, transparent 6px),
+  radial-gradient(circle at 43% 22%, #20140d 0 .7px, rgb(255 156 52 / .82) 1.1px 1.5px, rgb(249 115 22 / .25) 2px 4px, transparent 5.6px),
+  radial-gradient(circle at 73% 82%, rgb(255 234 193 / .96) 0 .55px, rgb(255 155 45 / .85) .95px 1.4px, transparent 4.8px),
+  radial-gradient(circle at 94% 36%, #21150e 0 .65px, rgb(255 184 82 / .72) 1px 1.4px, rgb(249 115 22 / .22) 2px 3.5px, transparent 5px); }
+.record-row.severity-medium .record-open { --glow-rgb: 220 166 20; --hot-rgb: 244 196 45; --rim-rgb: 255 235 159; --pool-a: 17% 44%; --pool-b: 77% 93%; border-left-color: var(--medium); }
+.record-row.severity-medium .record-open::after { background-image:
+  radial-gradient(circle at 11% 72%, rgb(255 255 222 / .98) 0 .58px, rgb(255 219 91 / .88) 1px 1.45px, rgb(220 166 20 / .25) 2px 4.4px, transparent 5.8px),
+  radial-gradient(circle at 38% 20%, #1d190e 0 .7px, rgb(249 212 78 / .78) 1px 1.45px, rgb(220 166 20 / .24) 2px 3.9px, transparent 5.5px),
+  radial-gradient(circle at 71% 67%, rgb(255 248 205 / .94) 0 .55px, rgb(244 206 64 / .82) .95px 1.4px, transparent 4.6px),
+  radial-gradient(circle at 94% 29%, #1b180e 0 .65px, rgb(255 226 121 / .68) 1px 1.35px, transparent 4.8px); }
+.record-row.severity-low .record-open { --glow-rgb: 56 189 248; --hot-rgb: 115 218 250; --rim-rgb: 218 249 255; --pool-a: 84% 47%; --pool-b: 20% 92%; border-left-color: var(--low); }
+.record-row.severity-low .record-open::after { background-image:
+  radial-gradient(circle at 14% 28%, rgb(255 255 255 / .99) 0 .6px, rgb(183 242 255 / .93) 1px 1.5px, rgb(56 189 248 / .28) 2px 4.7px, transparent 6px),
+  radial-gradient(circle at 41% 82%, #0e1a1e 0 .7px, rgb(133 220 246 / .82) 1px 1.45px, rgb(56 189 248 / .23) 2px 4px, transparent 5.5px),
+  radial-gradient(circle at 74% 22%, rgb(249 254 255 / .97) 0 .55px, rgb(163 233 251 / .84) .95px 1.4px, transparent 4.8px),
+  radial-gradient(circle at 93% 68%, #101a1e 0 .65px, rgb(143 226 248 / .75) 1px 1.4px, rgb(56 189 248 / .22) 2px 3.6px, transparent 5.2px); }
+
+/* Unrated remains matte, with only neutral surface sheen and dust. */
+.record-row.severity-unrated .record-open {
+  --glow-rgb: 137 148 154; --hot-rgb: 171 184 190; --rim-rgb: 207 215 218;
+  border-left-color: var(--unrated);
+  background-color: #0b1114;
+  background-image: linear-gradient(112deg, rgb(137 148 154 / .075), rgb(137 148 154 / .025) 42%, transparent 82%);
+  box-shadow: inset 0 1px 0 rgb(207 215 218 / .07), inset 0 -1px 0 rgb(137 148 154 / .035), 0 0 0 1px rgb(137 148 154 / .08);
+}
+.record-row.severity-unrated .record-open::before { opacity: .55; background: linear-gradient(180deg, rgb(207 215 218 / .035), transparent 45%, rgb(0 0 0 / .1)); }
+.record-row.severity-unrated .record-open::after { opacity: .42; background-image:
+  radial-gradient(circle at 13% 29%, rgb(199 208 212 / .65) 0 .5px, transparent 2.2px),
+  radial-gradient(circle at 72% 76%, #131a1d 0 .7px, rgb(163 174 179 / .36) 1px 1.35px, transparent 4.2px),
+  radial-gradient(circle at 91% 24%, rgb(211 219 222 / .48) 0 .45px, transparent 1.8px); }
+
+.record-row.severity-critical .record-open:is(:hover, :focus-visible, :active) { box-shadow: inset 0 1px 0 rgb(255 207 182 / .2), inset 0 0 27px rgb(239 68 68 / .12), 0 0 0 1px rgb(255 135 105 / .38), 0 0 20px 2px rgb(239 68 68 / .26), 0 0 34px -8px rgb(239 68 68 / .3); }
+.record-row.severity-high .record-open:is(:hover, :focus-visible, :active) { box-shadow: inset 0 1px 0 rgb(255 226 179 / .18), inset 0 0 26px rgb(249 115 22 / .12), 0 0 0 1px rgb(255 173 82 / .35), 0 0 19px 2px rgb(249 115 22 / .24), 0 0 32px -8px rgb(249 115 22 / .27); }
+.record-row.severity-medium .record-open:is(:hover, :focus-visible, :active) { box-shadow: inset 0 1px 0 rgb(255 247 203 / .17), inset 0 0 25px rgb(234 179 8 / .11), 0 0 0 1px rgb(255 221 104 / .34), 0 0 18px 2px rgb(234 179 8 / .22), 0 0 30px -8px rgb(234 179 8 / .25); }
+.record-row.severity-low .record-open:is(:hover, :focus-visible, :active) { box-shadow: inset 0 1px 0 rgb(231 251 255 / .2), inset 0 0 26px rgb(56 189 248 / .12), 0 0 0 1px rgb(164 236 255 / .38), 0 0 19px 2px rgb(56 189 248 / .24), 0 0 32px -8px rgb(56 189 248 / .28); }
+.record-row.severity-unrated .record-open:is(:hover, :focus-visible, :active) { box-shadow: inset 0 1px 0 rgb(230 235 237 / .1), 0 0 0 1px rgb(174 186 190 / .2), 0 0 11px 1px rgb(137 148 154 / .09); }
+.record-open:is(:hover, :focus-visible, :active)::before { opacity: 1; }
+.record-open:is(:hover, :focus-visible, :active)::after { opacity: 1; filter: brightness(1.08); }
+.record-open:focus-visible { outline: 3px solid #f2fbff; outline-offset: -4px; }
+.record-row.severity-critical .record-open:focus-visible { outline-color: #ffb4a2; }
+.record-row.severity-high .record-open:focus-visible { outline-color: #ffd09a; }
+.record-row.severity-medium .record-open:focus-visible { outline-color: #fff0a8; }
+.record-row.severity-low .record-open:focus-visible { outline-color: #c6f3ff; }
+.record-row.severity-unrated .record-open:focus-visible { outline-color: #c5d0d4; }
+
+@media (prefers-reduced-motion: reduce) {
+  .record-open, .record-open::before, .record-open::after { transition-duration: .01ms !important; animation: none !important; }
+}
