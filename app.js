@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const PAGE_SIZE = 24;
+  let PAGE_SIZE = 24;
   const MAX_DOM_RECORDS = 200;
   const POLL_MS = 120_000;
   const SHARD_CONCURRENCY = 4;
@@ -635,6 +635,7 @@
     if ($('overview-kev')) $('overview-kev').textContent = Number(manifest.totals?.known_exploited || 0).toLocaleString();
     if ($('overview-window')) $('overview-window').textContent = `${fmtDate(String(manifest.window.start).slice(0, 10))} – ${fmtDate(String(manifest.window.end).slice(0, 10))} UTC`;
     if ($('overview-updated')) $('overview-updated').textContent = fmtTimestamp(generated);
+    if ($('overview-snapshot-time')) $('overview-snapshot-time').textContent = fmtTimestamp(generated);
     const coreNames = new Set(['NVD CVE API 2.0', 'GitHub Security Advisory Database', 'CISA KEV']);
     const coreStatuses = (manifest.source_status || []).filter((source) => coreNames.has(source.name) || source.name === 'CISA Known Exploited Vulnerabilities catalog');
     const coreOk = coreStatuses.length >= 3 && coreStatuses.every((source) => source.ok === true);
@@ -648,7 +649,8 @@
 
   function renderOverviewLatest() {
     const list = $('overview-latest');
-    if (!list || !manifest) return;
+    const stage = $('overview-stage-cards');
+    if ((!list && !stage) || !manifest) return;
     const candidates = [];
     for (const item of [...manifest.days].reverse()) {
       const records = loadedByDay.get(item.date);
@@ -658,11 +660,33 @@
     }
     candidates.sort((a, b) => (parseTime(b.activity_at) || parseTime(b.published) || 0) - (parseTime(a.activity_at) || parseTime(a.published) || 0) || String(b.id).localeCompare(String(a.id)));
     const top = candidates.slice(0, 3);
+    const severityLabel = (severity) => severity === 'unknown' ? 'Unrated' : severity === 'none' ? 'None' : `${severity[0].toUpperCase()}${severity.slice(1)}`;
+    if (stage) {
+      const layers = [top[2], top[1], top[0]];
+      stage.innerHTML = layers.map((record, index) => {
+        if (!record) return '';
+        const id = cveId(record.id);
+        if (!id) return '';
+        const severity = cvssSeverity(record.score);
+        const sources = (record.sources || []).map(sourceName).filter(Boolean).join(' · ') || 'CVE record';
+        const score = record.score == null || !Number.isFinite(Number(record.score)) ? 'Unscored' : `CVSS ${Number(record.score).toFixed(1)}`;
+        const date = fmtDate(record.window_date || record.published || record.activity_at);
+        const layer = ['layer-back', 'layer-mid', 'layer-front'][index];
+        return `<a class="overview-record-card ${layer}" href="?page=center&amp;cve=${encodeURIComponent(id)}" aria-label="Open details for ${esc(id)} · ${esc(record.title || id)}">
+          <span class="overview-record-kicker">${index === 2 ? 'CVE record' : 'Record'} · ${esc(id)}</span>
+          <span class="overview-record-main"><strong>${esc(record.title || id)}</strong><span class="overview-severity-tag ${esc(severity)}">${esc(severityLabel(severity))}</span></span>
+          <span class="overview-record-meta"><span>${esc(score)}</span><span>${esc(sources)}</span><time>${esc(date)}</time></span>
+        </a>`;
+      }).join('') || '<p class="stage-loading">The newest verified records are not available yet.</p>';
+      stage.setAttribute('aria-busy', String(top.length === 0));
+    }
+    if (!list) return;
     list.innerHTML = top.length ? top.map((record) => {
       const id = cveId(record.id);
       const severity = cvssSeverity(record.score);
-      const label = severity === 'unknown' ? 'Unrated' : severity === 'none' ? 'None' : `${severity[0].toUpperCase()}${severity.slice(1)}`;
-      return `<li><a class="overview-latest-id" href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">${esc(id)}</a><span class="overview-latest-title">${esc(record.title || id)}</span><small>${esc(label)}${record.kev ? ' · CISA KEV listed' : ''}</small></li>`;
+      const label = severityLabel(severity);
+      const date = fmtDate(record.window_date || record.published || record.activity_at);
+      return `<li><a class="overview-latest-id" href="?page=center&amp;cve=${encodeURIComponent(id)}">${esc(id)}</a><span class="overview-latest-severity ${esc(severity)}">${esc(label)}</span><time>${esc(date)}</time></li>`;
     }).join('') : '<li class="overview-latest-empty">Loading the newest source-verified CVE records…</li>';
   }
 
@@ -733,6 +757,19 @@
     return ['q', 'cve', 'from', 'to', 'severity', 'sort', 'vendor', 'product', 'az', 'group', 'hours'].some((key) => params.has(key)) ? 'center' : 'overview';
   }
 
+  function ensureCenterArchive() {
+    if (!booted || !manifest || activePage !== 'center') return;
+    const days = rangeDays();
+    if (days.every((day) => loadedByDay.has(day)) || completeRangeLoading) {
+      if (pendingCveId && allRecords.has(pendingCveId)) renderDetail(pendingCveId);
+      return;
+    }
+    const generation = ++searchGeneration;
+    void loadAllSelectedDays(generation).then(() => {
+      if (pendingCveId && allRecords.has(pendingCveId)) renderDetail(pendingCveId);
+    }).catch(showLoadError);
+  }
+
   function routePage(page, { historyMode = 'push', focusTab = false } = {}) {
     const normalized = ['overview', 'center', 'community'].includes(page) ? page : 'overview';
     activePage = normalized;
@@ -750,6 +787,7 @@
     document.title = `SubZer0 — ${title}`;
     window.dispatchEvent(new CustomEvent('subzero:pagechange', { detail: { page: normalized } }));
     if (historyMode !== 'none') writeUrlState(historyMode);
+    ensureCenterArchive();
   }
 
   function makeStateParams({ page = activePage, share = false } = {}) {
@@ -1040,6 +1078,18 @@
       ['stat-kev', summary.exploited]
     ];
     const canPublishCounts = !strictCompleteness || rangeDays().every((day) => loadedByDay.has(day));
+    const severityCounts = {
+      all: summary.count,
+      critical: summary.critical,
+      high: summary.high,
+      medium: summary.medium,
+      low: summary.low,
+      unknown: summary.none + summary.unknown
+    };
+    document.querySelectorAll('[data-severity-count]').forEach((element) => {
+      const value = severityCounts[element.dataset.severityCount];
+      element.textContent = canPublishCounts && value != null ? Number(value).toLocaleString() : '—';
+    });
     const targetKey = counts.map(([, value]) => Number(value || 0)).join(':');
     const animate = canPublishCounts && countUp && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const currentAnimationStillMatches = canPublishCounts && !countUp && statAnimationFrames.size && statAnimationKey === targetKey;
@@ -1163,6 +1213,7 @@
 
   function render({ animateCards = false, animateStats = false } = {}) {
     if (!manifest) return;
+    renderOverviewLatest();
     renderStats({ countUp: animateStats });
     const matches = selectedRecords();
     const completeRange = rangeDays().every((day) => loadedByDay.has(day));
@@ -1194,7 +1245,7 @@
     if (waitingForCompleteRange) {
       button.innerHTML = `<span>${completeRangeLoading ? 'VERIFYING SELECTED DATES…' : 'RETRY FULL DATE RANGE'}</span><small>${loadedByDay.size} of ${rangeDays().length} verified shards loaded</small><b aria-hidden="true">↻</b>`;
     } else if (hasNextCards && visible >= MAX_DOM_RECORDS) {
-      button.innerHTML = `<span>SHOW NEXT 24</span><small>DOM capped at ${MAX_DOM_RECORDS}; use filters or export for the full range</small><b aria-hidden="true">↓</b>`;
+      button.innerHTML = `<span>SHOW NEXT ${PAGE_SIZE}</span><small>DOM capped at ${MAX_DOM_RECORDS}; use filters or export for the full range</small><b aria-hidden="true">↓</b>`;
     } else if (hasNextCards) {
       button.innerHTML = `<span>LOAD MORE</span><small>${countLabel}</small><b aria-hidden="true">↓</b>`;
     } else if (couldLoadMore) {
@@ -1663,14 +1714,14 @@
       if ($('detail-dialog').open) $('detail-dialog').close();
       restorePermalink();
       setDateBounds();
-      routePage(pageFromLocation(), { historyMode: 'none' });
+      const destination = pageFromLocation();
+      routePage(destination, { historyMode: 'none' });
       resetWindow();
       render();
-      const generation = ++searchGeneration;
-      if (requiresCompleteRange()) loadAllSelectedDays(generation).catch(showLoadError);
-      if (pendingCveId) loadAllSelectedDays(generation).then(() => {
-        if (pendingCveId && allRecords.has(pendingCveId)) renderDetail(pendingCveId);
-      }).catch(showLoadError);
+      if (destination !== 'center' && requiresCompleteRange()) {
+        const generation = ++searchGeneration;
+        loadAllSelectedDays(generation).catch(showLoadError);
+      }
     });
     $('severity-filters').addEventListener('click', (event) => {
       const button = event.target.closest('[data-severity]');
@@ -1708,6 +1759,17 @@
       resetWindow();
       render();
       writeUrlState('push');
+    });
+    $('page-size').addEventListener('change', (event) => {
+      const requested = Number(event.target.value);
+      if (![12, 24, 48, 96].includes(requested)) {
+        event.target.value = String(PAGE_SIZE);
+        return;
+      }
+      PAGE_SIZE = requested;
+      visible = PAGE_SIZE;
+      windowStart = 0;
+      render({ animateCards: true });
     });
     $('absolute-zero').addEventListener('click', () => {
       if (!state.absoluteZero) {
@@ -1940,7 +2002,7 @@
         refreshTimestamp();
         setLoaderMessage('Feed ready');
         hideLoader();
-        if (requiresCompleteRange() || pendingCveId) {
+        if (activePage === 'center' || requiresCompleteRange() || pendingCveId) {
           const generation = ++searchGeneration;
           void loadAllSelectedDays(generation).then(() => {
             if (pendingCveId && allRecords.has(pendingCveId)) renderDetail(pendingCveId);

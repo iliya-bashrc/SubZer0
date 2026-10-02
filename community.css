@@ -155,3 +155,36 @@
   .terminal-caret { animation: none; }
   .community-action { transition: none; }
 }
+
+
+/* Community is a single terminal surface; creator links live inside the simulated shell. */
+body[data-active-page="community"] main { padding-bottom: 0; }
+body[data-active-page="community"] .footer { display: none; }
+.page-community {
+  min-height: calc(100vh - var(--nav-height));
+  min-height: calc(100svh - var(--nav-height));
+  padding: clamp(16px, 3.2vh, 34px) clamp(14px, 3.2vw, 44px);
+}
+.community-inner { width: min(100%, 790px); }
+.community-inner > #community-heading { position: absolute; }
+.terminal-frame { width: 100%; }
+@media (max-width: 720px) {
+  .page-community { min-height: calc(100svh - var(--nav-height)); padding: 8px 12px; }
+  .community-inner { width: min(100%, 540px); }
+}
+
+body[data-active-page="community"] main { margin-block: 0; padding-block: 0; }
+
+/* Let the page fill the viewport after the real, wrapping navigation header. */
+body[data-active-page="community"] .shell { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; }
+body[data-active-page="community"] main { flex: 1 1 auto; display: flex; min-height: 0; }
+body[data-active-page="community"] .page-community { flex: 1 1 auto; min-height: 0; }
+
+/* Give the flex sizing a definite vertical viewport, not merely a minimum height. */
+body[data-active-page="community"] .shell { height: 100vh; height: 100svh; min-height: 0; }
+body[data-active-page="community"] main { flex-direction: column; }
+body[data-active-page="community"] .page-community { width: 100%; }
+
+@media (min-width: 721px) {
+  body[data-active-page="community"] .community-actions { margin-top: 24px; padding-top: 20px; }
+}
