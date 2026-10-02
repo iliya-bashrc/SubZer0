@@ -24,18 +24,29 @@ class StaticSiteTests(unittest.TestCase):
     def test_route_document_order_preserves_feed_and_source_information(self):
         overview = HTML.index('id="page-overview"')
         overview_latest = HTML.index('id="overview-latest"')
-        methodology = HTML.index('id="methodology"')
         center = HTML.index('id="page-center"')
+        methodology = HTML.index('id="methodology"')
+        community = HTML.index('id="page-community"')
         masthead = HTML.index('<header class="masthead center-heading"')
         search = HTML.index('<section class="control-panel"')
         feed = HTML.index('<section class="dashboard"')
         workspace = HTML.index('class="post-feed-tools"')
         self.assertLess(overview, overview_latest)
-        self.assertLess(overview_latest, methodology)
-        self.assertLess(methodology, center)
+        self.assertLess(overview_latest, center)
+        self.assertLess(center, methodology)
+        self.assertLess(methodology, community)
         self.assertLess(masthead, search)
         self.assertLess(search, feed)
         self.assertLess(feed, workspace)
+        overview_markup = HTML[overview:center]
+        center_markup = HTML[center:community]
+        self.assertNotIn("overview-data-details", overview_markup)
+        self.assertNotIn("overview-methodology", overview_markup)
+        self.assertNotIn('id="data-sources"', overview_markup)
+        self.assertIn('id="source-list"', center_markup)
+        self.assertIn('class="center-methodology-details"', center_markup)
+        for legacy_selector in (".overview-data-details", ".overview-methodology", ".overview-support", ".overview-signal"):
+            self.assertNotIn(legacy_selector, CSS)
         self.assertIn('id="advanced-filters"', HTML)
         self.assertIn('id="snapshot-time"', HTML)
 
