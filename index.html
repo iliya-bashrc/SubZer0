@@ -44,31 +44,43 @@
             <div class="overview-copy">
               <p class="overview-context">Vulnerability intelligence</p>
               <h1 id="page-title">SubZer0</h1>
-              <p class="overview-lead">Discover, track, and explore security vulnerabilities through source-backed CVE records.</p>
+              <p class="overview-lead">Review CVE records from NVD, GitHub advisories and CISA KEV.</p>
               <ul class="overview-facts">
-                <li>CVSS severity and EPSS probability stay distinct.</li>
-                <li>CISA KEV listings are catalog evidence, not a severity score.</li>
+                <li>CVSS severity and EPSS probability are separate signals.</li>
+                <li>A CISA KEV listing is catalog evidence, not a severity score.</li>
               </ul>
               <button class="overview-action" id="explore-cves" type="button" data-page-link="center">Explore CVEs</button>
             </div>
-            <aside class="overview-snapshot" aria-label="Current feed snapshot summary">
-              <div class="overview-snapshot-heading"><span>Published feed snapshot</span><span class="snapshot-live-dot" aria-hidden="true"></span></div>
-              <p class="overview-total"><strong id="overview-total">—</strong><span>deduplicated CVE records</span></p>
-              <dl class="overview-facts-grid"><div><dt>Window</dt><dd id="overview-window">Waiting for feed data</dd></div><div><dt>CISA KEV</dt><dd id="overview-kev">—</dd></div><div><dt>Updated</dt><dd id="overview-updated">Waiting for feed data</dd></div></dl>
-              <p class="overview-note" id="overview-coverage">Core-source status is reported below. Scheduled collection and Pages delivery can add delay.</p>
-            </aside>
-          </div>
-          <div class="overview-support">
-            <section class="overview-signal" aria-label="How to read the source signals">
-              <h2>Signals, kept separate</h2>
-              <div class="overview-signal-grid"><p><strong>CVSS</strong><span>Severity score; not exploit likelihood.</span></p><p><strong>EPSS</strong><span>Estimated probability of observed exploitation in the next 30 days; missing or stale scores are not zero.</span></p><p><strong>CISA KEV</strong><span>Catalog listing for a known exploited vulnerability.</span></p><p><strong>GitHub search</strong><span>Repository leads are unverified, not proof of exploitation.</span></p></div>
+            <section class="overview-stage" aria-label="Latest source-verified CVE records">
+              <div class="overview-stage-frame">
+                <span class="stage-rule stage-rule-one" aria-hidden="true"></span>
+                <span class="stage-rule stage-rule-two" aria-hidden="true"></span>
+                <div class="overview-stage-cards" id="overview-stage-cards" aria-live="off">
+                  <p class="stage-loading">Loading the newest verified records…</p>
+                </div>
+              </div>
             </section>
-            <section class="side-panel sources-panel" id="data-sources"><div class="side-title"><span class="section-kicker">DATA SOURCES</span><a class="top-link" href="#page-title">Top</a></div><ul class="source-list" id="source-list"><li><i class="source-state-dot warning"></i><span>Loading source status…</span></li></ul><p class="source-footnote">NVD, GitHub advisories, and CISA KEV provide CVE coverage. FIRST EPSS is separate probability enrichment; a missing score is not zero.</p></section>
           </div>
           <section class="overview-latest-section" aria-labelledby="overview-latest-heading">
-            <div class="overview-section-heading"><div><span class="overview-context">SOURCE-VERIFIED FEED</span><h2 id="overview-latest-heading">Latest CVEs</h2></div><span class="overview-latest-caption">Newest records from the latest loaded UTC dates · source links open NVD</span></div>
+            <div class="overview-section-heading">
+              <div><span class="overview-context">SOURCE-VERIFIED FEED</span><h2 id="overview-latest-heading">Latest in this snapshot</h2></div>
+              <p class="overview-latest-caption">Last successful snapshot · <time id="overview-snapshot-time">Waiting for feed data</time></p>
+            </div>
             <ul class="overview-latest-list" id="overview-latest"><li class="overview-latest-empty">Waiting for verified CVE records…</li></ul>
+            <span class="sr-only" id="overview-total">—</span>
           </section>
+          <details class="overview-data-details">
+            <summary>Data sources, freshness and signal definitions</summary>
+            <div class="overview-support">
+              <section class="overview-signal" aria-label="How to read the source signals">
+                <h2>Signals, kept separate</h2>
+                <div class="overview-signal-grid"><p><strong>CVSS</strong><span>Severity score; not exploit likelihood.</span></p><p><strong>EPSS</strong><span>Estimated probability of observed exploitation in the next 30 days. FIRST EPSS; missing and stale scores are not zero.</span></p><p><strong>CISA KEV</strong><span>CISA catalog listing for a known exploited vulnerability. Its membership is independent of CVSS severity.</span></p><p><strong>GitHub search</strong><span>Repository leads are unverified, not proof of exploitation.</span></p></div>
+              </section>
+              <section class="side-panel sources-panel" id="data-sources"><div class="side-title"><span class="section-kicker">DATA SOURCES</span><a class="top-link" href="#page-title">Top</a></div><ul class="source-list" id="source-list"><li><i class="source-state-dot warning"></i><span>Loading source status…</span></li></ul><p class="source-footnote">NVD, GitHub advisories, and CISA KEV provide CVE coverage. FIRST EPSS is separate probability enrichment; a missing score is not zero.</p></section>
+            </div>
+            <p class="overview-note" id="overview-coverage">Core-source status is reported below. Scheduled collection and Pages delivery can add delay.</p>
+            <dl class="overview-archive-metadata"><div><dt>UTC window</dt><dd id="overview-window">Waiting for feed data</dd></div><div><dt>CISA KEV listings</dt><dd id="overview-kev">—</dd></div><div><dt>Snapshot updated</dt><dd id="overview-updated">Waiting for feed data</dd></div></dl>
+          </details>
           <details class="overview-methodology">
             <summary>Scoring, methodology and data limits</summary>
             <section class="methodology-panel" id="methodology" aria-labelledby="methodology-title">
@@ -88,112 +100,77 @@
         </div>
       </section>
       <section class="page page-center" id="page-center" role="tabpanel" aria-labelledby="tab-center" tabindex="-1" hidden>
-      <section class="masthead" aria-labelledby="center-title">
-        <div class="masthead-copy">
-          <p class="eyebrow">VULNERABILITY INTELLIGENCE</p>
-          <h1 id="center-title">CVE center</h1>
-          <p class="masthead-summary">Search the complete source-backed CVE feed, compare distinct risk signals, and follow records to their sources.</p>
-        </div>
-      </section>
-
-      <section class="control-panel" id="search-panel" aria-label="Search and filter CVEs">
-        <div class="control-heading">
-          <div><span class="section-kicker">SEARCH AND FILTER</span><h2>Find vulnerabilities</h2></div>
-          <button class="quiet-button" id="refresh-button" type="button" title="Check for a newer feed snapshot"><span class="refresh-icon" aria-hidden="true">↻</span> Check for updates</button>
-        </div>
-        <div class="filter-grid">
-          <label class="search-box"><span class="control-label">SEARCH ALL SELECTED DATES</span><span class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.8"/><path d="m13 13 4.1 4.1"/></svg><input id="search-input" type="search" placeholder="CVE ID, title, product, version, source…" autocomplete="off" spellcheck="false" aria-label="Search CVE IDs, titles, descriptions, vendors, products, versions, and source names"><kbd aria-hidden="true">/</kbd></span><small>Search matches IDs, titles, descriptions, vendors, products, versions, and source names across every selected date shard.</small></label>
-          <div class="date-box"><span class="control-label">ACTIVITY DATE · UTC</span><div class="date-fields"><label><span>FROM</span><input id="date-from" type="date" aria-label="From date"></label><span class="date-arrow" aria-hidden="true">→</span><label><span>TO</span><input id="date-to" type="date" aria-label="To date"></label><button class="apply-button" id="apply-dates" type="button">APPLY</button></div><div class="quick-ranges" role="group" aria-label="Quick date ranges"><button type="button" data-days="1" aria-pressed="false">24H</button><button type="button" data-days="7" aria-pressed="false">7D</button><button type="button" data-days="14" aria-pressed="false">14D</button><button class="selected" type="button" data-days="30" aria-pressed="true">30D</button></div></div>
-        </div>
-        <div class="filter-row">
-          <div class="severity-filters" id="severity-filters" role="group" aria-label="Filter by CVSS severity">
-            <button class="severity-filter active" type="button" data-severity="all" aria-pressed="true">ALL</button>
-            <button class="severity-filter" type="button" data-severity="critical" aria-pressed="false"><i class="filter-mark mark-critical" aria-hidden="true"></i> CRITICAL</button>
-            <button class="severity-filter" type="button" data-severity="high" aria-pressed="false"><i class="filter-mark mark-high" aria-hidden="true"></i> HIGH</button>
-            <button class="severity-filter" type="button" data-severity="medium" aria-pressed="false"><i class="filter-mark mark-medium" aria-hidden="true"></i> MEDIUM</button>
-            <button class="severity-filter" type="button" data-severity="low" aria-pressed="false"><i class="filter-mark mark-low" aria-hidden="true"></i> LOW</button>
-            <button class="severity-filter" type="button" data-severity="unknown" aria-pressed="false"><i class="filter-mark mark-unknown" aria-hidden="true"></i> NONE / UNRATED</button>
+        <header class="masthead center-heading" aria-labelledby="center-title">
+          <div class="masthead-copy">
+            <p class="eyebrow">SOURCE-VERIFIED · 30-DAY ARCHIVE</p>
+            <h1 id="center-title">CVE center</h1>
+            <p class="masthead-summary">Browse the complete source-backed 30-day feed, newest first. Search and filters narrow the verified records.</p>
           </div>
-        </div>
-      </section>
-
-      <div class="new-notice" id="new-notice" role="status" aria-live="polite" aria-atomic="true" hidden><span id="new-notice-text"></span><button id="view-new" type="button">View updates</button></div>
-
-      <section class="dashboard" id="feed" aria-label="Vulnerability feed and source status">
-        <div class="feed-column">
-          <div class="feed-heading">
-            <div><span class="section-kicker">CVE RECORDS</span><h2>Vulnerability feed <span id="feed-count" class="feed-count">—</span></h2></div>
-            <div class="coverage-note" id="coverage-note">Loading feed coverage…</div>
+          <div class="center-snapshot-summary" aria-label="Snapshot totals">
+            <p><strong id="stat-total">—</strong><span class="stat-foot">Deduplicated records</span><small id="stat-window-label">/ 30-DAY WINDOW</small></p>
+            <p><strong id="stat-kev">—</strong><span>CISA KEV listings</span></p>
           </div>
-          <p class="keyboard-hint">Keyboard: <kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous visible record · <kbd>c</kbd> copy the focused CVE ID</p>
-          <div id="feed-status" class="feed-status" role="status" aria-live="polite">Loading feed data…</div>
-          <div id="feed-list" class="feed-list" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div></div>
-          <div id="empty-state" class="empty-state" hidden><strong>No vulnerabilities match these filters.</strong><p>Change the date range or clear the search and severity filters.</p></div>
-          <button class="load-button" id="load-more" type="button" aria-controls="feed-list" hidden><span>LOAD MORE</span><small></small><b aria-hidden="true">↓</b></button>
-        </div>
+        </header>
 
-        <aside class="side-column" aria-label="Feed metadata and source status">
-          <section class="stats" aria-label="Feed totals">
-            <article class="stat-card stat-total"><span class="stat-label">CVEs <small id="stat-window-label">/ 30-DAY WINDOW</small></span><strong class="stat-value" id="stat-total">—</strong><span class="stat-foot">Deduplicated records</span></article>
-            <article class="stat-card stat-critical"><span class="stat-label">CRITICAL <small>CVSS</small></span><strong class="stat-value" id="stat-critical">—</strong><span class="stat-foot">CVSS 9.0–10.0</span></article>
-            <article class="stat-card stat-high"><span class="stat-label">HIGH <small>CVSS</small></span><strong class="stat-value" id="stat-high">—</strong><span class="stat-foot">CVSS 7.0–8.9</span></article>
-            <article class="stat-card stat-kev"><span class="stat-label">CISA KEV</span><strong class="stat-value" id="stat-kev">—</strong><span class="stat-foot">Known-exploited catalog listings</span></article>
-          </section>
-          <section class="signal-key" aria-label="Data field definitions">
-            <article><strong>CVSS</strong><span>Severity score; not exploit likelihood.</span></article>
-            <article><strong>EPSS</strong><span>Estimated probability of observed exploitation in the next 30 days.</span></article>
-            <article><strong>CISA KEV</strong><span>CISA catalog listing for a known exploited vulnerability.</span></article>
-            <article><strong>GitHub search</strong><span>Repository results are unverified and are not proof of exploitation.</span></article>
-          </section>
-          <div class="snapshot-panel" aria-label="Feed freshness">
-            <div class="snapshot-overline"><i aria-hidden="true"></i><span>FEED SNAPSHOT</span></div>
-            <strong id="snapshot-time">Waiting for feed data</strong>
-            <span id="snapshot-meta" class="snapshot-meta">The browser checks for updates every 2 minutes.</span>
-            <div class="snapshot-divider"></div>
-            <div class="epss-row"><span class="panel-label">FIRST EPSS SCORE SET</span><strong id="epss-freshness" class="epss-freshness">Waiting for EPSS metadata</strong></div>
+        <section class="center-freshness" aria-label="Snapshot and EPSS freshness">
+          <div class="center-snapshot-time"><span class="section-kicker">LAST SUCCESSFUL SNAPSHOT</span><strong id="snapshot-time">Waiting for feed data</strong><small id="snapshot-meta">The browser checks the published snapshot every 2 minutes.</small></div>
+          <div class="epss-row"><span class="panel-label">FIRST EPSS · FRESHNESS</span><strong id="epss-freshness" class="epss-freshness">Waiting for EPSS metadata</strong><small>Stale or unverified scores are excluded from composite priority.</small></div>
+        </section>
+
+        <section class="severity-panel" aria-label="Filter by CVSS severity">
+          <div class="severity-filters" id="severity-filters" role="group" aria-label="Filter by CVSS severity" aria-describedby="severity-note">
+            <button class="severity-filter active" type="button" data-severity="all" aria-pressed="true"><span>All records</span><strong data-severity-count="all">—</strong></button>
+            <button class="severity-filter" type="button" data-severity="critical" aria-pressed="false"><span><i class="filter-mark mark-critical" aria-hidden="true"></i>Critical</span><strong id="stat-critical" data-severity-count="critical">—</strong></button>
+            <button class="severity-filter" type="button" data-severity="high" aria-pressed="false"><span><i class="filter-mark mark-high" aria-hidden="true"></i>High</span><strong id="stat-high" data-severity-count="high">—</strong></button>
+            <button class="severity-filter" type="button" data-severity="medium" aria-pressed="false"><span><i class="filter-mark mark-medium" aria-hidden="true"></i>Medium</span><strong data-severity-count="medium">—</strong></button>
+            <button class="severity-filter" type="button" data-severity="low" aria-pressed="false"><span><i class="filter-mark mark-low" aria-hidden="true"></i>Low</span><strong data-severity-count="low">—</strong></button>
+            <button class="severity-filter" type="button" data-severity="unknown" aria-pressed="false"><span><i class="filter-mark mark-unknown" aria-hidden="true"></i>Unrated</span><strong data-severity-count="unknown">—</strong></button>
           </div>
-          <section class="side-panel window-panel"><div class="side-title"><span class="section-kicker">DATE COVERAGE</span><span class="source-state" id="source-state">PENDING</span></div><div class="window-dates"><span>FROM</span><strong id="window-start">—</strong><span>THROUGH</span><strong id="window-end">—</strong></div><div class="window-caption" id="window-caption">Date-sharded records load as needed.</div><div class="severity-meter" role="img" aria-label="CVSS severity breakdown"><span class="meter-critical" id="meter-critical"></span><span class="meter-high" id="meter-high"></span><span class="meter-medium" id="meter-medium"></span><span class="meter-low" id="meter-low"></span><span class="meter-neutral" id="meter-neutral"></span></div><div class="meter-legend"><span><i class="legend-critical"></i>CRITICAL</span><span><i class="legend-high"></i>HIGH</span><span><i class="legend-medium"></i>MEDIUM</span><span><i class="legend-low"></i>LOW</span><span><i class="legend-neutral"></i>NONE / UNRATED</span></div></section>
+          <p class="severity-note" id="severity-note">Unrated combines source values None and Unknown for filtering; each record retains its original CVSS state.</p>
+        </section>
 
-          <section class="side-panel changes-panel" id="observed-changes"><div class="side-title"><span class="section-kicker">RETAINED SNAPSHOT DIFFS</span><span class="source-state" id="changes-coverage">LOADING</span></div><p class="changes-caption" id="changes-caption">Checking recorded changes from published snapshots…</p><ul class="recent-changes-list" id="recent-changes-list"><li>Loading retained history…</li></ul></section>
-          <section class="side-panel latency-panel"><span class="section-kicker">UPDATE SCHEDULE</span><p>Source collection runs hourly. This page checks its published snapshot every <strong>2 minutes</strong>. Upstream, Actions, and Pages processing add delay; this is scheduled polling, not a push service. EPSS scores are updated daily.</p></section>
-        </aside>
-      </section>
-
-      <div class="post-feed-tools">
-        <details class="advanced-filters" id="advanced-filters">
-          <summary>Vendor, product &amp; display filters</summary>
-          <div class="feed-tools" aria-label="Additional feed filters and display options">
-            <label class="sort-control"><span>SORT</span><select id="sort-select" aria-label="Sort vulnerability records"><option value="new">Newest first</option><option value="hot">Highest severity first</option><option value="priority">Composite priority first</option><option value="old">Oldest first</option></select></label>
-            <label class="facet-control"><span>EXACT VENDOR</span><input id="vendor-filter" type="search" list="vendor-suggestions" placeholder="All vendors" autocomplete="off" aria-label="Filter by exact sourced vendor"><datalist id="vendor-suggestions"></datalist></label>
-            <label class="facet-control"><span>EXACT PRODUCT</span><input id="product-filter" type="search" list="product-suggestions" placeholder="All products" autocomplete="off" aria-label="Filter by exact sourced product"><datalist id="product-suggestions"></datalist></label>
-            <label class="group-control"><span>GROUP RESULTS</span><select id="group-select" aria-label="Group results by sourced vendor or product"><option value="none">No grouping</option><option value="vendor">Vendor</option><option value="product">Product</option></select></label>
-            <button class="mode-button" id="absolute-zero" type="button" aria-pressed="false">Absolute Zero <small>Critical + KEV</small></button>
-            <button class="mode-button" id="compact-toggle" type="button" aria-pressed="false">Compact cards</button>
+        <section class="control-panel" id="search-panel" aria-label="Search and filter CVEs">
+          <div class="control-heading">
+            <div><span class="section-kicker">SEARCH THE COMPLETE SELECTED RANGE</span><h2>Search records when useful</h2></div>
+            <button class="quiet-button" id="refresh-button" type="button" title="Check for a newer feed snapshot"><span class="refresh-icon" aria-hidden="true">↻</span> Check for updates</button>
           </div>
-          <p class="filter-provenance-note">Combined vendor + product filters match the same sourced pair. Grouped CVEs appear once, under one source-priority affected pair.</p>
-        </details>
-
-        <details class="workspace-tools" id="workspace-tools">
-        <summary>Saved views, watchlist &amp; export</summary>
-        <div class="workspace-tools-body">
-          <div class="utility-row" role="group" aria-label="Saved views and feed exports">
-            <label class="saved-view-name"><span>VIEW NAME</span><input id="saved-view-name" type="text" maxlength="40" placeholder="Name this view"></label>
-            <button class="utility-button" id="save-view" type="button">Save view</button>
-            <label class="saved-view-select"><span>SAVED VIEWS</span><select id="saved-view-select" aria-label="Choose a saved view"><option value="">No saved view selected</option></select></label>
-            <button class="utility-button" id="apply-view" type="button" disabled>Apply</button>
-            <button class="utility-button" id="delete-view" type="button" disabled>Delete</button>
-            <button class="utility-button" id="copy-permalink" type="button">Copy share link</button>
-            <button class="utility-button" id="export-json" type="button">Export JSON</button>
-            <button class="utility-button" id="export-csv" type="button">Export CSV</button>
+          <div class="filter-grid">
+            <label class="search-box"><span class="control-label">CVE ID, PRODUCT OR SUMMARY</span><span class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.8"/><path d="m13 13 4.1 4.1"/></svg><input id="search-input" type="search" placeholder="CVE ID, product, or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE IDs, titles, descriptions, vendors, products, versions, and source names"><kbd aria-hidden="true">/</kbd></span><small>Search covers all selected, integrity-verified date shards.</small></label>
+            <div class="date-box"><span class="control-label">ACTIVITY DATE · UTC</span><div class="date-fields"><label><span>FROM</span><input id="date-from" type="date" aria-label="From date"></label><span class="date-arrow" aria-hidden="true">→</span><label><span>TO</span><input id="date-to" type="date" aria-label="To date"></label><button class="apply-button" id="apply-dates" type="button">APPLY</button></div><div class="quick-ranges" role="group" aria-label="Quick date ranges"><button type="button" data-days="1" aria-pressed="false">24H</button><button type="button" data-days="7" aria-pressed="false">7D</button><button type="button" data-days="14" aria-pressed="false">14D</button><button class="selected" type="button" data-days="30" aria-pressed="true">30D</button></div></div>
           </div>
-          <p class="privacy-note">Saved views and watchlists stay in this browser. Share links include the current search and public filters; saved views and watchlists stay in this browser.</p>
-          <div class="watchlist-box"><div class="watchlist-heading"><strong>Local watchlist</strong><span>Vendor / product pairs from sourced records</span></div><ul id="watchlist-list" class="watchlist-list"></ul><p id="watchlist-empty" class="watchlist-empty">No watched products yet. Add one from a vulnerability’s details.</p></div>
-          <p class="tool-status" id="tool-status" role="status" aria-live="polite" aria-atomic="true"></p>
-        </div>
-        </details>
-      </div>
+        </section>
 
+        <div class="new-notice" id="new-notice" role="status" aria-live="polite" aria-atomic="true" hidden><span id="new-notice-text"></span><button id="view-new" type="button">View updates</button></div>
 
+        <section class="dashboard" id="feed" aria-label="Vulnerability feed">
+          <div class="feed-column">
+            <div class="feed-heading"><div><span class="section-kicker">CVE RECORDS</span><h2>30-day vulnerability feed <span id="feed-count" class="feed-count">—</span></h2></div><div class="coverage-note" id="coverage-note">Loading feed coverage…</div></div>
+            <p class="keyboard-hint">Keyboard: <kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous visible record · <kbd>c</kbd> copy the focused CVE ID</p>
+            <div id="feed-status" class="feed-status" role="status" aria-live="polite">Loading feed data…</div>
+            <div id="feed-list" class="feed-list" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div></div>
+            <div id="empty-state" class="empty-state" hidden><strong>No vulnerabilities match these filters.</strong><p>Change the date range or clear the search and severity filters.</p></div>
+            <button class="load-button" id="load-more" type="button" aria-controls="feed-list" hidden><span>LOAD MORE</span><small></small><b aria-hidden="true">↓</b></button>
+          </div>
+        </section>
+
+        <section class="center-research-details" id="center-research-details" aria-label="Research tools and data notes">
+          <h2>Research tools and data notes</h2>
+          <div class="center-support-grid">
+            <details class="center-source-details">
+              <summary>Coverage and source notes</summary>
+              <aside class="side-column" aria-label="Feed metadata and signal definitions">
+              <section class="signal-key" aria-label="Data field definitions"><article><strong>CVSS</strong><span>Severity score; not exploit likelihood.</span></article><article><strong>EPSS</strong><span>Estimated probability of observed exploitation in the next 30 days. FIRST EPSS; missing and stale scores are not zero.</span></article><article><strong>CISA KEV</strong><span>CISA catalog listing for a known exploited vulnerability. Its membership is independent of CVSS severity.</span></article><article><strong>GitHub search</strong><span>Repository results are unverified leads, not proof of exploitation.</span></article></section>
+              <section class="side-panel window-panel"><div class="side-title"><span class="section-kicker">DATE COVERAGE</span><span class="source-state" id="source-state">PENDING</span></div><div class="window-dates"><span>FROM</span><strong id="window-start">—</strong><span>THROUGH</span><strong id="window-end">—</strong></div><div class="window-caption" id="window-caption">Date-sharded records load as needed.</div><div class="severity-meter" role="img" aria-label="CVSS severity breakdown"><span class="meter-critical" id="meter-critical"></span><span class="meter-high" id="meter-high"></span><span class="meter-medium" id="meter-medium"></span><span class="meter-low" id="meter-low"></span><span class="meter-neutral" id="meter-neutral"></span></div><div class="meter-legend"><span><i class="legend-critical"></i>CRITICAL</span><span><i class="legend-high"></i>HIGH</span><span><i class="legend-medium"></i>MEDIUM</span><span><i class="legend-low"></i>LOW</span><span><i class="legend-neutral"></i>NONE / UNRATED</span></div></section>
+              <section class="side-panel changes-panel" id="observed-changes"><div class="side-title"><span class="section-kicker">RETAINED SNAPSHOT DIFFS</span><span class="source-state" id="changes-coverage">LOADING</span></div><p class="changes-caption" id="changes-caption">Checking recorded changes from published snapshots…</p><ul class="recent-changes-list" id="recent-changes-list"><li>Loading retained history…</li></ul></section>
+              <section class="side-panel latency-panel"><span class="section-kicker">UPDATE SCHEDULE</span><p>Source collection runs hourly. This page checks the published snapshot every <strong>2 minutes</strong>. Upstream, Actions, and Pages processing add delay; this is scheduled polling, not a push service. EPSS scores are updated daily.</p></section>
+              </aside>
+            </details>
+            <div class="post-feed-tools">
+              <details class="advanced-filters" id="advanced-filters"><summary>Vendor, product &amp; display filters</summary><div class="feed-tools" aria-label="Additional feed filters and display options"><label class="sort-control"><span>SORT</span><select id="sort-select" aria-label="Sort vulnerability records"><option value="new">Newest first</option><option value="hot">Highest severity first</option><option value="priority">Composite priority first</option><option value="old">Oldest first</option></select></label><label class="facet-control"><span>EXACT VENDOR</span><input id="vendor-filter" type="search" list="vendor-suggestions" placeholder="All vendors" autocomplete="off" aria-label="Filter by exact sourced vendor"><datalist id="vendor-suggestions"></datalist></label><label class="facet-control"><span>EXACT PRODUCT</span><input id="product-filter" type="search" list="product-suggestions" placeholder="All products" autocomplete="off" aria-label="Filter by exact sourced product"><datalist id="product-suggestions"></datalist></label><label class="group-control"><span>GROUP RESULTS</span><select id="group-select" aria-label="Group results by sourced vendor or product"><option value="none">No grouping</option><option value="vendor">Vendor</option><option value="product">Product</option></select></label><button class="mode-button" id="absolute-zero" type="button" aria-pressed="false">Absolute Zero <small>Critical + KEV</small></button><button class="mode-button" id="compact-toggle" type="button" aria-pressed="false">Compact cards</button></div><p class="filter-provenance-note">Combined vendor + product filters match the same sourced pair. Grouped CVEs appear once, under one source-priority affected pair.</p></details>
+              <details class="workspace-tools" id="workspace-tools"><summary>Saved views, watchlist &amp; export</summary><div class="workspace-tools-body"><div class="utility-row" role="group" aria-label="Saved views and feed exports"><label class="saved-view-name"><span>VIEW NAME</span><input id="saved-view-name" type="text" maxlength="40" placeholder="Name this view"></label><button class="utility-button" id="save-view" type="button">Save view</button><label class="saved-view-select"><span>SAVED VIEWS</span><select id="saved-view-select" aria-label="Choose a saved view"><option value="">No saved view selected</option></select></label><button class="utility-button" id="apply-view" type="button" disabled>Apply</button><button class="utility-button" id="delete-view" type="button" disabled>Delete</button><button class="utility-button" id="copy-permalink" type="button">Copy share link</button><button class="utility-button" id="export-json" type="button">Export JSON</button><button class="utility-button" id="export-csv" type="button">Export CSV</button></div><p class="privacy-note">Saved views and watchlists stay in this browser. Share links include the current search and public filters.</p><div class="watchlist-box"><div class="watchlist-heading"><strong>Local watchlist</strong><span>Vendor / product pairs from sourced records</span></div><ul id="watchlist-list" class="watchlist-list"></ul><p id="watchlist-empty" class="watchlist-empty">No watched products yet. Add one from a vulnerability’s details.</p></div><p class="tool-status" id="tool-status" role="status" aria-live="polite" aria-atomic="true"></p></div></details>
+            </div>
+          </div>
+        </section>
       </section>
       <section class="page page-community" id="page-community" role="tabpanel" aria-labelledby="tab-community" tabindex="-1" hidden>
         <div class="community-inner">

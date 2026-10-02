@@ -16,12 +16,17 @@ class StaticSiteTests(unittest.TestCase):
         self.assertNotRegex(HTML + CSS + JS + README, re.compile(r"ice\s*[×x/]\s*ember|frost signal|\barena\b|\bmatchup\b", re.I))
         self.assertNotIn("SUBZER0", HTML + CSS + JS + README)
 
+    def test_accessible_hidden_labels_do_not_leak_into_the_visual_layout(self):
+        self.assertIn(".sr-only { position: absolute; width: 1px; height: 1px;", CSS)
+        self.assertIn("clip: rect(0, 0, 0, 0);", CSS)
+        self.assertIn(".skip-link { position: fixed;", CSS)
+
     def test_route_document_order_preserves_feed_and_source_information(self):
         overview = HTML.index('id="page-overview"')
         overview_latest = HTML.index('id="overview-latest"')
         methodology = HTML.index('id="methodology"')
         center = HTML.index('id="page-center"')
-        masthead = HTML.index('<section class="masthead"')
+        masthead = HTML.index('<header class="masthead center-heading"')
         search = HTML.index('<section class="control-panel"')
         feed = HTML.index('<section class="dashboard"')
         workspace = HTML.index('class="post-feed-tools"')
@@ -105,12 +110,14 @@ class StaticSiteTests(unittest.TestCase):
         self.assertIn(".priority-chip { width: fit-content; max-width: 100%;", CSS)
         self.assertIn(".priority-chip > span { color: var(--text-strong);", CSS)
 
-    def test_cards_use_subtle_pointer_hover_without_decorative_severity_motion(self):
+    def test_cards_use_subtle_cinder_veil_motion_and_respect_reduced_motion(self):
         self.assertIn("@media (hover: hover) and (pointer: fine)", CSS)
         self.assertIn(".cve-card:hover { border-color: color-mix(in srgb, var(--card-accent) 48%, var(--line));", CSS)
         self.assertNotIn(".cve-card:hover { transform:", CSS)
         self.assertIn(".cve-card.kev-listed:hover { border-color: var(--low); }", CSS)
-        self.assertNotIn("criticalEmber", CSS)
+        self.assertIn("@keyframes cinder-veil", CSS)
+        self.assertIn(".page-center .cve-card::before", CSS)
+        self.assertRegex(CSS, re.compile(r"@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.page-center \.cve-card::before \{ animation: none;"))
         self.assertIn("body.critical-arrival .stat-critical { animation: criticalArrival 1.7s ease-out both; }", CSS)
         self.assertIn(".loader-mark, .loader-readout i, .skeleton, .quiet-button.is-checking .refresh-icon, .cve-card.filter-arrive { animation: none; }", CSS)
 

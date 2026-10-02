@@ -124,6 +124,30 @@ class BrowserRegressionTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_mobile_center_heading_retains_copy_and_stacked_counters(self):
+        context, page = self.open_page(360, 800, True)
+        try:
+            metrics = page.evaluate("""() => {
+              const heading = document.querySelector('.page-center .masthead.center-heading');
+              const summary = document.querySelector('.page-center .masthead-summary');
+              const totals = document.querySelector('.page-center .center-snapshot-summary');
+              const card = document.querySelector('#feed-list .cve-card');
+              return {
+                columns: getComputedStyle(heading).gridTemplateColumns.trim().split(/\\s+/).length,
+                summary: summary.getBoundingClientRect().toJSON(),
+                totals: totals.getBoundingClientRect().toJSON(),
+                cardTop: card.getBoundingClientRect().top,
+                pageWidth: document.documentElement.scrollWidth
+              };
+            }""")
+            self.assertEqual(metrics["columns"], 1, metrics)
+            self.assertGreater(metrics["summary"]["height"], 12, metrics)
+            self.assertGreaterEqual(metrics["totals"]["top"], metrics["summary"]["bottom"], metrics)
+            self.assertLess(metrics["cardTop"], 700, metrics)
+            self.assertLessEqual(metrics["pageWidth"], 360, metrics)
+        finally:
+            context.close()
+
     def test_mobile_filter_controls_are_readable_and_tappable(self):
         for width, height in ((320, 740), (360, 800), (390, 844)):
             with self.subTest(width=width):
@@ -362,17 +386,18 @@ class BrowserRegressionTests(unittest.TestCase):
         try:
             page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
+            page.wait_for_function("window.__integrityShardAttempts() >= 1", timeout=30000)
+            page.wait_for_function(
+                "document.querySelector('#feed-status')?.textContent.includes('Some feed data could not be loaded or verified')",
+                timeout=30000,
+            )
             first_id = page.locator("#feed-list .cve-card").first.get_attribute("data-cve-id")
             page.locator("#search-input").fill(first_id)
             page.wait_for_function("document.querySelector('#feed-status')?.textContent.includes('Some feed data could not be loaded or verified')", timeout=30000)
-            self.assertEqual(page.locator("#feed-count").inner_text(), "—")
-            self.assertEqual(page.locator("#feed-list .cve-card").count(), 0)
-            self.assertTrue(page.locator("#feed-list").get_attribute("aria-busy") == "true")
-
-            page.locator("#load-more").click()
             page.wait_for_function("document.querySelector('#feed-status')?.textContent.includes('SHA-256 mismatch')", timeout=30000)
             self.assertEqual(page.locator("#feed-count").inner_text(), "—")
             self.assertEqual(page.locator("#feed-list .cve-card").count(), 0)
+            self.assertTrue(page.locator("#feed-list").get_attribute("aria-busy") == "true")
 
             page.locator("#load-more").click()
             page.wait_for_function("document.querySelector('#feed-status')?.textContent.startsWith('Search covers all')", timeout=60000)
