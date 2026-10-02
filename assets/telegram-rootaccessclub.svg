@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="286" height="58" viewBox="0 0 286 58" role="img" aria-labelledby="title desc">
+  <title id="title">Join @RootAccessClub on Telegram</title>
+  <desc id="desc">Telegram channel button for RootAccessClub.</desc>
+  <rect x="1" y="1" width="284" height="56" rx="8" fill="#10171b" stroke="#3b4a51" stroke-width="1.5"/>
+  <path d="M2 10v38" stroke="#69bddb" stroke-width="2"/>
+  <circle cx="31" cy="29" r="17" fill="#69bddb"/>
+  <path d="m20.8 28.1 18.8-7.3c.9-.3 1.6.2 1.3 1.5l-3.2 15.1c-.2 1.1-.9 1.4-1.8.8l-4.8-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.4-4.9 9-8.1c.4-.4-.1-.6-.6-.2l-11.1 7-4.8-1.5c-1-.3-1-1 .1-1.6Z" fill="#081116"/>
+  <text x="58" y="35" fill="#edf2f3" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">@RootAccessClub</text>
+  <path d="m258 24 6 5-6 5" fill="none" stroke="#a8dff3" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/>
+</svg>

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">SubZer0 — CVE intelligence and vulnerability research</title>
+  <desc id="desc">A cold-cyan geometric SubZer0 mark on a deep graphite field, with the maintainers @RootAccessClub and @BugCod3 and a note that the bundled data is a static snapshot.</desc>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#121a1e"/>
+      <stop offset="0.52" stop-color="#0b1013"/>
+      <stop offset="1" stop-color="#11191d"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c7edf8"/>
+      <stop offset="1" stop-color="#69bddb"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="420" rx="14" fill="#080c0f"/>
+  <rect x="1" y="1" width="1198" height="418" rx="13" fill="url(#surface)" stroke="#34434a" stroke-width="2"/>
+  <path d="M32 42H1168M32 378H1168" stroke="#29363c" stroke-width="1"/>
+  <path d="M32 42h112" stroke="#69bddb" stroke-width="2"/>
+
+  <g fill="none" stroke="url(#mark)" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M112 91 170 149 112 207 54 149 112 91Z" stroke-width="2.4"/>
+    <path d="M112 112v74M79 130l66 38M145 130l-66 38" stroke-width="2"/>
+    <path d="M112 78v10M45 149h9M170 149h9M112 208v10" stroke-width="2.2"/>
+  </g>
+  <circle cx="112" cy="149" r="3.6" fill="#edf2f3"/>
+
+  <text x="208" y="112" fill="#9aa8ae" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="600" letter-spacing="3.1">INDEPENDENT SECURITY RESEARCH PREVIEW</text>
+  <text x="202" y="196" fill="#edf2f3" font-family="Segoe UI, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-4">SubZer0</text>
+  <text x="207" y="245" fill="#c4cdd1" font-family="Segoe UI, Arial, sans-serif" font-size="25" font-weight="400" letter-spacing="0.1">CVE intelligence · vulnerability research</text>
+  <path d="M208 276h350" stroke="#27343a" stroke-width="1"/>
+  <text x="208" y="311" fill="#9aa8ae" font-family="Segoe UI, Arial, sans-serif" font-size="16" letter-spacing="0.45">NVD  ·  GITHUB SECURITY ADVISORIES  ·  CISA KEV</text>
+
+  <path d="M738 82v254" stroke="#35434a" stroke-width="1"/>
+  <path d="M738 82v42" stroke="#69bddb" stroke-width="2"/>
+  <text x="785" y="111" fill="#9aa8ae" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="2.7">MAINTAINERS</text>
+  <circle cx="792" cy="164" r="3.2" fill="#69bddb"/>
+  <text x="810" y="172" fill="#edf2f3" font-family="Segoe UI, Arial, sans-serif" font-size="38" font-weight="550" letter-spacing="0.1">@RootAccessClub</text>
+  <circle cx="792" cy="222" r="3.2" fill="#69bddb"/>
+  <text x="810" y="230" fill="#edf2f3" font-family="Segoe UI, Arial, sans-serif" font-size="38" font-weight="550" letter-spacing="0.1">@BugCod3</text>
+  <text x="785" y="300" fill="#9aa8ae" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="500" letter-spacing="1.5">CAPTURED DATA · NOT A LIVE FEED</text>
+
+  <g transform="translate(1040 338)">
+    <rect x="0" y="0" width="7" height="7" rx="1" fill="#ef4444"/>
+    <rect x="13" y="0" width="7" height="7" rx="1" fill="#f97316"/>
+    <rect x="26" y="0" width="7" height="7" rx="1" fill="#eab308"/>
+    <rect x="39" y="0" width="7" height="7" rx="1" fill="#38bdf8"/>
+  </g>
+</svg>
