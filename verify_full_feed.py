@@ -55,12 +55,11 @@ def verify_inherited_scope() -> None:
     preview_html = (ROOT / 'index.html').read_text(encoding='utf-8')
     assert section(source_html, '      <nav class="page-nav"', '      </nav>') == section(preview_html, '      <nav class="page-nav"', '      </nav>')
     assert section(source_html, '          <div class="overview-copy">', '          <div class="ui-stage"') == section(preview_html, '          <div class="overview-copy">', '          <div class="ui-stage"')
-    assert section(source_html, '    <section class="page page-community"', '  </main>') == section(preview_html, '    <section class="page page-community"', '  </main>')
     strip_latest_rules = lambda css: '\n'.join(line for line in css.splitlines() if not line.startswith(('.latest-id {', '.latest-id:hover {')))
     assert strip_latest_rules((BASE_PREVIEW / 'styles.css').read_text(encoding='utf-8')) == strip_latest_rules((ROOT / 'styles.css').read_text(encoding='utf-8'))
     assert (BASE_PREVIEW / 'severity-effects.css').read_bytes() == (ROOT / 'severity-effects.css').read_bytes()
     assert not any(token in (ROOT / 'feed.css').read_text(encoding='utf-8') for token in ('.community-', '.terminal-', '.telegram-cta'))
-    print('PASS: navigation, Overview purpose/copy/CTA, Community markup, black-metal base and approved severity effects are retained; only snapshot data/link behavior is refined.')
+    print('PASS: navigation, Overview purpose/copy/CTA, black-metal base and approved severity effects are retained; Community is verified by its focused suite.')
 
 
 def track(page, issues: dict, local_origin: str) -> None:
@@ -359,7 +358,8 @@ def main() -> None:
             expect(mobile.locator('#detail-heading')).to_have_text(expected_latest_ids[0], timeout=90000)
             mobile.locator('#back-to-results').tap()
             mobile.locator('#tab-community').tap()
-            expect(mobile.locator('#telegram-cta')).to_be_visible()
+            expect(mobile.locator('#join-bugcod3')).to_be_visible()
+            expect(mobile.locator('#join-rootaccessclub')).to_be_visible()
             mobile.evaluate('document.documentElement.scrollTop=0; document.body.scrollTop=0; window.scrollTo(0,0)')
             mobile.screenshot(path=str(SCREENSHOTS / '12-android-360-community.png'), full_page=False)
             mobile.close()
@@ -407,40 +407,30 @@ def main() -> None:
             xss.close()
             print('PASS: source-controlled title/description/reference text renders literally; script/HTML payloads do not create nodes or execute, and javascript: links are rejected.')
 
-            # Preserve and exercise the approved Community page without navigating off-device.
+            # Smoke-test the updated Community page; the dedicated suite covers its full interactions.
             community = browser.new_page(viewport={'width': 1440, 'height': 1000})
             track(community, issues, origin)
-            telegram_requests = []
-
-            def fulfill_telegram(route):
-                telegram_requests.append(route.request.url)
-                route.fulfill(status=200, content_type='text/html', body='<title>Local interception</title><p>Navigation intercepted.</p>')
-
-            community.route('https://t.me/RootAccessClub', fulfill_telegram)
             community.goto(f'{origin}/?page=community', wait_until='load')
-            expect(community.locator('.terminal-frame')).to_be_visible()
-            expect(community.locator('#telegram-cta')).to_have_text('Join the Telegram channel')
-            assert community.locator('.community-footer').inner_text() == '© RootAccessClub'
+            expect(community.locator('#page-community')).to_be_visible()
+            community.locator('#idle-prompt:not([hidden])').wait_for(timeout=5000)
+            expect(community.locator('#terminal-info')).to_be_visible()
+            expect(community.locator('#join-bugcod3')).to_have_text('Join BugCod3')
+            expect(community.locator('#join-rootaccessclub')).to_have_text('Join RootAccessClub')
+            assert '@BugCod3' in community.locator('#terminal-info').inner_text()
+            assert '@RootAccessClub' in community.locator('#terminal-info').inner_text()
             community.screenshot(path=str(SCREENSHOTS / '04-community-desktop.png'), full_page=False)
-            community.locator('#telegram-cta').focus()
-            community.keyboard.press('Enter')
-            expect(community.locator('#terminal-command')).to_have_text('xdg-open "https://www.t.me/RootAccessClub"')
-            expect(community.locator('#terminal-status')).to_have_text('Opening Telegram channel…')
-            community.screenshot(path=str(SCREENSHOTS / '04-community-opening-desktop.png'), full_page=False)
-            expect(community).to_have_url('https://t.me/RootAccessClub', timeout=8000)
-            assert telegram_requests == ['https://t.me/RootAccessClub']
-            print("PASS: terminal Community keyboard command, status message, footer and single canonical navigation remain intact (navigation intercepted locally).")
+            community.close()
+            print('PASS: Community page routes, renders the staged ./info output and exposes both requested actions.')
 
             reduced = browser.new_page(viewport={'width': 1200, 'height': 800}, reduced_motion='reduce')
             track(reduced, issues, origin)
-            reduced.route('https://t.me/RootAccessClub', fulfill_telegram)
             reduced.goto(f'{origin}/?page=community', wait_until='load')
-            reduced.locator('#telegram-cta').focus()
-            reduced.keyboard.press('Enter')
-            expect(reduced.locator('#terminal-command')).to_have_text('xdg-open "https://www.t.me/RootAccessClub"')
-            expect(reduced).to_have_url('https://t.me/RootAccessClub', timeout=4000)
+            expect(reduced.locator('#info-command')).to_have_text('./info')
+            expect(reduced.locator('#terminal-info')).to_be_visible()
+            expect(reduced.locator('#idle-prompt')).to_be_visible()
+            assert reduced.locator('#idle-prompt .terminal-caret').evaluate('(node) => getComputedStyle(node).animationName') == 'none'
             reduced.close()
-            print('PASS: Community reduced-motion path skips character typing while retaining the action and announcement.')
+            print('PASS: Community reduced-motion entry immediately shows completed output with no caret animation.')
 
             # Mobile-size detail and each responsive breakpoint are checked without external requests.
             detail_mobile = browser.new_page(viewport={'width': 360, 'height': 800}, device_scale_factor=2, is_mobile=True, has_touch=True)

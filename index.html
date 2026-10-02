@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="severity-effects.css">
   <link rel="stylesheet" href="feed.css">
+  <link rel="stylesheet" href="community.css">
 </head>
 <body data-skin="metal">
   <a class="skip-link" href="#page-overview">Skip to content</a>
@@ -198,30 +199,55 @@
     </section>
 
     <section class="page page-community" id="page-community" role="tabpanel" aria-labelledby="tab-community" tabindex="-1" hidden>
-      <div class="community-wrap">
+      <div class="community-inner">
         <h1 id="community-heading" class="sr-only">Community</h1>
-        <div class="community-inner">
-          <div class="terminal-frame" role="group" aria-labelledby="terminal-title">
-            <div class="terminal-bar">
-              <div class="terminal-window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
-              <p class="terminal-window-title" id="terminal-title">visitor@subzero: ~</p>
-              <span class="terminal-bar-end" aria-hidden="true"></span>
+        <section class="terminal-frame" role="group" aria-labelledby="terminal-title">
+          <header class="terminal-bar">
+            <div class="terminal-window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h2 class="terminal-window-title" id="terminal-title">user@subzero: ~/SubZer0</h2>
+            <span class="terminal-shell-tag" aria-hidden="true">zsh</span>
+          </header>
+          <div class="terminal-screen" aria-live="off">
+            <pre class="terminal-banner" role="img" aria-label="SubZer0 rendered in ANSI Shadow">███████╗██╗   ██╗██████╗ ███████╗███████╗██████╗  ██████╗&#32;
+██╔════╝██║   ██║██╔══██╗╚══███╔╝██╔════╝██╔══██╗██╔═████╗
+███████╗██║   ██║██████╔╝  ███╔╝ █████╗  ██████╔╝██║██╔██║
+╚════██║██║   ██║██╔══██╗ ███╔╝  ██╔══╝ ██╔══██╗████╔╝██║&#32;
+███████║╚██████╔╝██████╔╝███████╗███████╗██║  ██║╚██████╔╝
+╚══════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝&#32;
+&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;</pre>
+            <div class="terminal-session">
+              <p class="terminal-line" id="info-command-line"><span class="prompt-host">user@subzero</span><span class="prompt-directory"> ~/SubZer0</span><span class="prompt-symbol"> $ </span><code id="info-command"></code><span class="terminal-caret" id="typing-caret" aria-hidden="true"></span></p>
+              <div class="terminal-info" id="terminal-info" hidden>
+                <p class="info-name">SubZer0</p>
+                <p class="info-subtitle">CVE Intelligence &amp; Vulnerability Research</p>
+                <p class="info-description">A platform for discovering, tracking<br>and exploring security vulnerabilities.</p>
+                <div class="info-group">
+                  <p class="info-label">CREATED BY</p>
+                  <p class="info-values">  @BugCod3<br>  @RootAccessClub</p>
+                </div>
+                <div class="info-group info-status-group">
+                  <p class="info-label">STATUS</p>
+                  <p class="info-values">  <span class="online-dot" aria-hidden="true">●</span> ONLINE</p>
+                </div>
+              </div>
+              <p class="terminal-line idle-prompt" id="idle-prompt" hidden><span class="prompt-host">user@subzero</span><span class="prompt-directory"> ~/SubZer0</span><span class="prompt-symbol"> $ </span><span class="terminal-caret" aria-hidden="true"></span></p>
+              <div class="action-session" id="action-session" hidden>
+                <p class="terminal-line action-command-line"><span class="prompt-host">user@subzero</span><span class="prompt-directory"> ~/SubZer0</span><span class="prompt-symbol"> $ </span><code id="action-command"></code></p>
+                <p class="terminal-status" id="action-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              </div>
             </div>
-            <div class="terminal-screen" aria-live="off">
-              <p class="terminal-output"><span class="terminal-prompt">visitor@subzero:~$ </span><code id="terminal-command"></code><span class="terminal-caret" aria-hidden="true"></span></p>
-              <p class="terminal-status" id="terminal-status" hidden></p>
+            <div class="community-actions" role="group" aria-label="Community actions">
+              <button class="community-action" id="join-bugcod3" type="button" data-community="bugcod3" aria-label="Join BugCod3" disabled>Join BugCod3</button>
+              <button class="community-action" id="join-rootaccessclub" type="button" data-community="rootAccessClub" aria-label="Join RootAccessClub" disabled>Join RootAccessClub</button>
             </div>
           </div>
-          <div class="community-action">
-            <a class="telegram-cta" id="telegram-cta" href="https://t.me/RootAccessClub">Join the Telegram channel</a>
-          </div>
-          <p class="sr-only" id="terminal-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
+        </section>
         </div>
-        <footer class="community-footer">© RootAccessClub</footer>
       </div>
     </section>
   </main>
 
+  <script src="community.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>
