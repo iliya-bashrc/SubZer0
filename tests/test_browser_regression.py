@@ -124,6 +124,26 @@ class BrowserRegressionTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_android_390_first_cve_heading_fits_initial_viewport(self):
+        context, page = self.open_page(390, 844, True)
+        try:
+            geometry = page.evaluate("""() => {
+              const card = document.querySelector('#feed-list .cve-card');
+              const heading = card.querySelector('.card-head');
+              return {
+                viewport: [innerWidth, innerHeight],
+                cveId: card.getAttribute('data-cve-id'),
+                headingBottom: heading.getBoundingClientRect().bottom,
+                pageWidth: document.documentElement.scrollWidth
+              };
+            }""")
+            self.assertEqual(geometry["viewport"], [390, 844], geometry)
+            self.assertGreater(geometry["cveId"], "", geometry)
+            self.assertLess(geometry["headingBottom"], geometry["viewport"][1], geometry)
+            self.assertLessEqual(geometry["pageWidth"], geometry["viewport"][0], geometry)
+        finally:
+            context.close()
+
     def test_rows_per_page_controls_incremental_feed_batch(self):
         context, page = self.open_page(1280, 900)
         try:

@@ -1199,11 +1199,11 @@ body { background: linear-gradient(180deg, #0a0e17 0, #070b14 24rem); }
 
 @media (max-width: 420px) {
   .page-center .masthead.center-heading { padding-top: 12px; padding-bottom: 10px; }
-  .center-freshness { margin-block: 7px; }
+  .center-freshness { margin-block: 5px; }
   .severity-panel { margin-bottom: 6px; }
   .page-center .control-heading { min-height: 28px; }
-  .page-center .dashboard { margin-top: 6px; }
-  .page-center .feed-status { margin-block: 1px 5px; }
+  .page-center .dashboard { margin-top: 2px; }
+  .page-center .feed-status { margin-block: 1px 1px; }
 }
 @media (max-width: 380px) {
   .page-center .date-fields > label > span { font-size: 10px; }
