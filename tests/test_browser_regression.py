@@ -156,6 +156,8 @@ class BrowserRegressionTests(unittest.TestCase):
 
             page.select_option("#page-size", "48")
             page.wait_for_function("document.querySelectorAll('#feed-list .cve-card').length === 48")
+            page.select_option("#page-size", "96")
+            page.wait_for_function("document.querySelectorAll('#feed-list .cve-card').length === 96")
             page.select_option("#page-size", "12")
             page.wait_for_function("document.querySelectorAll('#feed-list .cve-card').length === 12")
             page.locator("#load-more").click()
@@ -276,6 +278,23 @@ class BrowserRegressionTests(unittest.TestCase):
                 finally:
                     context.close()
 
+    def test_methodology_link_opens_the_center_disclosure(self):
+        context, page = self.open_page(1280, 900)
+        try:
+            first = page.locator("#feed-list .cve-card").first
+            first.locator('[data-action="detail"]').click()
+            page.locator("#detail-dialog").wait_for(state="visible")
+            page.locator("#detail-dialog .method-link").click()
+            page.wait_for_function(
+                "document.querySelector('#page-center')?.hidden === false && "
+                "document.querySelector('#detail-dialog')?.open === false && "
+                "document.querySelector('.center-methodology-details')?.open === true",
+                timeout=10000,
+            )
+            self.assertTrue(page.locator("#methodology").is_visible())
+        finally:
+            context.close()
+
     def test_three_routes_restore_tabs_and_community_terminal(self):
         context = self.browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         opened = []
@@ -290,6 +309,8 @@ class BrowserRegressionTests(unittest.TestCase):
             self.assertEqual(page.evaluate("document.activeElement?.id"), "main-content")
             self.assertTrue(page.locator("#page-overview").is_visible())
             self.assertEqual(page.title(), "SubZer0 — Overview")
+            self.assertEqual(page.locator("#page-overview .overview-data-details").count(), 0)
+            self.assertEqual(page.locator("#page-overview .overview-methodology").count(), 0)
 
             page.locator("#tab-center").click()
             page.wait_for_function("new URL(location.href).searchParams.get('page') === 'center'")
@@ -297,6 +318,11 @@ class BrowserRegressionTests(unittest.TestCase):
             page.locator("#tab-community").click()
             page.wait_for_function("new URL(location.href).searchParams.get('page') === 'community'")
             page.wait_for_function("!document.querySelector('#terminal-info')?.hidden", timeout=10000)
+            page.wait_for_function(
+                "document.querySelector('#info-command')?.textContent === './info' && "
+                "document.querySelector('#idle-prompt')?.hidden === false",
+                timeout=10000,
+            )
             self.assertTrue(page.locator("#page-community").is_visible())
             self.assertIn("rendered in ANSI Shadow", page.locator(".terminal-banner").get_attribute("aria-label"))
             self.assertIn("CVE Intelligence & Vulnerability Research", page.locator("#terminal-info").inner_text())
@@ -309,6 +335,12 @@ class BrowserRegressionTests(unittest.TestCase):
             self.assertLessEqual(metrics["documentHeight"], metrics["height"] + 2, metrics)
 
             page.locator("#join-bugcod3").click()
+            page.wait_for_function(
+                "document.querySelector('#action-command')?.textContent === 'xdg-open \"https://www.t.me/BugCod3\"' && "
+                "document.querySelector('#action-status')?.textContent === 'Opening https://www.t.me/BugCod3...' && "
+                "document.querySelector('#join-rootaccessclub')?.disabled === true",
+                timeout=1000,
+            )
             page.wait_for_url("https://www.t.me/BugCod3", timeout=5000)
             self.assertEqual(opened[-1], "https://www.t.me/BugCod3")
 
@@ -316,6 +348,12 @@ class BrowserRegressionTests(unittest.TestCase):
             page.wait_for_function("document.querySelector('#loader')?.classList.contains('done')", timeout=30000)
             page.wait_for_function("!document.querySelector('#terminal-info')?.hidden", timeout=10000)
             page.locator("#join-rootaccessclub").click()
+            page.wait_for_function(
+                "document.querySelector('#action-command')?.textContent === 'xdg-open \"https://www.t.me/RootAccessClub\"' && "
+                "document.querySelector('#action-status')?.textContent === 'Opening https://www.t.me/RootAccessClub...' && "
+                "document.querySelector('#join-bugcod3')?.disabled === true",
+                timeout=1000,
+            )
             page.wait_for_url("https://www.t.me/RootAccessClub", timeout=5000)
             self.assertEqual(opened[-1], "https://www.t.me/RootAccessClub")
         finally:

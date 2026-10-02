@@ -623,27 +623,15 @@
       epssFreshness.textContent = label;
       epssFreshness.title = `${epssStatus().note || (scoreTime ? `FIRST EPSS source timestamp: ${fmtTimestamp(scoreTime)}` : 'FIRST EPSS source timestamp unavailable')} EPSS is excluded from composite priority unless its dated source status is current and verified.`;
     }
-    renderOverviewSummary(generated, sourceComplete);
+    renderOverviewSummary(generated);
     if (age != null && Date.now() - age > 90 * 60_000) setStatus('The last successful snapshot is older than 90 minutes. Keeping the last complete data while checks continue.', 'warning');
     else if (!sourceComplete) setStatus('One or more sources did not report complete coverage in this snapshot.', 'warning');
     else if (rangeDays().every((day) => loadedByDay.has(day))) setStatus(`Last complete snapshot ${relativeTime(generated)} · browser checks every 2 minutes.`, 'success');
   }
 
-  function renderOverviewSummary(generated = manifest?.last_successful_update || manifest?.generated_at, sourceComplete = manifest?.complete === true && manifest?.coverage?.sources_complete === true) {
+  function renderOverviewSummary(generated = manifest?.last_successful_update || manifest?.generated_at) {
     if (!manifest) return;
-    if ($('overview-total')) $('overview-total').textContent = Number(manifest.totals?.cves || 0).toLocaleString();
-    if ($('overview-kev')) $('overview-kev').textContent = Number(manifest.totals?.known_exploited || 0).toLocaleString();
-    if ($('overview-window')) $('overview-window').textContent = `${fmtDate(String(manifest.window.start).slice(0, 10))} – ${fmtDate(String(manifest.window.end).slice(0, 10))} UTC`;
-    if ($('overview-updated')) $('overview-updated').textContent = fmtTimestamp(generated);
     if ($('overview-snapshot-time')) $('overview-snapshot-time').textContent = fmtTimestamp(generated);
-    const coreNames = new Set(['NVD CVE API 2.0', 'GitHub Security Advisory Database', 'CISA KEV']);
-    const coreStatuses = (manifest.source_status || []).filter((source) => coreNames.has(source.name) || source.name === 'CISA Known Exploited Vulnerabilities catalog');
-    const coreOk = coreStatuses.length >= 3 && coreStatuses.every((source) => source.ok === true);
-    const age = parseTime(generated);
-    const stale = age != null && Date.now() - age > 90 * 60_000;
-    const statusText = !sourceComplete || !coreOk ? 'Core-source coverage has a reported gap' : stale ? 'The last complete core-source snapshot is aging' : 'Core-source coverage reported complete';
-    const freshnessText = age == null ? 'Snapshot time unavailable' : `Collected ${relativeTime(generated)}`;
-    if ($('overview-coverage')) $('overview-coverage').textContent = `${statusText}. ${freshnessText}. Collection is scheduled; source publication and Pages delivery can add delay.`;
     renderOverviewLatest();
   }
 
@@ -1914,8 +1902,8 @@
       if (action.dataset.action === 'close-methodology') {
         event.preventDefault();
         $('detail-dialog').close();
-        routePage('overview');
-        const disclosure = document.querySelector('.overview-methodology');
+        routePage('center');
+        const disclosure = document.querySelector('.center-methodology-details');
         if (disclosure) disclosure.open = true;
         $('methodology').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
       }
