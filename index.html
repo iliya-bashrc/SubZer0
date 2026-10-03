@@ -155,11 +155,41 @@
           </div>
         </div>
 
-        <div class="feed-view" id="feed-view">
+        <div class="feed-view" id="feed-view" aria-busy="true">
           <div class="feed-meta">
             <p class="result-status" id="result-status" role="status" aria-live="polite" aria-atomic="true">Loading the captured local snapshot…</p>
             <span class="sort-note">Newest activity first</span>
           </div>
+          <section class="snapshot-loader" id="snapshot-loader" aria-labelledby="snapshot-loader-title" aria-describedby="snapshot-loader-copy" hidden>
+            <div class="snapshot-loader__intro">
+              <span class="snapshot-loader__mark" aria-hidden="true">
+                <svg viewBox="0 0 32 32"><path d="M16 2.5 29.5 16 16 29.5 2.5 16 16 2.5Z"/><path d="M16 8v16M9.1 12l13.8 8M22.9 12 9.1 20"/></svg>
+              </span>
+              <div>
+                <p class="snapshot-loader__context">Local snapshot</p>
+                <h2 id="snapshot-loader-title">Preparing the CVE archive</h2>
+                <p id="snapshot-loader-copy">Records appear after every required file is complete and verified.</p>
+              </div>
+            </div>
+            <p class="snapshot-loader__status" id="snapshot-loader-status" role="status" aria-live="polite" aria-atomic="true">Waiting for the snapshot manifest.</p>
+            <div class="snapshot-loader__checks">
+              <div class="snapshot-loader__check">
+                <span>Snapshot manifest</span>
+                <span class="snapshot-loader__state" id="snapshot-manifest-state">Waiting</span>
+              </div>
+              <div class="snapshot-loader__check">
+                <span>EPSS score file</span>
+                <span class="snapshot-loader__state" id="snapshot-epss-state">Waiting for daily shards</span>
+              </div>
+              <div class="snapshot-loader__meter">
+                <div class="snapshot-loader__check snapshot-loader__check--meter">
+                  <label for="snapshot-shard-progress">Daily shards</label>
+                  <span class="snapshot-loader__count" id="snapshot-shard-count" role="status" aria-live="polite" aria-atomic="true">Waiting for manifest</span>
+                </div>
+                <progress class="snapshot-loader__progress" id="snapshot-shard-progress" max="1" value="0" aria-label="Daily shards verified" hidden></progress>
+              </div>
+            </div>
+          </section>
           <div class="record-list" id="record-list" role="list" aria-label="CVE records from the captured local snapshot" aria-busy="true"></div>
           <nav class="pagination" id="pagination" aria-label="CVE record pages" hidden>
             <button class="page-button" id="page-prev" type="button" aria-label="Go to previous page">Previous</button>

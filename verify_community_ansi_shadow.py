@@ -155,11 +155,13 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
         page.emulate_media(reduced_motion='reduce')
         load(page, f'{url}/?page={page_name}')
         if page_name == 'center':
-            page.wait_for_function("document.querySelectorAll('#record-list .record-row').length >= 24", timeout=30000)
+            page.wait_for_function("() => document.querySelectorAll('#record-list .record-row').length >= 24", timeout=30000)
             counts.append(page.locator('#record-list .record-row').count())
-        else:
+        elif page_name == 'overview':
             page.locator('#latest-list, .latest-list').wait_for(state='visible')
             assert page.get_by_role('button', name='Explore CVEs').is_visible()
+        else:
+            wait_idle(page)
         geometry = page.evaluate('''() => ({
           viewportWidth: document.documentElement.clientWidth,
           documentWidth: document.documentElement.scrollWidth,
@@ -173,8 +175,8 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
         captures.append(destination)
         if page_name == 'overview':
             page.get_by_role('button', name='Explore CVEs').click()
-            page.wait_for_function("document.querySelector('#page-center').hidden === false")
-            page.wait_for_function("document.querySelectorAll('#record-list .record-row').length >= 24", timeout=30000)
+            page.wait_for_function("() => document.querySelector('#page-center').hidden === false")
+            page.wait_for_function("() => document.querySelectorAll('#record-list .record-row').length >= 24", timeout=30000)
             overview_action_counts.append(page.locator('#record-list .record-row').count())
         assert_no_page_errors(page, errors)
         page.close()
@@ -486,9 +488,9 @@ def main() -> None:
             if not community_only:
                 regressions = []
                 for width, height in ((1440, 1000), (390, 844), (320, 740)):
-                    regressions.append(screenshot_comparison(browser, base_url, preview_url, 'overview', width, height, f'regression-overview-{width}'))
-                    regressions.append(screenshot_comparison(browser, base_url, preview_url, 'center', width, height, f'regression-center-{width}'))
-                results['first_two_pages'] = {'pixel_identical_to_baseline': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
+                    for page_name in ('overview', 'center', 'community'):
+                        regressions.append(screenshot_comparison(browser, base_url, preview_url, page_name, width, height, f'regression-{page_name}-{width}'))
+                results['page_pixel_regressions'] = {'pixel_identical_to_baseline': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
 
             # The actions and timing are browser-driven, while both Telegram destinations are intercepted locally.
             results['actions'] = test_actions(browser, preview_url)
