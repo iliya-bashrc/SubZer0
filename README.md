@@ -6,6 +6,8 @@ SubZer0 is a static CVE-intelligence browser served by [GitHub Pages](https://il
 
 [![Join @RootAccessClub on Telegram](assets/telegram-rootaccessclub.svg)](https://t.me/RootAccessClub) [![Join @BugCod3 on Telegram](assets/telegram-bugcod3.svg)](https://t.me/BugCod3)
 
+*SubZer0 is independent and is not affiliated with Telegram.*
+
 ## Explore
 
 - **Overview** — see counts and the three newest records in the validated snapshot, with links to their CVE details.

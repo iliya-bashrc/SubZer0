@@ -27,6 +27,7 @@ SITE_ASSETS = (
     "feed.css",
     "severity-effects.css",
     "community.css",
+    "assets/telegram-mark.svg",
     "assets/telegram-bugcod3.svg",
     "assets/telegram-rootaccessclub.svg",
 )
