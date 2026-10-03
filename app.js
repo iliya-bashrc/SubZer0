@@ -62,6 +62,7 @@
   let snapshotLoading = false;
   let epssScores = Object.create(null);
   let activePage = 'overview';
+  let finishActiveSwipeSettlement = () => {};
   let activeSeverity = 'all';
   let appliedFrom = '';
   let appliedTo = '';
@@ -1147,14 +1148,21 @@
     (restore || searchInput).focus({ preventScroll: true });
   }
 
-  function switchPage(name, focusPage = false) {
+  function switchPage(name, focusPage = false, options = {}) {
     if (!pages.has(name)) return;
+    finishActiveSwipeSettlement();
     if (name === 'center') startSnapshot();
     const next = pages.get(name);
     const previous = pages.get(activePage);
     if (activePage === 'community' && name !== 'community') cancelCommunityTransition();
-    if (previous && previous !== next) previous.hidden = true;
+    if (previous && previous !== next) {
+      if (!options.keepPreviousVisible) previous.hidden = true;
+      previous.inert = true;
+      previous.setAttribute('aria-hidden', 'true');
+    }
     next.hidden = false;
+    next.inert = false;
+    next.removeAttribute('aria-hidden');
     activePage = name;
     document.body.dataset.skin = name === 'center' ? 'center' : name === 'community' ? 'glass' : 'metal';
     document.querySelector('meta[name="theme-color"]').content = name === 'community' ? '#090e12' : name === 'center' ? '#090d10' : '#080c0f';
@@ -1165,9 +1173,9 @@
       tab.tabIndex = selected ? 0 : -1;
     });
     next.classList.remove('page-enter');
-    if (!reducedMotion.matches) requestAnimationFrame(() => next.classList.add('page-enter'));
+    if (!options.swipeTransition && !reducedMotion.matches) requestAnimationFrame(() => next.classList.add('page-enter'));
     if (focusPage) next.focus({ preventScroll: true });
-    window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    if (!options.deferScroll) window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
   }
 
   function bindSwipeNavigation() {
@@ -1182,68 +1190,224 @@
       '.record-list', '.record-row', '.center-dock', '.filter-controls', '.severity-distribution',
       '.pagination', '.detail-view', '.snapshot-loader', '.ui-stage',
     ].join(',');
+    const desktopCardSelector = '.snapshot-status-strip, .snapshot-rail, .latest-list, .snapshot-summary, article, .terminal-frame';
     const horizontalIntentRatio = 1.2;
     let gesture = null;
     let settlement = null;
+    let suppressedClickPointerId = null;
+    let suppressedClickTimer = 0;
 
     const hasTextSelection = () => {
       const selection = window.getSelection();
       return Boolean(selection && !selection.isCollapsed);
     };
 
+    function hasTextAtPoint(x, y) {
+      let node = null;
+      let offset = 0;
+      if (typeof document.caretRangeFromPoint === 'function') {
+        const range = document.caretRangeFromPoint(x, y);
+        node = range?.startContainer ?? null;
+        offset = range?.startOffset ?? 0;
+      } else if (typeof document.caretPositionFromPoint === 'function') {
+        const caret = document.caretPositionFromPoint(x, y);
+        node = caret?.offsetNode ?? null;
+        offset = caret?.offset ?? 0;
+      }
+      if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+
+      const text = node.textContent || '';
+      for (const index of [offset, offset - 1]) {
+        if (index < 0 || index >= text.length || /\s/u.test(text[index])) continue;
+        const character = document.createRange();
+        character.setStart(node, index);
+        character.setEnd(node, index + 1);
+        for (const rect of character.getClientRects()) {
+          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true;
+        }
+      }
+      return false;
+    }
+
+    const isDesktopPointer = (pointerType) => pointerType === 'mouse' || pointerType === 'pen';
+
+    function clearDraggedClickProtection() {
+      window.clearTimeout(suppressedClickTimer);
+      suppressedClickTimer = 0;
+      suppressedClickPointerId = null;
+    }
+
+    function suppressDraggedClick(event) {
+      if (suppressedClickPointerId === null || event.detail === 0) return;
+      if ('pointerId' in event && event.pointerId !== suppressedClickPointerId) return;
+      if (event.target instanceof Element && event.target.closest(blockedSelector)) {
+        clearDraggedClickProtection();
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clearDraggedClickProtection();
+    }
+
+    function protectAgainstDraggedClick(pointerId) {
+      clearDraggedClickProtection();
+      suppressedClickPointerId = pointerId;
+      suppressedClickTimer = window.setTimeout(clearDraggedClickProtection, 600);
+    }
+
+    function removeSwipePresentation(page) {
+      if (!page) return;
+      page.classList.remove('is-swipe-tracking', 'is-swipe-settling', 'is-swipe-preview');
+      page.style.removeProperty('transform');
+      page.style.removeProperty('--swipe-preview-top');
+    }
+
+    function restorePreview(current) {
+      const destination = current.destination;
+      if (!destination) return;
+      removeSwipePresentation(destination);
+      destination.hidden = current.destinationWasHidden;
+      destination.inert = current.destinationWasInert;
+      if (current.destinationAriaHidden === null) destination.removeAttribute('aria-hidden');
+      else destination.setAttribute('aria-hidden', current.destinationAriaHidden);
+      current.destination = null;
+      current.destinationWasHidden = null;
+      current.destinationWasInert = null;
+      current.destinationAriaHidden = null;
+    }
+
+    function stageDestination(current, destination) {
+      if (current.destination === destination) return;
+      restorePreview(current);
+      if (!destination) return;
+
+      current.destination = destination;
+      current.destinationWasHidden = destination.hidden;
+      current.destinationWasInert = destination.inert;
+      current.destinationAriaHidden = destination.getAttribute('aria-hidden');
+      destination.hidden = false;
+      destination.inert = true;
+      destination.setAttribute('aria-hidden', 'true');
+      destination.classList.remove('page-enter');
+      destination.classList.add('is-swipe-preview', 'is-swipe-tracking');
+      destination.style.setProperty('--swipe-preview-top', `${current.page.offsetTop}px`);
+    }
+
+    function updateSwipePresentation(current, deltaX) {
+      const index = pageOrder.indexOf(activePage);
+      const direction = deltaX < 0 ? 1 : deltaX > 0 ? -1 : 0;
+      const destination = direction ? pages.get(pageOrder[index + direction]) : null;
+      stageDestination(current, destination);
+
+      const canNavigate = Boolean(destination);
+      const distance = Math.abs(deltaX);
+      const effectiveX = canNavigate
+        ? Math.sign(deltaX) * Math.min(distance, Math.min(window.innerWidth * 0.55, 320))
+        : Math.sign(deltaX) * Math.min(24, distance * 0.16);
+      current.page.classList.remove('page-enter');
+      current.page.classList.add('is-swipe-tracking');
+      current.page.style.transform = `translate3d(${effectiveX.toFixed(1)}px, 0, 0)`;
+      if (destination) {
+        const destinationX = effectiveX - Math.sign(deltaX) * window.innerWidth;
+        destination.style.transform = `translate3d(${destinationX.toFixed(1)}px, 0, 0)`;
+      }
+    }
+
     function finishSettlement(current) {
       if (!current || settlement !== current) return;
       settlement = null;
-      current.page.removeEventListener('transitionend', current.onEnd);
       window.clearTimeout(current.timer);
-      current.page.classList.remove('is-swipe-settling');
-      current.page.style.removeProperty('transform');
+      current.items.forEach((item) => {
+        item.page.removeEventListener('transitionend', item.onEnd);
+        removeSwipePresentation(item.page);
+        if ('hiddenAfter' in item) item.page.hidden = item.hiddenAfter;
+        if ('inertAfter' in item) item.page.inert = item.inertAfter;
+        if ('ariaHiddenAfter' in item) {
+          if (item.ariaHiddenAfter === null) item.page.removeAttribute('aria-hidden');
+          else item.page.setAttribute('aria-hidden', item.ariaHiddenAfter);
+        }
+      });
+      if (current.committed) window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    }
+
+    finishActiveSwipeSettlement = () => {
+      if (settlement) finishSettlement(settlement);
+    };
+
+    function beginSettlement(items, committed = false) {
+      const current = { items: [], pending: new Set(), timer: 0, committed };
+      settlement = current;
+      items.forEach((item) => {
+        const settledItem = { ...item };
+        settledItem.page.classList.remove('page-enter', 'is-swipe-tracking');
+        settledItem.page.classList.add('is-swipe-settling');
+        settledItem.onEnd = (event) => {
+          if (event.target !== settledItem.page || event.propertyName !== 'transform') return;
+          current.pending.delete(settledItem.page);
+          if (current.pending.size === 0) finishSettlement(current);
+        };
+        settledItem.page.addEventListener('transitionend', settledItem.onEnd);
+        current.items.push(settledItem);
+        current.pending.add(settledItem.page);
+      });
+      current.timer = window.setTimeout(() => finishSettlement(current), 320);
+      requestAnimationFrame(() => {
+        if (settlement !== current) return;
+        current.items.forEach((item) => {
+          item.page.style.transform = `translate3d(${item.targetX.toFixed(1)}px, 0, 0)`;
+        });
+      });
     }
 
     function stopSettlement(page) {
-      if (settlement && settlement.page === page) finishSettlement(settlement);
+      if (settlement && settlement.items.some((item) => item.page === page)) finishSettlement(settlement);
+    }
+
+    function releasePointer(current) {
+      try {
+        if (main.hasPointerCapture(current.pointerId)) main.releasePointerCapture(current.pointerId);
+      } catch (_) {
+        // The browser may already have released capture after a native scroll or cancellation.
+      }
     }
 
     function clearGesture(shouldSettle = false) {
       const current = gesture;
       if (!current) return;
       gesture = null;
-
-      try {
-        if (main.hasPointerCapture(current.pointerId)) main.releasePointerCapture(current.pointerId);
-      } catch (_) {
-        // The browser may already have released capture after a native scroll or cancellation.
-      }
-
-      const page = current.page;
-      page.classList.remove('is-swipe-tracking');
-      stopSettlement(page);
-      if (shouldSettle && !page.hidden && !reducedMotion.matches) {
-        page.classList.add('is-swipe-settling');
-        page.style.transform = 'translate3d(0, 0, 0)';
-        const nextSettlement = { page, timer: 0, onEnd: null };
-        nextSettlement.onEnd = (event) => {
-          if (event.target === page && event.propertyName === 'transform') finishSettlement(nextSettlement);
-        };
-        settlement = nextSettlement;
-        page.addEventListener('transitionend', nextSettlement.onEnd);
-        nextSettlement.timer = window.setTimeout(() => finishSettlement(nextSettlement), 300);
+      releasePointer(current);
+      stopSettlement(current.page);
+      if (shouldSettle && !reducedMotion.matches) {
+        const items = [{ page: current.page, targetX: 0, hiddenAfter: false }];
+        if (current.destination) {
+          items.push({
+            page: current.destination,
+            targetX: -Math.sign(current.deltaX || 1) * window.innerWidth,
+            hiddenAfter: current.destinationWasHidden,
+            inertAfter: current.destinationWasInert,
+            ariaHiddenAfter: current.destinationAriaHidden,
+          });
+        }
+        beginSettlement(items);
       } else {
-        page.classList.remove('is-swipe-settling');
-        page.style.removeProperty('transform');
+        removeSwipePresentation(current.page);
+        restorePreview(current);
       }
     }
 
     function onPointerDown(event) {
-      if (event.pointerType !== 'touch' || !event.isPrimary || event.button !== 0 || gesture) return;
+      const desktopPointer = isDesktopPointer(event.pointerType);
+      if ((!desktopPointer && event.pointerType !== 'touch') || !event.isPrimary || event.button !== 0 || gesture) return;
       const target = event.target;
       if (!(target instanceof Element) || target.closest(blockedSelector) || hasTextSelection()) return;
+      if (desktopPointer && (target.closest(desktopCardSelector) || hasTextAtPoint(event.clientX, event.clientY))) return;
       const page = target.closest('.page');
       if (!page || page.hidden || page !== pages.get(activePage)) return;
       stopSettlement(page);
 
       gesture = {
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         page,
         startX: event.clientX,
         startY: event.clientY,
@@ -1254,6 +1418,10 @@
         deltaX: 0,
         deltaY: 0,
         axis: 'pending',
+        destination: null,
+        destinationWasHidden: null,
+        destinationWasInert: null,
+        destinationAriaHidden: null,
       };
     }
 
@@ -1264,6 +1432,13 @@
         return;
       }
       const current = gesture;
+      if (isDesktopPointer(current.pointerType)) {
+        const target = document.elementFromPoint(event.clientX, event.clientY);
+        if (!(target instanceof Element) || target.closest(blockedSelector) || target.closest(desktopCardSelector) || hasTextAtPoint(event.clientX, event.clientY)) {
+          clearGesture(true);
+          return;
+        }
+      }
       const deltaX = event.clientX - current.startX;
       const deltaY = event.clientY - current.startY;
       current.deltaX = deltaX;
@@ -1294,15 +1469,12 @@
         current.sampleTime = now;
       }
 
-      if (reducedMotion.matches) return;
-      current.page.classList.add('is-swipe-tracking');
-      const index = pageOrder.indexOf(activePage);
-      const canNavigate = deltaX < 0 ? index < pageOrder.length - 1 : deltaX > 0 && index > 0;
-      const distance = Math.abs(deltaX);
-      const effectiveX = canNavigate
-        ? Math.sign(deltaX) * Math.min(distance, Math.min(window.innerWidth * 0.55, 320))
-        : Math.sign(deltaX) * Math.min(24, distance * 0.16);
-      current.page.style.transform = `translate3d(${effectiveX.toFixed(1)}px, 0, 0)`;
+      if (reducedMotion.matches) {
+        removeSwipePresentation(current.page);
+        restorePreview(current);
+        return;
+      }
+      updateSwipePresentation(current, deltaX);
     }
 
     function onPointerUp(event) {
@@ -1310,16 +1482,23 @@
       const current = gesture;
       const deltaX = event.clientX - current.startX;
       const deltaY = event.clientY - current.startY;
+      current.deltaX = deltaX;
+      current.deltaY = deltaY;
       const elapsed = event.timeStamp - current.sampleTime;
       const sampleDelta = event.clientX - current.sampleX;
       if (elapsed > 0 && Math.abs(sampleDelta) > 0) current.velocityX = sampleDelta / elapsed;
+      if (current.axis === 'horizontal' && !reducedMotion.matches) updateSwipePresentation(current, deltaX);
 
       const index = pageOrder.indexOf(activePage);
       const direction = deltaX < 0 ? 1 : -1;
       const destination = pageOrder[index + direction];
-      const threshold = Math.min(100, window.innerWidth * 0.2);
+      const touchPointer = current.pointerType === 'touch';
+      const threshold = touchPointer
+        ? Math.min(100, window.innerWidth * 0.2)
+        : Math.min(140, Math.max(96, window.innerWidth * 0.1));
       const freshVelocity = event.timeStamp - current.sampleTime <= 120;
-      const fastSwipe = Math.abs(deltaX) >= 28
+      const fastSwipe = touchPointer
+        && Math.abs(deltaX) >= 28
         && freshVelocity
         && Math.abs(current.velocityX) >= 0.65
         && Math.sign(current.velocityX) === Math.sign(deltaX);
@@ -1329,15 +1508,49 @@
         && Boolean(destination)
         && (Math.abs(deltaX) >= threshold || fastSwipe);
 
-      clearGesture(!shouldNavigate);
-      if (shouldNavigate) switchPage(destination);
+      if (!shouldNavigate) {
+        clearGesture(true);
+        return;
+      }
+
+      gesture = null;
+      releasePointer(current);
+      stopSettlement(current.page);
+      const destinationPage = current.destination;
+      if (!touchPointer) protectAgainstDraggedClick(current.pointerId);
+      if (reducedMotion.matches || !destinationPage) {
+        removeSwipePresentation(current.page);
+        restorePreview(current);
+        switchPage(destination);
+        return;
+      }
+
+      switchPage(destination, false, { keepPreviousVisible: true, deferScroll: true, swipeTransition: true });
+      beginSettlement([
+        {
+          page: current.page,
+          targetX: Math.sign(deltaX) * window.innerWidth,
+          hiddenAfter: true,
+          inertAfter: true,
+          ariaHiddenAfter: 'true',
+        },
+        { page: destinationPage, targetX: 0, hiddenAfter: false, inertAfter: false, ariaHiddenAfter: null },
+      ], true);
     }
 
+    document.addEventListener('click', suppressDraggedClick, true);
     main.addEventListener('pointerdown', onPointerDown, { passive: true });
     document.addEventListener('pointermove', onPointerMove, { passive: true });
     document.addEventListener('pointerup', onPointerUp, { passive: true });
     document.addEventListener('pointercancel', () => clearGesture(true), { passive: true });
-    main.addEventListener('selectstart', () => clearGesture(true), true);
+    main.addEventListener('selectstart', () => {
+      if (!gesture) return;
+      if (isDesktopPointer(gesture.pointerType)) {
+        if (hasTextSelection() || hasTextAtPoint(gesture.startX, gesture.startY)) clearGesture(true);
+        return;
+      }
+      clearGesture(true);
+    }, true);
     document.addEventListener('selectionchange', () => {
       if (gesture && hasTextSelection()) clearGesture(true);
     });
