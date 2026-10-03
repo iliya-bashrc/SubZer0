@@ -582,9 +582,12 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
     cdp = context.new_cdp_session(page)
     url = f'{origin}/?page=overview'
 
-    def dispatch_touch(kind: str, x: int | None = None, y: int | None = None) -> None:
+    def dispatch_touch(kind: str, x: int | None = None, y: int | None = None, timestamp: float | None = None) -> None:
         points = [] if kind == 'touchEnd' else [{'x': x, 'y': y, 'id': 1}]
-        cdp.send('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': points})
+        event = {'type': kind, 'touchPoints': points}
+        if timestamp is not None:
+            event['timestamp'] = timestamp
+        cdp.send('Input.dispatchTouchEvent', event)
 
     def swipe(
         start_x: int,
@@ -616,6 +619,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
             selected = candidate == name
             assert tab.get_attribute('aria-selected') == str(selected).lower()
             assert tab.evaluate('(element) => element.tabIndex') == (0 if selected else -1)
+        page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
 
     def drag_from_edge(direction: str, distance: int = 150, *, y: int = 500, steps: int = 6, delay_ms: int = 12) -> None:
         x = 382 if direction == 'left' else 8
@@ -661,7 +665,10 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert page.locator('#page-overview').evaluate('element => getComputedStyle(element).transform') == 'none'
 
         # A short, fast deliberate gesture may pass the distance threshold through velocity.
-        swipe(382, 500, -48, steps=1, delay_ms=0, initial_delay_ms=40)
+        fast_swipe_start = time.time()
+        dispatch_touch('touchStart', 382, 500, timestamp=fast_swipe_start)
+        dispatch_touch('touchMove', 334, 500, timestamp=fast_swipe_start + 0.04)
+        dispatch_touch('touchEnd', timestamp=fast_swipe_start + 0.05)
         expect_active('center')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
         expect_active('center')
@@ -820,6 +827,17 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert expect_active_name == 'true' and desktop_page.evaluate('document.activeElement.id') == 'tab-center'
         desktop_page.keyboard.press('Home')
         assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
+        for page_name in ('overview', 'center', 'community'):
+            desktop_page.locator(f'#tab-{page_name}').click()
+            desktop_page.locator(f'#tab-{page_name}').focus()
+            desktop_page.keyboard.press('Shift+Tab')
+            desktop_page.keyboard.press('Shift+Tab')
+            assert desktop_page.evaluate('document.activeElement.matches(".skip-link")'), f'Skip link was not reached before the header from {page_name}.'
+            desktop_page.keyboard.press('Enter')
+            assert desktop_page.evaluate('document.activeElement.id') == 'main-content', f'Skip link did not focus the main region from {page_name}.'
+            assert desktop_page.evaluate('location.hash') == '#main-content', f'Skip link target changed from main content on {page_name}.'
+            expect(desktop_page.locator(f'#page-{page_name}')).to_be_visible()
+        desktop_page.locator('#tab-overview').click()
         desktop.close()
     finally:
         context.close()
@@ -1063,7 +1081,7 @@ def main() -> None:
             # Exercise every page at mobile and desktop widths without external requests.
             page.locator('#tab-overview').click()
             width_metrics = {}
-            for width in (320, 360, 390, 412, 768, 1024, 1440):
+            for width in (320, 360, 375, 390, 414, 768, 1024, 1280, 1440):
                 width_metrics[width] = {}
                 for tab in ('overview', 'center', 'community'):
                     page.locator(f'#tab-{tab}').click()

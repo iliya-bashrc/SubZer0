@@ -107,6 +107,11 @@ def terminal_metrics(page: Page) -> dict[str, Any]:
           top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom,
           height: el.getBoundingClientRect().height, clientWidth: el.clientWidth, scrollWidth: el.scrollWidth
         })),
+        icons: [...document.querySelectorAll('.community-action__icon')].map((el) => {
+          const image = el.querySelector('img');
+          const rect = el.getBoundingClientRect();
+          return {src: image?.getAttribute('src') ?? null, loaded: Boolean(image?.complete && image.naturalWidth > 0), width: rect.width, height: rect.height};
+        }),
         actionInsideTerminal: document.querySelector('.community-actions').closest('.terminal-frame') !== null,
         infoText: document.querySelector('#terminal-info').innerText,
         promptText: document.querySelector('#idle-prompt').innerText,
@@ -130,7 +135,9 @@ def assert_terminal_fits(metrics: dict[str, Any]) -> None:
     assert metrics['actionInsideTerminal'], 'Community actions are outside the terminal frame.'
     assert all(item['top'] >= 0 and item['bottom'] <= height for item in metrics['actions']), f'Community actions do not fit at {width}px: {metrics}'
     assert [item['text'] for item in metrics['actions']] == ['Join BugCod3', 'Join RootAccessClub']
-    assert [item['accessibleName'] for item in metrics['actions']] == ['Join BugCod3', 'Join RootAccessClub']
+    assert [item['accessibleName'] for item in metrics['actions']] == ['Join BugCod3 on Telegram', 'Join RootAccessClub on Telegram']
+    assert [item['src'] for item in metrics['icons']] == ['assets/telegram-bugcod3.svg', 'assets/telegram-rootaccessclub.svg']
+    assert all(item['loaded'] and item['width'] == 34 and item['height'] == 34 for item in metrics['icons']), f'Telegram icons failed to load or diverged in size at {width}px: {metrics}'
     assert all('@' not in item['text'] for item in metrics['actions'])
     assert all(item['width'] >= 44 and item['height'] >= 44 for item in metrics['actions']), f'Tap target too small at {width}px: {metrics}'
     assert all(item['scrollWidth'] <= item['clientWidth'] for item in metrics['actions']), f'Action label clips at {width}px: {metrics}'
@@ -143,11 +150,12 @@ def assert_terminal_fits(metrics: dict[str, Any]) -> None:
 
 
 def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, page_name: str, width: int, height: int, file_stem: str) -> dict[str, Any]:
-    from PIL import Image, ImageChops
+    from PIL import Image, ImageChops, ImageDraw
 
     captures: list[Path] = []
     counts: list[int] = []
     overview_action_counts: list[int] = []
+    action_bounds: list[dict[str, float]] = []
     for label, url in (('baseline', base_url), ('preview', preview_url)):
         page = browser.new_page(viewport={'width': width, 'height': height}, device_scale_factor=1)
         errors: list[str] = []
@@ -169,6 +177,10 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
           activePageWidth: document.querySelector('.page:not([hidden])')?.scrollWidth ?? 0
         })''')
         assert geometry['documentWidth'] <= width and geometry['bodyWidth'] <= width and geometry['activePageWidth'] <= width, f'Horizontal overflow on {page_name} at {width}px: {geometry}'
+        if page_name == 'community':
+            action_box = page.locator('.community-actions').bounding_box()
+            assert action_box is not None
+            action_bounds.append(action_box)
         page.wait_for_timeout(120)
         destination = SCREENSHOTS / f'{file_stem}-{label}.png'
         page.screenshot(path=str(destination), animations='disabled')
@@ -183,6 +195,17 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
     with Image.open(captures[0]) as original, Image.open(captures[1]) as updated:
         assert original.size == updated.size, f'Screenshot dimensions differ for {page_name} at {width}px.'
         difference = ImageChops.difference(original.convert('RGB'), updated.convert('RGB'))
+        if page_name == 'community':
+            assert len(action_bounds) == 2
+            baseline_box, preview_box = action_bounds
+            assert all(abs(baseline_box[key] - preview_box[key]) <= 0.5 for key in ('x', 'y', 'width', 'height')), f'Community actions shifted or resized at {width}px: {action_bounds}'
+            left = max(0, int(min(baseline_box['x'], preview_box['x'])))
+            top = max(0, int(min(baseline_box['y'], preview_box['y'])))
+            right = min(original.width - 1, int(max(baseline_box['x'] + baseline_box['width'], preview_box['x'] + preview_box['width'])) + 1)
+            bottom = min(original.height - 1, int(max(baseline_box['y'] + baseline_box['height'], preview_box['y'] + preview_box['height'])) + 1)
+            mask = Image.new('L', original.size, 255)
+            ImageDraw.Draw(mask).rectangle((left, top, right, bottom), fill=0)
+            difference = ImageChops.composite(difference, Image.new('RGB', original.size, (0, 0, 0)), mask)
         changed_pixels = sum(pixel != (0, 0, 0) for pixel in difference.getdata())
     assert changed_pixels == 0, f'{page_name} render changed in the isolated Community update at {width}px ({changed_pixels} different pixels).'
     return {'page': page_name, 'viewport': [width, height], 'changed_pixels': changed_pixels, 'baseline_record_rows': counts[0] if counts else None, 'preview_record_rows': counts[1] if counts else None, 'overview_action_record_rows': overview_action_counts if overview_action_counts else None}

@@ -15,7 +15,7 @@
   <link rel="stylesheet" href="community.css">
 </head>
 <body data-skin="metal">
-  <a class="skip-link" href="#page-overview">Skip to content</a>
+  <a class="skip-link" href="#main-content">Skip to content</a>
 
   <header class="site-header">
     <div class="site-header-inner">
@@ -37,7 +37,7 @@
     </div>
   </header>
 
-  <main id="main-content">
+  <main id="main-content" tabindex="-1">
     <section class="page page-overview is-current" id="page-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
       <div class="overview-wrap">
         <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot status">
@@ -275,8 +275,14 @@
               </div>
             </div>
             <div class="community-actions" role="group" aria-label="Community actions">
-              <button class="community-action" id="join-bugcod3" type="button" data-community="bugcod3" aria-label="Join BugCod3" disabled>Join BugCod3</button>
-              <button class="community-action" id="join-rootaccessclub" type="button" data-community="rootAccessClub" aria-label="Join RootAccessClub" disabled>Join RootAccessClub</button>
+              <button class="community-action" id="join-bugcod3" type="button" data-community="bugcod3" aria-label="Join BugCod3 on Telegram" disabled>
+                <span class="community-action__icon" aria-hidden="true"><img src="assets/telegram-bugcod3.svg" alt="" width="250" height="58"></span>
+                <span class="community-action__label">Join BugCod3</span>
+              </button>
+              <button class="community-action" id="join-rootaccessclub" type="button" data-community="rootAccessClub" aria-label="Join RootAccessClub on Telegram" disabled>
+                <span class="community-action__icon" aria-hidden="true"><img src="assets/telegram-rootaccessclub.svg" alt="" width="286" height="58"></span>
+                <span class="community-action__label">Join RootAccessClub</span>
+              </button>
             </div>
           </div>
         </section>

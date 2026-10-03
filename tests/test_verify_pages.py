@@ -35,6 +35,8 @@ class PagesVerifierPolicyTests(unittest.TestCase):
         manifest = pages.verifier._loads(manifest_bytes, "manifest.json")
         paths = {resource[0] for resource in pages._resources(snapshot_root, manifest)}
         self.assertTrue(set(pages.SITE_ASSETS).issubset(paths))
+        self.assertIn("assets/telegram-bugcod3.svg", pages.SITE_ASSETS)
+        self.assertIn("assets/telegram-rootaccessclub.svg", pages.SITE_ASSETS)
         self.assertIn("snapshot/data/overview.json", paths)
         self.assertIn("snapshot/data/epss.json", paths)
 
