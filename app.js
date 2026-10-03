@@ -27,6 +27,7 @@
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
   const snapshotLoaderStatus = $('#snapshot-loader-status');
+  const snapshotStatusStrips = $$('[data-snapshot-status]');
   const snapshotManifestState = $('#snapshot-manifest-state');
   const snapshotEpssState = $('#snapshot-epss-state');
   const snapshotShardCount = $('#snapshot-shard-count');
@@ -174,11 +175,69 @@
     };
   }
 
-  function epssMarkedStale() {
-    const status = manifest?.source_status?.find((source) => safeString(source?.name) === 'FIRST EPSS');
-    const sourceUpdated = Date.parse(safeString(manifest?.epss?.source_updated_at));
+  function epssMarkedStale(candidate = manifest) {
+    const status = candidate?.source_status?.find((source) => safeString(source?.name) === 'FIRST EPSS');
+    const sourceUpdated = Date.parse(safeString(candidate?.epss?.source_updated_at));
     const age = Date.now() - sourceUpdated;
     return status?.ok !== true || !Number.isFinite(sourceUpdated) || age < 0 || age > 36 * 60 * 60 * 1000;
+  }
+
+  function epssFreshness(candidate) {
+    const scoreDate = safeString(candidate?.epss?.score_date);
+    const sourceUpdated = Date.parse(safeString(candidate?.epss?.source_updated_at));
+    if (!isCanonicalDate(scoreDate) || !Number.isFinite(sourceUpdated)) return 'unavailable';
+    return epssMarkedStale(candidate) ? 'stale' : 'current';
+  }
+
+  function setSnapshotStatus(message, state, candidate = null, verifiedTotals = null, targetPage = null) {
+    snapshotStatusStrips.forEach((strip) => {
+      if (targetPage && strip.closest('.page')?.id !== `page-${targetPage}`) return;
+      const statusLine = $('[data-snapshot-state]', strip);
+      statusLine.textContent = message;
+      statusLine.dataset.state = state;
+
+      const generated = $('[data-snapshot-generated]', strip);
+      const windowStart = $('[data-snapshot-window-start]', strip);
+      const windowEnd = $('[data-snapshot-window-end]', strip);
+      const recordsValue = $('[data-snapshot-records]', strip);
+      const kevValue = $('[data-snapshot-kev]', strip);
+      const epssDate = $('[data-snapshot-epss-date]', strip);
+      if (!candidate) {
+        const unavailable = state === 'error' ? 'Unavailable' : 'Awaiting verification';
+        generated.textContent = unavailable;
+        generated.removeAttribute('datetime');
+        windowStart.textContent = unavailable;
+        windowStart.removeAttribute('datetime');
+        windowEnd.textContent = unavailable;
+        windowEnd.removeAttribute('datetime');
+        recordsValue.textContent = unavailable;
+        kevValue.textContent = unavailable;
+        epssDate.textContent = unavailable;
+        epssDate.removeAttribute('datetime');
+        return;
+      }
+
+      generated.dateTime = candidate.generated_at;
+      generated.textContent = formatTimestamp(candidate.generated_at, 'Unavailable');
+      windowStart.dateTime = candidate.window.start;
+      windowStart.textContent = formatTimestamp(candidate.window.start, 'Unavailable');
+      windowEnd.dateTime = candidate.window.end;
+      windowEnd.textContent = formatTimestamp(candidate.window.end, 'Unavailable');
+      recordsValue.textContent = verifiedTotals
+        ? `${nf.format(verifiedTotals.records)} verified`
+        : `${nf.format(candidate.totals.cves)} in manifest`;
+      kevValue.textContent = verifiedTotals
+        ? `${nf.format(verifiedTotals.kev)} verified`
+        : `${nf.format(candidate.totals.known_exploited)} in manifest`;
+
+      const scoreDate = safeString(candidate.epss?.score_date);
+      const freshness = epssFreshness(candidate);
+      epssDate.textContent = freshness === 'unavailable'
+        ? 'Unavailable'
+        : `${formatDate(scoreDate)} · ${freshness}`;
+      if (freshness === 'unavailable') epssDate.removeAttribute('datetime');
+      else epssDate.dateTime = scoreDate;
+    });
   }
 
   function activityDate(record) {
@@ -569,19 +628,24 @@
     $('#overview-status').textContent = `${nf.format(candidate.totals.cves)} CVE records · snapshot updated ${formatTimestamp(candidate.generated_at, 'recently')}.`;
     $('#overview-status').classList.remove('is-error');
     $('#overview-status').setAttribute('aria-busy', 'false');
+    setSnapshotStatus('Overview preview verified. Full shard integrity is checked when CVE Center opens; this is a static snapshot, not a live feed.', 'preview', candidate, null, 'overview');
     $('.ui-stage').setAttribute('aria-busy', 'false');
     $('#latest-list').setAttribute('aria-busy', 'false');
   }
 
   async function loadOverview() {
     const statusLine = $('#overview-status');
+    let candidate = null;
+    setSnapshotStatus('Loading snapshot manifest…', 'loading', null, null, 'overview');
     statusLine.setAttribute('aria-busy', 'true');
     try {
-      const candidate = await getManifest();
+      candidate = await getManifest();
+      setSnapshotStatus('Manifest verified. Checking the Overview preview integrity…', 'verifying', candidate, null, 'overview');
       const payload = validateOverview(await fetchVerifiedJson(candidate.overview, LIMITS.overviewBytes), candidate);
       manifest = candidate;
       renderOverview(payload, candidate);
     } catch {
+      setSnapshotStatus('Snapshot verification failed. No verified Overview records are shown; reload to try again.', 'error', candidate, null, 'overview');
       statusLine.textContent = 'Recent CVE data could not be verified. Reload the page to try again.';
       statusLine.classList.add('is-error');
       $('.ui-stage').setAttribute('aria-busy', 'false');
@@ -652,6 +716,7 @@
 
   function beginSnapshotLoading() {
     snapshotLoading = true;
+    setSnapshotStatus('Loading snapshot manifest…', 'loading', null, null, 'center');
     snapshotLoader.hidden = false;
     feedView.setAttribute('aria-busy', 'true');
     recordList.setAttribute('aria-busy', 'true');
@@ -668,6 +733,7 @@
   }
 
   function acceptSnapshotManifest(candidate) {
+    setSnapshotStatus('Manifest verified. Verifying all snapshot shards and EPSS; no records are shown until checks pass.', 'verifying', candidate, null, 'center');
     snapshotManifestState.textContent = 'Verified';
     snapshotManifestState.classList.add('is-verified');
     snapshotEpssState.textContent = 'Waiting for daily shards';
@@ -732,6 +798,10 @@
       acceptSnapshotSidecar();
 
       setSnapshotStats();
+      setSnapshotStatus('Snapshot verified. This is a dated static capture, not a live feed.', 'verified', manifest, {
+        records: records.length,
+        kev: records.filter((record) => record.kev !== null).length
+      }, 'center');
       renderRecords();
       if (requestedCveId && matchedRecords.length === 1 && matchedRecords[0].id === requestedCveId) {
         openDetails(matchedRecords[0], recordButtons.get(requestedCveId));
@@ -740,6 +810,7 @@
     } catch {
       records = [];
       epssScores = Object.create(null);
+      setSnapshotStatus('Snapshot verification failed. No records are displayed; reload to try again.', 'error', manifest, null, 'center');
       recordList.replaceChildren();
       status.textContent = 'The captured CVE snapshot could not be verified. No partial records are shown. Check your connection and reload to try again.';
       const retry = document.createElement('button');
