@@ -102,6 +102,8 @@ body[data-skin="glass"] { color-scheme: dark; background-color: #090e12; --nav-b
 .latest-id { min-width: 0; display: inline-flex; min-height: 44px; align-items: center; color: #e5ecee; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; letter-spacing: -.02em; text-decoration-color: #66777f; text-underline-offset: 3px; white-space: nowrap; }
 .latest-id:hover { color: var(--ice); text-decoration-color: currentColor; }
 .latest-list time { margin-left: auto; color: #aab5ba; font-size: 11px; white-space: nowrap; }
+.overview-status { min-height: 1.4em; margin: 8px 0 0; color: #9ca9ae; font-size: 12px; }
+.overview-status.is-error { color: #ffab59; }
 
 /* Center: a dark archival plane with a crisp analytical reading rhythm. */
 .page-center { background-color: #090d10; background-image: linear-gradient(90deg, #0a0f12, #0b1013 50%, #090d10); color: var(--text); }

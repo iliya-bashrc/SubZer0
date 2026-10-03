@@ -1,0 +1,56 @@
+name: Static snapshot security checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source without retaining a write-capable credential
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install pinned browser-test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Check JavaScript and Python syntax
+        run: |
+          node --check app.js
+          node --check community.js
+          python -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_preview.py verify_community_ansi_shadow.py
+
+      - name: Validate every committed snapshot byte, path, record, and digest
+        run: python scripts/verify_data_snapshot.py
+
+      - name: Run network-mocked updater and snapshot-integrity tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Install pinned Chromium runtime
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run full-feed security and browser regression
+        run: python verify_full_feed.py
+
+      - name: Run Community behavior, keyboard, reduced-motion, and responsive checks
+        run: python verify_community_ansi_shadow.py --community-only

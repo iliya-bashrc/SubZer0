@@ -2,6 +2,19 @@
   'use strict';
 
   const SNAPSHOT_BASE = 'snapshot/';
+  const LIMITS = Object.freeze({
+    manifestBytes: 512 * 1024,
+    overviewBytes: 64 * 1024,
+    shardBytes: 16 * 1024 * 1024,
+    epssBytes: 4 * 1024 * 1024,
+    snapshotBytes: 128 * 1024 * 1024,
+    records: 50_000,
+    days: 31,
+    fetchTimeoutMs: 12_000,
+    shardConcurrency: 6
+  });
+  const SHA256_RE = /^[a-f0-9]{64}$/i;
+  const SOURCE_LABELS = new Set(['NVD', 'GitHub Advisory Database', 'CISA KEV']);
   const PAGE_SIZES = new Set([24, 48, 96]);
   const CVE_ID_RE = /^CVE-\d{4,}-\d+$/i;
   const BASE_SEVERITIES = ['critical', 'high', 'medium', 'low'];
@@ -35,6 +48,7 @@
     : null;
 
   let manifest = null;
+  let manifestPromise = null;
   let records = [];
   let snapshotStarted = false;
   let epssScores = Object.create(null);
@@ -69,17 +83,36 @@
     return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
   }
 
+  function isCanonicalDate(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }
+
+  function isCanonicalTimestamp(value) {
+    if (typeof value !== 'string' || value.length > 40) return false;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return false;
+    return isCanonicalDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+  }
+
+  function isSourceTimestamp(value) {
+    if (isCanonicalTimestamp(value)) return true;
+    if (typeof value !== 'string' || value.length > 32 ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$/.test(value) ||
+        !isCanonicalDate(value.slice(0, 10))) return false;
+    return Number.isFinite(Date.parse(`${value}Z`));
+  }
+
   function formatDate(value, fallback = 'Date unavailable') {
-    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(value)) return fallback;
-    const parsed = new Date(`${value.slice(0, 10)}T00:00:00Z`);
-    if (Number.isNaN(parsed.getTime())) return fallback;
+    const day = typeof value === 'string' ? value.slice(0, 10) : '';
+    if (!isCanonicalDate(day)) return fallback;
+    const parsed = new Date(`${day}T00:00:00Z`);
     return new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(parsed);
   }
 
   function formatTimestamp(value, fallback = 'Not provided') {
-    if (typeof value !== 'string' || !value) return fallback;
-    const parsed = new Date(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`);
-    if (Number.isNaN(parsed.getTime())) return fallback;
+    if (!isSourceTimestamp(value)) return fallback;
+    const parsed = new Date(isCanonicalTimestamp(value) ? value : `${value}Z`);
     return new Intl.DateTimeFormat('en', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC', hour12: false
@@ -135,7 +168,10 @@
   }
 
   function epssMarkedStale() {
-    return manifest?.source_status?.find((source) => safeString(source?.name) === 'FIRST EPSS')?.ok === false;
+    const status = manifest?.source_status?.find((source) => safeString(source?.name) === 'FIRST EPSS');
+    const sourceUpdated = Date.parse(safeString(manifest?.epss?.source_updated_at));
+    const age = Date.now() - sourceUpdated;
+    return status?.ok !== true || !Number.isFinite(sourceUpdated) || age < 0 || age > 36 * 60 * 60 * 1000;
   }
 
   function activityDate(record) {
@@ -149,10 +185,10 @@
   }
 
   function safeExternalUrl(value) {
-    if (typeof value !== 'string') return null;
+    if (typeof value !== 'string' || value !== value.trim() || /[\u0000-\u0020\u007f]/.test(value) || !/^https?:\/\//i.test(value)) return null;
     try {
       const url = new URL(value);
-      if (url.protocol !== 'https:' || url.username || url.password || !url.hostname) return null;
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname) return null;
       return url.href;
     } catch {
       return null;
@@ -247,25 +283,308 @@
     dateSummary.textContent = `Activity date · ${formatDate(from).replace(',', '')} — ${formatDate(to).replace(',', '')}`;
   }
 
-  function validateManifest(candidate) {
-    if (!candidate || candidate.schema_version !== 2 || candidate.complete !== true) {
-      throw new Error('The bundled feed manifest is incomplete or unsupported.');
-    }
-    if (!Array.isArray(candidate.days) || candidate.days.length === 0) {
-      throw new Error('The bundled manifest contains no day shards.');
-    }
-    candidate.days.forEach((day) => {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(safeString(day?.date)) || day.path !== `data/${day.date}.json`) {
-        throw new Error('A manifest-listed shard path is invalid.');
+  function isCount(value, maximum = LIMITS.records) {
+    return Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+  }
+
+  function isValidText(value, maximum, allowEmpty = false, multiline = false) {
+    if (typeof value !== 'string' || Array.from(value).length > maximum || (!allowEmpty && !value.trim())) return false;
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code < 32 && !(multiline && [9, 10, 13].includes(code))) return false;
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(index + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+        index += 1;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        return false;
       }
+    }
+    return true;
+  }
+
+  function severityForScore(score) {
+    if (score === null) return 'unknown';
+    if (score === 0) return 'none';
+    if (score >= 9) return 'critical';
+    if (score >= 7) return 'high';
+    if (score >= 4) return 'medium';
+    return score >= 0.1 ? 'low' : 'none';
+  }
+
+  function validateManifest(candidate) {
+    if (!candidate || typeof candidate !== 'object' || candidate.schema_version !== 2 || candidate.complete !== true) throw new Error('Manifest schema is incomplete.');
+    if (!isCanonicalTimestamp(candidate.generated_at) || candidate.last_successful_update !== candidate.generated_at) throw new Error('Manifest timestamps are invalid.');
+    const window = candidate.window;
+    if (!window || window.days !== 30 || window.timezone !== 'UTC' || !isCanonicalTimestamp(window.start) || !isCanonicalTimestamp(window.end) || window.end !== candidate.generated_at) throw new Error('Manifest window is invalid.');
+    const startDay = window.start.slice(0, 10);
+    const endDay = window.end.slice(0, 10);
+    if (!isCanonicalDate(startDay) || !isCanonicalDate(endDay)) throw new Error('Manifest window dates are invalid.');
+    const daySpan = (Date.parse(`${endDay}T00:00:00Z`) - Date.parse(`${startDay}T00:00:00Z`)) / 86_400_000;
+    if (daySpan !== 30 || !Array.isArray(candidate.days) || candidate.days.length !== LIMITS.days) throw new Error('Manifest does not contain the complete 31-day UTC window.');
+
+    const totals = candidate.totals;
+    const severityNames = ['critical', 'high', 'medium', 'low', 'none', 'unknown'];
+    if (!totals || !isCount(totals.cves, LIMITS.records) || totals.cves === 0 || !isCount(totals.known_exploited, totals.cves)) throw new Error('Manifest totals are invalid.');
+    const declaredSeverity = severityNames.reduce((sum, name) => {
+      if (!isCount(totals[name], totals.cves)) throw new Error('Manifest severity totals are invalid.');
+      return sum + totals[name];
+    }, 0);
+    if (declaredSeverity !== totals.cves) throw new Error('Manifest severity totals do not match its CVE total.');
+
+    const coverage = candidate.coverage;
+    if (!coverage || !isCount(coverage.nvd_records_returned) || !isCount(coverage.github_advisories_returned) || !isCount(coverage.cisa_kev_catalog_records) ||
+        coverage.nvd_records_returned === 0 || coverage.github_advisories_returned === 0 || coverage.cisa_kev_catalog_records === 0 ||
+        coverage.distinct_cve_records !== totals.cves || coverage.utc_days_sharded !== LIMITS.days || coverage.sources_complete !== true) throw new Error('Manifest source coverage is incomplete.');
+
+    let totalBytes = 0;
+    const daySeverityTotals = Object.fromEntries(severityNames.map((name) => [name, 0]));
+    let dayKevTotal = 0;
+    const expectedStart = Date.parse(`${startDay}T00:00:00Z`);
+    let recordCount = 0;
+    candidate.days.forEach((day, index) => {
+      const expectedDate = new Date(expectedStart + index * 86_400_000).toISOString().slice(0, 10);
+      if (!day || day.date !== expectedDate || !isCanonicalDate(day.date) || day.path !== `data/${day.date}.json`) throw new Error('A manifest-listed shard path or date is invalid.');
+      if (!isCount(day.count, LIMITS.records) || !isCount(day.bytes, LIMITS.shardBytes) || day.bytes === 0 || !SHA256_RE.test(safeString(day.sha256))) throw new Error('A manifest-listed shard has invalid integrity metadata.');
+      const severityCount = severityNames.reduce((sum, name) => {
+        if (!isCount(day[name], day.count)) throw new Error('A shard severity count is invalid.');
+        daySeverityTotals[name] += day[name];
+        return sum + day[name];
+      }, 0);
+      if (severityCount !== day.count || !isCount(day.exploited, day.count)) throw new Error('A shard count does not match its severity or KEV totals.');
+      totalBytes += day.bytes;
+      dayKevTotal += day.exploited;
+      recordCount += day.count;
     });
+    if (recordCount !== totals.cves || dayKevTotal !== totals.known_exploited || severityNames.some((name) => daySeverityTotals[name] !== totals[name])) throw new Error('Shard totals do not match the manifest.');
+
+    const overview = candidate.overview;
+    const epss = candidate.epss;
+    for (const [config, expectedPath, maxBytes] of [[overview, 'data/overview.json', LIMITS.overviewBytes], [epss, 'data/epss.json', LIMITS.epssBytes]]) {
+      if (!config || config.path !== expectedPath || !isCount(config.bytes, maxBytes) || config.bytes === 0 || !SHA256_RE.test(safeString(config.sha256))) throw new Error('A manifest sidecar has invalid integrity metadata.');
+      totalBytes += config.bytes;
+    }
+    if (totalBytes > LIMITS.snapshotBytes || !isCount(epss.scored_cves, totals.cves) || epss.records !== totals.cves) throw new Error('Manifest sidecar or total-snapshot limits are invalid.');
+    if (typeof epss.score_date !== 'string' || (epss.score_date && !isCanonicalDate(epss.score_date)) || typeof epss.source_updated_at !== 'string' || typeof epss.updated_at !== 'string' || !isCanonicalTimestamp(epss.updated_at)) throw new Error('Manifest EPSS dates are invalid.');
+
+    if (!Array.isArray(candidate.source_status) || candidate.source_status.length !== 4) throw new Error('Manifest source status is incomplete.');
+    const statusNames = new Set();
+    candidate.source_status.forEach((source) => {
+      if (!source || typeof source.name !== 'string' || statusNames.has(source.name) || typeof source.ok !== 'boolean' ||
+          (source.checked_at !== undefined && (!isCanonicalTimestamp(source.checked_at) || source.checked_at !== candidate.generated_at))) throw new Error('Manifest source status is invalid.');
+      statusNames.add(source.name);
+    });
+    const epssStatus = candidate.source_status.find((source) => source.name === 'FIRST EPSS');
+    const coreNames = ['NVD CVE API 2.0', 'GitHub Security Advisory Database', 'CISA KEV'];
+    const nvdStatus = candidate.source_status.find((source) => source.name === coreNames[0]);
+    const githubStatus = candidate.source_status.find((source) => source.name === coreNames[1]);
+    const cisaStatus = candidate.source_status.find((source) => source.name === coreNames[2]);
+    if (coreNames.some((name) => !candidate.source_status.some((source) => source.name === name && source.ok === true)) ||
+        nvdStatus.records !== coverage.nvd_records_returned || !isCount(nvdStatus.pages, 1000) || nvdStatus.pages === 0 ||
+        githubStatus.advisories !== coverage.github_advisories_returned || !isCount(githubStatus.pages, 250) || githubStatus.pages === 0 ||
+        cisaStatus.catalog_records !== coverage.cisa_kev_catalog_records || !epssStatus ||
+        epssStatus.scores !== epss.scored_cves || epssStatus.records !== totals.cves || epssStatus.score_date !== epss.score_date || epssStatus.source_updated_at !== epss.source_updated_at) throw new Error('Manifest source status does not agree with its coverage.');
+
+    const canonicalSourceName = (name) => name === 'CISA Known Exploited Vulnerabilities catalog' ? 'CISA KEV' : name;
+    if (!Array.isArray(candidate.sources) || candidate.sources.length !== 4 || candidate.sources.some((source) => !source || typeof source.name !== 'string' || !safeExternalUrl(source.url)) ||
+        new Set(candidate.sources.map((source) => source.name)).size !== 4 || candidate.sources.some((source) => !statusNames.has(canonicalSourceName(source.name)))) throw new Error('Manifest source provenance is invalid.');
+    if (!isCount(overview.count, 3) || overview.count !== Math.min(3, totals.cves)) throw new Error('Manifest Overview count is invalid.');
     return candidate;
   }
 
-  async function fetchJson(path) {
-    const response = await fetch(path);
-    if (!response.ok) throw new Error(`Local snapshot file could not be read (${response.status}).`);
-    return response.json();
+  async function fetchBytes(path, maximum) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), LIMITS.fetchTimeoutMs);
+    try {
+      const response = await fetch(path, { signal: controller.signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+      if (!response.ok) throw new Error('Snapshot request failed.');
+      const declaredLength = response.headers.get('content-length');
+      if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maximum)) throw new Error('Snapshot resource exceeds its byte limit.');
+      if (!response.body || typeof response.body.getReader !== 'function') {
+        const fallback = new Uint8Array(await response.arrayBuffer());
+        if (fallback.byteLength > maximum) throw new Error('Snapshot resource exceeds its byte limit.');
+        return fallback;
+      }
+      const reader = response.body.getReader();
+      const chunks = [];
+      let length = 0;
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        length += result.value.byteLength;
+        if (length > maximum) {
+          await reader.cancel();
+          throw new Error('Snapshot resource exceeds its byte limit.');
+        }
+        chunks.push(result.value);
+      }
+      const bytes = new Uint8Array(length);
+      let offset = 0;
+      chunks.forEach((chunk) => { bytes.set(chunk, offset); offset += chunk.byteLength; });
+      return bytes;
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('Snapshot request timed out.');
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  function parseJsonBytes(bytes) {
+    try {
+      return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    } catch {
+      throw new Error('Snapshot JSON is malformed.');
+    }
+  }
+
+  async function verifyBlob(bytes, config) {
+    if (bytes.byteLength !== config.bytes || !window.crypto?.subtle?.digest) throw new Error('Snapshot integrity checks are unavailable.');
+    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+    const actual = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    if (actual.toLowerCase() !== config.sha256.toLowerCase()) throw new Error('Snapshot integrity verification failed.');
+  }
+
+  async function fetchVerifiedJson(config, maximum) {
+    const bytes = await fetchBytes(`${SNAPSHOT_BASE}${config.path}`, maximum);
+    await verifyBlob(bytes, config);
+    return parseJsonBytes(bytes);
+  }
+
+  async function getManifest() {
+    if (!manifestPromise) {
+      manifestPromise = (async () => {
+        const bytes = await fetchBytes(`${SNAPSHOT_BASE}manifest.json`, LIMITS.manifestBytes);
+        return validateManifest(parseJsonBytes(bytes));
+      })().catch((error) => {
+        manifestPromise = null;
+        throw error;
+      });
+    }
+    return manifestPromise;
+  }
+
+  function validateRecord(record, expectedDay) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Snapshot contains an invalid record.');
+    const required = ['id', 'title', 'desc', 'score', 'sev', 'published', 'modified', 'window_date', 'activity_at', 'date_basis', 'affected', 'refs', 'related_cves', 'advisories', 'sources', 'kev', 'primary_url'];
+    if (required.some((key) => !Object.hasOwn(record, key))) throw new Error('Snapshot record is missing required fields.');
+    if (!isValidText(record.id, 32) || !/^CVE-\d{4,}-\d+$/.test(record.id) || record.id !== record.id.toUpperCase()) throw new Error('Snapshot contains a non-canonical CVE identifier.');
+    if (!isValidText(record.title, 512) || !isValidText(record.desc, 65_536, false, true)) throw new Error('Snapshot record text is invalid.');
+    if (record.score !== null && (typeof record.score !== 'number' || !Number.isFinite(record.score) || record.score < 0 || record.score > 10)) throw new Error('Snapshot contains an invalid CVSS value.');
+    if (!['critical', 'high', 'medium', 'low', 'none', 'unknown'].includes(record.sev) || record.sev !== severityForScore(record.score)) throw new Error('Snapshot severity does not match its CVSS value.');
+    for (const field of ['published', 'modified']) if (record[field] !== null && !isSourceTimestamp(record[field])) throw new Error('Snapshot contains an invalid source timestamp.');
+    if (!isCanonicalDate(record.window_date) || record.window_date !== expectedDay || !isSourceTimestamp(record.activity_at) || new Date(activityMilliseconds(record)).toISOString().slice(0, 10) !== expectedDay) throw new Error('Snapshot activity date does not match its shard.');
+    if (!isValidText(record.date_basis, 128) || !safeExternalUrl(record.primary_url)) throw new Error('Snapshot record source details are invalid.');
+    if (!Array.isArray(record.sources) || record.sources.length < 1 || record.sources.length > 8 || new Set(record.sources).size !== record.sources.length || record.sources.some((source) => !SOURCE_LABELS.has(source))) throw new Error('Snapshot source labels are invalid.');
+
+    if (!Array.isArray(record.affected) || record.affected.length > 128 || record.affected.some((item) => !item || typeof item !== 'object' ||
+        !isValidText(item.vendor, 4096, true, true) || !isValidText(item.product, 4096, true, true) || !isValidText(item.versions, 4096, true, true) || !SOURCE_LABELS.has(item.source) ||
+        (Object.hasOwn(item, 'cpe') && !isValidText(item.cpe, 2048, true, true)))) throw new Error('Snapshot affected-product details are invalid.');
+    if (!Array.isArray(record.refs) || record.refs.length > 64 || record.refs.some((item) => !item || typeof item !== 'object' || !isValidText(item.label, 256) || !safeExternalUrl(item.url) || !isValidText(item.source, 128) ||
+        !Array.isArray(item.tags || []) || (item.tags || []).length > 16 || (item.tags || []).some((tag) => !isValidText(tag, 40)))) throw new Error('Snapshot references are invalid.');
+    if (!Array.isArray(record.related_cves) || record.related_cves.length > 100 || record.related_cves.some((item) => !item || typeof item !== 'object' || !isValidText(item.id, 32) || !/^CVE-\d{4,}-\d+$/.test(item.id) || item.id !== item.id.toUpperCase() || item.id === record.id || !safeExternalUrl(item.url) || !isValidText(item.source, 128))) throw new Error('Snapshot related-CVE details are invalid.');
+    if (!Array.isArray(record.advisories) || record.advisories.length > 32 || record.advisories.some((item) => !item || typeof item !== 'object' || !isValidText(item.label, 256) || !safeExternalUrl(item.url))) throw new Error('Snapshot advisory details are invalid.');
+    if (record.kev !== null) {
+      const kev = record.kev;
+      if (!kev || typeof kev !== 'object' || Array.isArray(kev) || !isCanonicalDate(kev.date_added) || !isValidText(kev.vendor, 256, true) || !isValidText(kev.product, 256, true) ||
+          (kev.due_date !== '' && !isCanonicalDate(kev.due_date)) || !isValidText(kev.due_date, 10, true) || !isValidText(kev.required_action, 4096, true, true) || !isValidText(kev.ransomware, 64, true)) throw new Error('Snapshot CISA KEV details are invalid.');
+    }
+    return record;
+  }
+
+  function validateOverview(payload, candidate) {
+    if (!payload || typeof payload !== 'object' || payload.schema_version !== 1 || payload.generated_at !== candidate.generated_at || !Array.isArray(payload.records) || payload.records.length !== Math.min(3, candidate.totals.cves)) throw new Error('Overview snapshot is invalid.');
+    payload.records.forEach((record) => {
+      if (!record || !isValidText(record.id, 32) || !/^CVE-\d{4,}-\d+$/.test(record.id) || record.id !== record.id.toUpperCase() || !isValidText(record.title, 512) ||
+          !['critical', 'high', 'medium', 'low', 'none', 'unknown'].includes(record.sev) ||
+          (record.score !== null && (typeof record.score !== 'number' || !Number.isFinite(record.score) || record.score < 0 || record.score > 10)) || record.sev !== severityForScore(record.score) ||
+          !isCanonicalDate(record.window_date) || !isSourceTimestamp(record.activity_at) || !isValidText(record.date_basis, 128) || !Array.isArray(record.sources) ||
+          record.sources.length < 1 || record.sources.length > 8 || record.sources.some((source) => !SOURCE_LABELS.has(source))) throw new Error('Overview record is invalid.');
+    });
+    return payload;
+  }
+
+  function renderOverview(payload, candidate) {
+    const recordsForCards = payload.records;
+    const cards = $$('.ui-stage [data-overview-card]');
+    recordsForCards.forEach((record, index) => {
+      const card = cards[index];
+      if (!card) return;
+      const severity = ['critical', 'high', 'medium', 'low'].includes(record.sev) ? record.sev : 'unrated';
+      const tag = card.querySelector('.severity-tag');
+      tag.className = `severity-tag ${severity}`;
+      tag.textContent = severityName(severity);
+      if (index < 2) {
+        card.querySelector('.layer-kicker').textContent = `Record · ${record.id}`;
+        card.querySelector('.layer-mainline strong').textContent = record.title;
+        card.querySelector('.layer-foot').textContent = `${record.score === null ? 'CVSS unscored' : `CVSS ${record.score.toFixed(1)}`} / ${formatDate(record.window_date)}`;
+      } else {
+        card.querySelector('.layer-kicker').textContent = `CVE record · ${record.sources.join(' · ')}`;
+        card.querySelector('.layer-mainline strong').textContent = record.id;
+        card.querySelector('.layer-description').textContent = record.title;
+        const foot = card.querySelector('.layer-foot-row');
+        const score = document.createElement('span');
+        score.textContent = record.score === null ? 'CVSS unscored' : `CVSS ${record.score.toFixed(1)}`;
+        const source = document.createElement('span');
+        source.textContent = record.sources[0];
+        const time = document.createElement('time');
+        time.dateTime = record.window_date;
+        time.textContent = formatDate(record.window_date);
+        foot.replaceChildren(score, source, time);
+      }
+      card.hidden = false;
+    });
+    cards.slice(recordsForCards.length).forEach((card) => { card.hidden = true; });
+
+    const latest = $('#latest-list');
+    latest.replaceChildren();
+    recordsForCards.forEach((record) => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.className = 'latest-id';
+      link.href = `?page=center&cve=${encodeURIComponent(record.id)}`;
+      link.textContent = record.id;
+      const severity = ['critical', 'high', 'medium', 'low'].includes(record.sev) ? record.sev : 'unrated';
+      const tag = document.createElement('span');
+      tag.className = `severity-tag ${severity}`;
+      tag.textContent = severityName(severity);
+      const time = document.createElement('time');
+      time.dateTime = record.window_date;
+      time.textContent = formatDate(record.window_date);
+      item.append(link, tag, time);
+      latest.append(item);
+    });
+    const generatedTime = $('#overview-generated-at');
+    const time = document.createElement('time');
+    time.dateTime = candidate.generated_at;
+    time.textContent = formatTimestamp(candidate.generated_at, 'Date unavailable');
+    generatedTime.replaceChildren(time);
+    $('#overview-status').textContent = `${nf.format(candidate.totals.cves)} CVE records · snapshot updated ${formatTimestamp(candidate.generated_at, 'recently')}.`;
+    $('#overview-status').classList.remove('is-error');
+    $('#overview-status').setAttribute('aria-busy', 'false');
+    $('.ui-stage').setAttribute('aria-busy', 'false');
+    $('#latest-list').setAttribute('aria-busy', 'false');
+  }
+
+  async function loadOverview() {
+    const statusLine = $('#overview-status');
+    statusLine.setAttribute('aria-busy', 'true');
+    try {
+      const candidate = await getManifest();
+      const payload = validateOverview(await fetchVerifiedJson(candidate.overview, LIMITS.overviewBytes), candidate);
+      manifest = candidate;
+      renderOverview(payload, candidate);
+    } catch {
+      statusLine.textContent = 'Recent CVE data could not be verified. Reload the page to try again.';
+      statusLine.classList.add('is-error');
+      $('.ui-stage').setAttribute('aria-busy', 'false');
+      $$('.ui-stage [data-overview-card]').forEach((card) => { card.hidden = true; });
+      $('#latest-list').replaceChildren();
+      $('#latest-list').setAttribute('aria-busy', 'false');
+      $('#overview-generated-at').textContent = 'Unavailable';
+    } finally {
+      statusLine.setAttribute('aria-busy', 'false');
+    }
   }
 
   function validateRecords(dayPayloads) {
@@ -273,58 +592,85 @@
     const seen = new Set();
     dayPayloads.forEach(({ day, rows }) => {
       if (!Array.isArray(rows) || rows.length !== day.count) {
-        throw new Error(`The captured ${day.date} shard does not match its manifest count.`);
+        throw new Error('A captured shard does not match its manifest count.');
       }
       rows.forEach((record) => {
-        if (!record || !CVE_ID_RE.test(safeString(record.id))) {
-          throw new Error(`The captured ${day.date} shard contains an invalid CVE record.`);
-        }
-        const normalizedId = record.id.toUpperCase();
-        if (seen.has(normalizedId)) throw new Error(`The captured snapshot repeats ${normalizedId}.`);
-        seen.add(normalizedId);
-        if (!['critical', 'high', 'medium', 'low', 'none', 'unknown'].includes(safeString(record.sev).toLowerCase())) {
-          throw new Error(`The captured snapshot has an unexpected severity for ${normalizedId}.`);
-        }
-        record.id = normalizedId;
+        validateRecord(record, day.date);
+        if (seen.has(record.id)) throw new Error('Captured snapshot repeats a CVE identifier.');
+        seen.add(record.id);
         all.push(record);
       });
     });
-    if (all.length !== Number(manifest.totals?.cves)) {
-      throw new Error(`Loaded ${nf.format(all.length)} records, but the manifest declares ${nf.format(Number(manifest.totals?.cves) || 0)}.`);
-    }
+    if (all.length !== manifest.totals.cves) throw new Error('Loaded record total does not match the manifest.');
     all.sort((left, right) => activityMilliseconds(right) - activityMilliseconds(left) || right.id.localeCompare(left.id));
     return all;
   }
 
+  async function mapWithConcurrency(items, limit, mapper) {
+    const results = new Array(items.length);
+    let next = 0;
+    let failed = false;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (!failed) {
+        const index = next;
+        next += 1;
+        if (index >= items.length) return;
+        try {
+          results[index] = await mapper(items[index], index);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
+  function validateEpssFile(payload, candidate, rows) {
+    if (!payload || typeof payload !== 'object' || payload.schema_version !== 1 || payload.updated_at !== candidate.epss.updated_at ||
+        payload.score_date !== candidate.epss.score_date || payload.source_updated_at !== candidate.epss.source_updated_at || !isCanonicalTimestamp(payload.checked_at) ||
+        (payload.error !== null && !isValidText(payload.error, 2048, true, true)) || !payload.scores || typeof payload.scores !== 'object' || Array.isArray(payload.scores)) throw new Error('EPSS sidecar is invalid.');
+    const ids = new Set(rows.map((record) => record.id));
+    const scores = Object.keys(payload.scores);
+    if (scores.length !== candidate.epss.scored_cves || scores.some((id) => {
+      const value = payload.scores[id];
+      return !ids.has(id) || !/^CVE-\d{4,}-\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.keys(value).length !== 2 || !Object.hasOwn(value, 'score') || !Object.hasOwn(value, 'percentile') ||
+        typeof value.score !== 'number' || !Number.isFinite(value.score) || value.score < 0 || value.score > 1 ||
+        typeof value.percentile !== 'number' || !Number.isFinite(value.percentile) || value.percentile < 0 || value.percentile > 1;
+    })) throw new Error('EPSS score values are invalid.');
+    return payload.scores;
+  }
+
   async function loadSnapshot() {
     try {
-      manifest = validateManifest(await fetchJson(`${SNAPSHOT_BASE}manifest.json`));
-      const dayPayloads = await Promise.all(manifest.days.map(async (day) => ({
-        day,
-        rows: await fetchJson(`${SNAPSHOT_BASE}${day.path}`)
-      })));
+      manifest = await getManifest();
+      const [dayPayloads, epssFile] = await Promise.all([
+        mapWithConcurrency(manifest.days, LIMITS.shardConcurrency, async (day) => ({
+          day,
+          rows: await fetchVerifiedJson(day, LIMITS.shardBytes)
+        })),
+        fetchVerifiedJson(manifest.epss, LIMITS.epssBytes)
+      ]);
       records = validateRecords(dayPayloads);
-
-      const epssPath = manifest.epss?.path;
-      if (epssPath !== 'data/epss.json') throw new Error('The captured EPSS file path is invalid.');
-      const epssFile = await fetchJson(`${SNAPSHOT_BASE}${epssPath}`);
-      epssScores = epssFile && epssFile.scores && typeof epssFile.scores === 'object' && !Array.isArray(epssFile.scores)
-        ? epssFile.scores
-        : Object.create(null);
+      epssScores = validateEpssFile(epssFile, manifest, records);
 
       setSnapshotStats();
       renderRecords();
       if (requestedCveId && matchedRecords.length === 1 && matchedRecords[0].id === requestedCveId) {
         openDetails(matchedRecords[0], recordButtons.get(requestedCveId));
       }
-    } catch (error) {
+    } catch {
+      records = [];
+      epssScores = Object.create(null);
       recordList.setAttribute('aria-busy', 'false');
       recordList.replaceChildren();
-      status.textContent = `The local snapshot could not be loaded: ${safeString(error?.message, 'unknown error')}`;
+      status.textContent = 'The captured CVE snapshot could not be verified. No partial records are shown. Check your connection and reload to try again.';
       const retry = document.createElement('button');
       retry.type = 'button';
       retry.className = 'clear-filters';
-      retry.textContent = 'Retry loading snapshot';
+      retry.textContent = 'Reload snapshot';
       retry.addEventListener('click', () => window.location.reload());
       recordList.append(retry);
     }
@@ -834,5 +1180,6 @@
   }
 
   bind();
+  loadOverview();
   if (activePage === 'center') startSnapshot();
 })();

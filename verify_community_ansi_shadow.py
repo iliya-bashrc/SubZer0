@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import shutil
 import subprocess
@@ -15,7 +16,6 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops
 from playwright.sync_api import Browser, Page, Route, sync_playwright
 
 ROOT = Path(__file__).resolve().parent
@@ -143,6 +143,8 @@ def assert_terminal_fits(metrics: dict[str, Any]) -> None:
 
 
 def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, page_name: str, width: int, height: int, file_stem: str) -> dict[str, Any]:
+    from PIL import Image, ImageChops
+
     captures: list[Path] = []
     counts: list[int] = []
     overview_action_counts: list[int] = []
@@ -403,8 +405,17 @@ def test_history_return_after_action(browser: Browser, base_url: str) -> dict[st
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        '--community-only', action='store_true',
+        help='Run Community interaction/layout checks without comparing redesigned Overview/CVE Center pixels to an older baseline.',
+    )
+    community_only = parser.parse_args().community_only
     temporary_baseline = None
-    if BASELINE_DIR:
+    if community_only:
+        baseline_root = ROOT
+        baseline_ref = 'pixel comparison skipped (Community-only mode)'
+    elif BASELINE_DIR:
         baseline_root = Path(BASELINE_DIR).resolve()
         if not baseline_root.is_dir():
             raise SystemExit(f'Baseline directory not found: {baseline_root}')
@@ -472,12 +483,12 @@ def main() -> None:
                 page.close()
             results['responsive_layouts'] = layout_results
 
-            # First and second pages are compared pixel-for-pixel at desktop and mobile widths.
-            regressions = []
-            for width, height in ((1440, 1000), (390, 844), (320, 740)):
-                regressions.append(screenshot_comparison(browser, base_url, preview_url, 'overview', width, height, f'regression-overview-{width}'))
-                regressions.append(screenshot_comparison(browser, base_url, preview_url, 'center', width, height, f'regression-center-{width}'))
-            results['first_two_pages'] = {'pixel_identical_to_baseline': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
+            if not community_only:
+                regressions = []
+                for width, height in ((1440, 1000), (390, 844), (320, 740)):
+                    regressions.append(screenshot_comparison(browser, base_url, preview_url, 'overview', width, height, f'regression-overview-{width}'))
+                    regressions.append(screenshot_comparison(browser, base_url, preview_url, 'center', width, height, f'regression-center-{width}'))
+                results['first_two_pages'] = {'pixel_identical_to_baseline': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
 
             # The actions and timing are browser-driven, while both Telegram destinations are intercepted locally.
             results['actions'] = test_actions(browser, preview_url)
