@@ -570,6 +570,280 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
     return results
 
 
+def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
+    """Exercise the touch-only page gesture with real Chromium touch input."""
+    issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
+    context = browser.new_context(
+        viewport={'width': 390, 'height': 844}, device_scale_factor=1,
+        is_mobile=True, has_touch=True,
+    )
+    page = context.new_page()
+    browser_issue_track(page, issues, origin)
+    cdp = context.new_cdp_session(page)
+    url = f'{origin}/?page=overview'
+
+    def dispatch_touch(kind: str, x: int | None = None, y: int | None = None) -> None:
+        points = [] if kind == 'touchEnd' else [{'x': x, 'y': y, 'id': 1}]
+        cdp.send('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': points})
+
+    def swipe(
+        start_x: int,
+        start_y: int,
+        delta_x: int,
+        delta_y: int = 0,
+        *,
+        steps: int = 6,
+        delay_ms: int = 12,
+        initial_delay_ms: int = 0,
+    ) -> None:
+        dispatch_touch('touchStart', start_x, start_y)
+        if initial_delay_ms:
+            page.wait_for_timeout(initial_delay_ms)
+        for step in range(1, steps + 1):
+            dispatch_touch(
+                'touchMove',
+                round(start_x + delta_x * step / steps),
+                round(start_y + delta_y * step / steps),
+            )
+            if delay_ms:
+                page.wait_for_timeout(delay_ms)
+        dispatch_touch('touchEnd')
+
+    def expect_active(name: str) -> None:
+        expect(page.locator(f'#page-{name}')).to_be_visible()
+        for candidate in ('overview', 'center', 'community'):
+            tab = page.locator(f'#tab-{candidate}')
+            selected = candidate == name
+            assert tab.get_attribute('aria-selected') == str(selected).lower()
+            assert tab.evaluate('(element) => element.tabIndex') == (0 if selected else -1)
+
+    def drag_from_edge(direction: str, distance: int = 150, *, y: int = 500, steps: int = 6, delay_ms: int = 12) -> None:
+        x = 382 if direction == 'left' else 8
+        dx = -distance if direction == 'left' else distance
+        swipe(x, y, dx, steps=steps, delay_ms=delay_ms)
+
+    def point(selector: str, x_fraction: float = 0.5, y_fraction: float = 0.5) -> tuple[int, int]:
+        box = page.locator(selector).bounding_box()
+        assert box is not None, f'Missing visible test target: {selector}'
+        return round(box['x'] + box['width'] * x_fraction), round(box['y'] + box['height'] * y_fraction)
+
+    def best_detail_record() -> str:
+        best_id = ''
+        best_weight = -1
+        for day in manifest['days']:
+            rows = json.loads((ROOT / 'snapshot' / day['path']).read_text(encoding='utf-8'))
+            for record in rows:
+                weight = len(str(record.get('desc') or ''))
+                weight += 120 * len(record.get('refs') or [])
+                weight += 110 * len(record.get('affected') or [])
+                weight += 100 * len(record.get('advisories') or [])
+                weight += 80 * len(record.get('related_cves') or [])
+                if weight > best_weight:
+                    best_id, best_weight = record['id'], weight
+        return best_id
+
+    try:
+        page.goto(url, wait_until='load')
+        expect_active('overview')
+        assert page.evaluate("getComputedStyle(document.querySelector('#main-content')).touchAction") == 'pan-y pinch-zoom'
+
+        # The first-page edge resists but never wraps; a short horizontal drag visibly follows the finger and returns.
+        drag_from_edge('right', 220)
+        expect_active('overview')
+        start_x, start_y = 382, 500
+        dispatch_touch('touchStart', start_x, start_y)
+        dispatch_touch('touchMove', start_x - 24, start_y)
+        visual = page.locator('#page-overview').evaluate('element => ({tracking: element.classList.contains("is-swipe-tracking"), transform: getComputedStyle(element).transform})')
+        assert visual['tracking'] and visual['transform'] != 'none', f'Page did not track a short horizontal drag: {visual}'
+        dispatch_touch('touchEnd')
+        expect_active('overview')
+        page.wait_for_function("() => !document.querySelector('#page-overview').classList.contains('is-swipe-settling')", timeout=2_000)
+        assert page.locator('#page-overview').evaluate('element => getComputedStyle(element).transform') == 'none'
+
+        # A short, fast deliberate gesture may pass the distance threshold through velocity.
+        swipe(382, 500, -48, steps=1, delay_ms=0, initial_delay_ms=40)
+        expect_active('center')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect_active('center')
+
+        # All four adjacent routes work; the state remains synchronized with the existing tabs.
+        drag_from_edge('right')
+        expect_active('overview')
+        drag_from_edge('left')
+        expect_active('center')
+        drag_from_edge('left')
+        expect_active('community')
+        assert page.url == url, f'Swipe changed the established page URL/history model: {page.url}'
+
+        # The last-page edge cannot wrap. The terminal's blank panel padding remains a valid swipe surface.
+        page.wait_for_function("() => !document.querySelector('#terminal-info').hidden", timeout=15_000)
+        terminal = page.locator('.terminal-screen').bounding_box()
+        assert terminal is not None
+        panel_x, panel_y = round(terminal['x'] + 5), round(terminal['y'] + 4)
+        panel_target = page.evaluate('([x, y]) => { const el = document.elementFromPoint(x, y); return {inside: Boolean(el?.closest(".terminal-frame")), control: Boolean(el?.closest("button, a[href], input, select, textarea"))}; }', [panel_x, panel_y])
+        assert panel_target == {'inside': True, 'control': False}, f'Terminal swipe test did not start on safe panel background: {panel_target}'
+        swipe(round(terminal['x'] + terminal['width'] - 5), panel_y, -180, steps=6, delay_ms=12)
+        expect_active('community')
+        swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('center')
+        assert page.url == url, 'Community-to-Center swipe added or rewrote browser history.'
+
+        # Search input and pagination controls keep their own horizontal/tap interaction.
+        search_x, search_y = point('#record-search')
+        swipe(search_x, search_y, -130, steps=5, delay_ms=12)
+        expect_active('center')
+        page.locator('#record-search').fill('')
+        page.locator('#page-size').select_option('48')
+        page.locator('#page-next').scroll_into_view_if_needed()
+        next_x, next_y = point('#page-next')
+        swipe(next_x, next_y, -130, steps=5, delay_ms=12)
+        expect_active('center')
+        page.locator('#page-next').click()
+        expect(page.locator('#page-indicator')).to_contain_text('Page 2 of')
+        page.evaluate("document.documentElement.style.scrollBehavior = 'auto'; window.scrollTo(0, 0)")
+        page.wait_for_function('window.scrollY === 0')
+        safe_start = page.evaluate("""() => {
+          const target = document.elementFromPoint(382, 150);
+          return {
+            page: target?.closest('.page')?.id ?? null,
+            blocked: Boolean(target?.closest('a[href], button, input, select, textarea, [role="button"], [role="link"], .record-row, .pagination, .detail-view, .ui-stage')),
+          };
+        }""")
+        assert safe_start == {'page': 'page-center', 'blocked': False}, f'Post-pagination swipe did not start on a safe Center background: {safe_start}'
+        drag_from_edge('left', y=150)
+        expect_active('community')
+        swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('center')
+        expect(page.locator('#page-indicator')).to_contain_text('Page 2 of')
+
+        # Vertical and vertical-dominant diagonal movement scroll the Center without changing pages.
+        page.evaluate('window.scrollTo(0, 0)')
+        scroll_before = page.evaluate('window.scrollY')
+        swipe(8, 700, 0, -220, steps=6, delay_ms=12)
+        page.wait_for_function('(before) => window.scrollY > before + 30', arg=scroll_before, timeout=3_000)
+        expect_active('center')
+        swipe(8, 600, 70, 100, steps=6, delay_ms=12)
+        expect_active('center')
+
+        # A long, verified record makes the detail view scrollable; content interactions do not initiate navigation.
+        detail_id = best_detail_record()
+        page.locator('#record-search').fill(detail_id)
+        expect(page.locator('.record-row')).to_have_count(1)
+        page.locator('.record-open').click()
+        expect(page.locator('#detail-view')).to_be_visible()
+        expect(page.locator('#detail-heading')).to_have_text(detail_id)
+        assert page.locator('#detail-content a[href^="https://"]').count() > 0, 'CVE source links are missing from the detail view.'
+        heading_x, heading_y = point('#detail-heading')
+        swipe(heading_x, heading_y, -160, steps=5, delay_ms=12)
+        expect_active('center')
+        expect(page.locator('#detail-view')).to_be_visible()
+        assert page.evaluate('document.documentElement.scrollHeight > window.innerHeight'), 'Selected CVE detail record did not exercise a vertically scrollable view.'
+        detail_scroll_before = page.evaluate('window.scrollY')
+        description_x, description_y = point('#detail-view .detail-description')
+        swipe(description_x, description_y, 0, -180, steps=6, delay_ms=12)
+        page.wait_for_function('(before) => window.scrollY > before + 20', arg=detail_scroll_before, timeout=3_000)
+        expect_active('center')
+
+        # Swiping from the safe page background preserves the detail, search, and URL state.
+        page.evaluate('window.scrollTo(0, 0)')
+        drag_from_edge('left')
+        expect_active('community')
+        assert page.url == url
+        page.wait_for_function("() => !document.querySelector('#terminal-info').hidden", timeout=15_000)
+        terminal = page.locator('.terminal-screen').bounding_box()
+        assert terminal is not None
+        panel_x, panel_y = round(terminal['x'] + 5), round(terminal['y'] + 4)
+
+        # A real text-selection state arriving during a panel gesture cancels the page swipe.
+        text_x, text_y = point('#terminal-info .info-description')
+        dispatch_touch('touchStart', text_x, text_y)
+        dispatch_touch('touchMove', text_x + 45, text_y)
+        page.locator('#terminal-info .info-description').evaluate('''element => {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }''')
+        page.wait_for_timeout(30)
+        dispatch_touch('touchEnd')
+        expect_active('community')
+        assert page.locator('#page-community').evaluate('element => !element.classList.contains("is-swipe-tracking")')
+        page.evaluate('window.getSelection()?.removeAllRanges()')
+
+        # The terminal background supports Community → Center while existing detail/search state survives.
+        swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('center')
+        expect(page.locator('#detail-view')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(detail_id)
+        assert page.url == url
+        page.locator('#back-to-results').click()
+        expect(page.locator('#record-search')).to_have_value(detail_id)
+        expect(page.locator('.record-row')).to_have_count(1)
+
+        # Reduced motion keeps navigation available without applying a page slide.
+        page.emulate_media(reduced_motion='reduce')
+        assert page.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches")
+        page.evaluate('window.scrollTo(0, 0)')
+        page.wait_for_function('window.scrollY === 0')
+        safe_start = page.evaluate("""() => {
+          const target = document.elementFromPoint(382, 150);
+          return {
+            page: target?.closest('.page')?.id ?? null,
+            blocked: Boolean(target?.closest('a[href], button, input, select, textarea, [role="button"], [role="link"], .record-row, .pagination, .detail-view, .ui-stage')),
+          };
+        }""")
+        assert safe_start == {'page': 'page-center', 'blocked': False}, f'Reduced-motion swipe did not start on a safe Center background: {safe_start}'
+        drag_from_edge('left', y=150)
+        expect_active('community')
+        assert not page.locator('#page-community').evaluate('element => element.classList.contains("page-enter")')
+        terminal = page.locator('.terminal-screen').bounding_box()
+        assert terminal is not None
+        swipe(round(terminal['x'] + 5), round(terminal['y'] + 4), 160, steps=6, delay_ms=12)
+        expect_active('center')
+        assert not page.locator('#page-center').evaluate('element => element.classList.contains("page-enter")')
+        context.close()
+
+        # Desktop mouse movement remains ordinary page content; keyboard/tab navigation is unchanged.
+        desktop = browser.new_context(viewport={'width': 1280, 'height': 900}, has_touch=False)
+        desktop_page = desktop.new_page()
+        browser_issue_track(desktop_page, issues, origin)
+        desktop_page.goto(url, wait_until='load')
+        desktop_page.mouse.move(1100, 500)
+        desktop_page.mouse.down()
+        desktop_page.mouse.move(700, 500, steps=8)
+        desktop_page.mouse.up()
+        expect(desktop_page.locator('#page-overview')).to_be_visible()
+        desktop_page.locator('#tab-overview').focus()
+        desktop_page.keyboard.press('ArrowRight')
+        expect_active_name = desktop_page.locator('#tab-center').get_attribute('aria-selected')
+        assert expect_active_name == 'true' and desktop_page.evaluate('document.activeElement.id') == 'tab-center'
+        desktop_page.keyboard.press('Home')
+        assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
+        desktop.close()
+    finally:
+        context.close()
+
+    assert not issues['page_errors'], f'Swipe browser page errors: {issues["page_errors"]}'
+    assert not issues['console_errors'], f'Swipe browser console errors: {issues["console_errors"]}'
+    assert not issues['request_failures'], f'Swipe browser request failures: {issues["request_failures"]}'
+    assert not issues['external_requests'], f'Unexpected external requests in swipe tests: {issues["external_requests"]}'
+    return {
+        'mobile_viewport': [390, 844],
+        'adjacent_routes_and_no_wrap': True,
+        'finger_tracking_and_short_cancel': True,
+        'fast_swipe': True,
+        'vertical_and_diagonal_scroll': True,
+        'search_pagination_and_detail_state_preserved': True,
+        'detail_content_scroll_and_safe_interaction': True,
+        'community_terminal_background_and_selection_cancel': True,
+        'url_and_history_model_preserved': True,
+        'reduced_motion_and_keyboard_navigation': True,
+        'desktop_mouse_drag_ignored': True,
+        'external_requests': 0,
+    }
+
+
 def main() -> None:
     manifest, overview, days = load_contract()
     expected_count = manifest['totals']['cves']
@@ -804,6 +1078,10 @@ def main() -> None:
                 expect(page.locator(f'#{link_id}')).to_be_enabled()
             page.screenshot(path=str(SCREENSHOTS / '04-community-desktop.png'))
             print('PASS: all three pages fit 320–1440 CSS px; Community is reachable, accessible, and uses safe external links.')
+
+            swipe_results = run_swipe_navigation_tests(browser, origin, manifest)
+            print('PASS: touch swipe navigation, touch-safe controls, reduced motion, gesture cancellation, and state preservation.')
+            print('Swipe QA details:', json.dumps(swipe_results, sort_keys=True))
 
             assert not issues['page_errors'], f"JavaScript errors: {issues['page_errors']}"
             assert not issues['console_errors'], f"Console errors: {issues['console_errors']}"
