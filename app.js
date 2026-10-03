@@ -25,6 +25,12 @@
   const pages = new Map($$('.page').map((page) => [page.id.replace('page-', ''), page]));
   const searchInput = $('#record-search');
   const recordList = $('#record-list');
+  const snapshotLoader = $('#snapshot-loader');
+  const snapshotLoaderStatus = $('#snapshot-loader-status');
+  const snapshotManifestState = $('#snapshot-manifest-state');
+  const snapshotEpssState = $('#snapshot-epss-state');
+  const snapshotShardCount = $('#snapshot-shard-count');
+  const snapshotShardProgress = $('#snapshot-shard-progress');
   const filterControls = $('#filter-controls');
   const centerDock = $('.center-dock');
   const severityDistribution = $('.severity-distribution');
@@ -51,6 +57,7 @@
   let manifestPromise = null;
   let records = [];
   let snapshotStarted = false;
+  let snapshotLoading = false;
   let epssScores = Object.create(null);
   let activePage = 'overview';
   let activeSeverity = 'all';
@@ -643,28 +650,96 @@
     return payload.scores;
   }
 
+  function beginSnapshotLoading() {
+    snapshotLoading = true;
+    snapshotLoader.hidden = false;
+    feedView.setAttribute('aria-busy', 'true');
+    recordList.setAttribute('aria-busy', 'true');
+    snapshotLoaderStatus.textContent = 'Waiting for the snapshot manifest.';
+    snapshotManifestState.textContent = 'Waiting';
+    snapshotManifestState.classList.remove('is-verified');
+    snapshotEpssState.textContent = 'Waiting for daily shards';
+    snapshotEpssState.classList.remove('is-verified');
+    snapshotShardCount.textContent = 'Waiting for manifest';
+    snapshotShardProgress.max = 1;
+    snapshotShardProgress.value = 0;
+    snapshotShardProgress.removeAttribute('aria-valuetext');
+    snapshotShardProgress.hidden = true;
+  }
+
+  function acceptSnapshotManifest(candidate) {
+    snapshotManifestState.textContent = 'Verified';
+    snapshotManifestState.classList.add('is-verified');
+    snapshotEpssState.textContent = 'Waiting for daily shards';
+    snapshotShardProgress.max = candidate.days.length;
+    snapshotShardProgress.value = 0;
+    snapshotShardProgress.hidden = false;
+    const progressText = `0 of ${nf.format(candidate.days.length)} daily shards verified`;
+    snapshotShardProgress.setAttribute('aria-valuetext', progressText);
+    snapshotShardCount.textContent = `0 of ${nf.format(candidate.days.length)} verified`;
+    snapshotLoaderStatus.textContent = 'Manifest verified. Daily shards are being checked as they arrive.';
+  }
+
+  function reportVerifiedShard(count, total) {
+    if (!snapshotLoading) return;
+    snapshotShardProgress.value = count;
+    snapshotShardProgress.setAttribute('aria-valuetext', `${nf.format(count)} of ${nf.format(total)} daily shards verified`);
+    snapshotShardCount.textContent = `${nf.format(count)} of ${nf.format(total)} verified`;
+  }
+
+  function acceptSnapshotSidecar() {
+    snapshotEpssState.textContent = 'Verified';
+    snapshotEpssState.classList.add('is-verified');
+    snapshotLoaderStatus.textContent = 'Required data verified. Preparing the record view.';
+  }
+
+  function closeSnapshotLoader() {
+    snapshotLoading = false;
+    snapshotLoader.hidden = true;
+    feedView.setAttribute('aria-busy', 'false');
+    recordList.setAttribute('aria-busy', 'false');
+  }
+
+  function validateShard(day, rows) {
+    if (!Array.isArray(rows) || rows.length !== day.count) {
+      throw new Error('A captured shard does not match its manifest count.');
+    }
+    const seen = new Set();
+    rows.forEach((record) => {
+      validateRecord(record, day.date);
+      if (seen.has(record.id)) throw new Error('A captured shard repeats a CVE identifier.');
+      seen.add(record.id);
+    });
+    return rows;
+  }
+
   async function loadSnapshot() {
     try {
       manifest = await getManifest();
+      acceptSnapshotManifest(manifest);
+      let verifiedShardCount = 0;
       const [dayPayloads, epssFile] = await Promise.all([
-        mapWithConcurrency(manifest.days, LIMITS.shardConcurrency, async (day) => ({
-          day,
-          rows: await fetchVerifiedJson(day, LIMITS.shardBytes)
-        })),
+        mapWithConcurrency(manifest.days, LIMITS.shardConcurrency, async (day) => {
+          const rows = validateShard(day, await fetchVerifiedJson(day, LIMITS.shardBytes));
+          verifiedShardCount += 1;
+          reportVerifiedShard(verifiedShardCount, manifest.days.length);
+          return { day, rows };
+        }),
         fetchVerifiedJson(manifest.epss, LIMITS.epssBytes)
       ]);
       records = validateRecords(dayPayloads);
       epssScores = validateEpssFile(epssFile, manifest, records);
+      acceptSnapshotSidecar();
 
       setSnapshotStats();
       renderRecords();
       if (requestedCveId && matchedRecords.length === 1 && matchedRecords[0].id === requestedCveId) {
         openDetails(matchedRecords[0], recordButtons.get(requestedCveId));
       }
+      closeSnapshotLoader();
     } catch {
       records = [];
       epssScores = Object.create(null);
-      recordList.setAttribute('aria-busy', 'false');
       recordList.replaceChildren();
       status.textContent = 'The captured CVE snapshot could not be verified. No partial records are shown. Check your connection and reload to try again.';
       const retry = document.createElement('button');
@@ -673,12 +748,14 @@
       retry.textContent = 'Reload snapshot';
       retry.addEventListener('click', () => window.location.reload());
       recordList.append(retry);
+      closeSnapshotLoader();
     }
   }
 
   function startSnapshot() {
     if (snapshotStarted) return;
     snapshotStarted = true;
+    beginSnapshotLoading();
     loadSnapshot();
   }
 

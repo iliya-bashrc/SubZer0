@@ -8,6 +8,7 @@ import http.server
 import json
 import shutil
 import threading
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,8 +20,46 @@ SCREENSHOTS.mkdir(parents=True, exist_ok=True)
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, scenario: dict | None = None, **kwargs):
+        self.scenario = scenario
+        super().__init__(*args, **kwargs)
+
     def log_message(self, _format, *args):
         pass
+
+    def do_GET(self):
+        if self.scenario is None:
+            return super().do_GET()
+        path = urlsplit(self.path).path.lstrip('/')
+        with self.scenario['lock']:
+            self.scenario['request_counts'][path] = self.scenario['request_counts'].get(path, 0) + 1
+            request_count = self.scenario['request_counts'][path]
+            seen = self.scenario['seen'].setdefault(path, threading.Event())
+            gate = self.scenario['gates'].get(path)
+            response = self.scenario['responses'].get(path)
+            declared_length = self.scenario['declared_lengths'].get(path)
+        seen.set()
+        if gate is not None and not gate.wait(timeout=10):
+            response = (504, b'test gate timed out')
+        if callable(response):
+            response = response(request_count)
+        if response is not None:
+            status_code, body = response
+            self.send_response(status_code)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if declared_length is not None:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(declared_length))
+            self.end_headers()
+            self.close_connection = True
+            return
+        return super().do_GET()
 
 
 def nfmt(value: int) -> str:
@@ -81,6 +120,189 @@ def snapshot_override(manifest: dict, day: dict, records: list[dict]) -> tuple[b
 def install_snapshot_override(page, manifest_body: bytes, shard_body: bytes, day: str) -> None:
     page.route('**/snapshot/manifest.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=manifest_body))
     page.route(f'**/snapshot/data/{day}.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=shard_body))
+
+
+def new_scenario() -> dict:
+    return {
+        'lock': threading.Lock(), 'request_counts': {}, 'seen': {}, 'gates': {},
+        'responses': {}, 'declared_lengths': {},
+    }
+
+
+def scenario_request_count(scenario: dict, path: str) -> int:
+    with scenario['lock']:
+        return scenario['request_counts'].get(path, 0)
+
+
+def wait_for_scenario_request(scenario: dict, path: str) -> None:
+    with scenario['lock']:
+        event = scenario['seen'].setdefault(path, threading.Event())
+    assert event.wait(timeout=10), f'Browser did not request {path}'
+
+
+def serve_scenario(scenario: dict) -> http.server.ThreadingHTTPServer:
+    handler = functools.partial(QuietHandler, directory=str(ROOT), scenario=scenario)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def run_snapshot_loader_tests(browser, manifest: dict) -> dict:
+    day_paths = [f"snapshot/{day['path']}" for day in manifest['days']]
+    manifest_path = 'snapshot/manifest.json'
+    epss_path = f"snapshot/{manifest['epss']['path']}"
+    result: dict = {}
+
+    # The initial manifest is held; completed resources are then released out of manifest order.
+    scenario = new_scenario()
+    gates = {path: threading.Event() for path in [manifest_path, *day_paths, epss_path]}
+    scenario['gates'] = gates
+    server = serve_scenario(scenario)
+    origin = f'http://127.0.0.1:{server.server_port}'
+    page = browser.new_page(viewport={'width': 1440, 'height': 1000}, device_scale_factor=1)
+    page.emulate_media(reduced_motion='reduce')
+    try:
+        page.goto(f'{origin}/?page=center', wait_until='domcontentloaded')
+        loader = page.locator('#snapshot-loader')
+        expect(loader).to_be_visible()
+        assert page.locator('#feed-view').get_attribute('aria-busy') == 'true'
+        assert page.locator('#record-list').get_attribute('aria-busy') == 'true'
+        assert page.locator('#snapshot-manifest-state').inner_text() == 'Waiting'
+        assert page.locator('#snapshot-shard-progress').is_hidden()
+        assert page.locator('#snapshot-shard-count').get_attribute('aria-live') == 'polite'
+        wait_for_scenario_request(scenario, manifest_path)
+        page.wait_for_timeout(120)
+        expect(loader).to_be_visible()
+        assert page.locator('#snapshot-shard-count').inner_text() == 'Waiting for manifest'
+        gates[manifest_path].set()
+
+        progress = page.locator('#snapshot-shard-progress')
+        page.wait_for_function('(count) => { const p = document.querySelector("#snapshot-shard-progress"); return !p.hidden && p.max === count; }', arg=len(day_paths), timeout=10_000)
+        assert page.locator('#snapshot-manifest-state').inner_text() == 'Verified'
+        assert progress.evaluate('(element) => element.value') == 0
+        for path in day_paths[:6]:
+            wait_for_scenario_request(scenario, path)
+
+        # Release a later manifest shard first, and wait for its validated count before releasing an earlier one.
+        gates[day_paths[4]].set()
+        expect(page.locator('#snapshot-shard-count')).to_have_text(f'1 of {len(day_paths)} verified', timeout=20_000)
+        assert progress.evaluate('(element) => element.value') == 1
+        assert progress.get_attribute('aria-valuetext') == f'1 of {len(day_paths)} daily shards verified'
+        wait_for_scenario_request(scenario, epss_path)
+        gates[day_paths[1]].set()
+        expect(page.locator('#snapshot-shard-count')).to_have_text(f'2 of {len(day_paths)} verified', timeout=20_000)
+        assert progress.evaluate('(element) => element.value') == 2
+        assert page.locator('#record-list .record-row').count() == 0
+        expect(loader).to_be_visible()
+
+        # Leaving and re-entering during the load retains the same work and count.
+        before_reentry = {path: scenario_request_count(scenario, path) for path in day_paths}
+        page.locator('#tab-overview').click()
+        page.locator('#tab-center').click()
+        expect(loader).to_be_visible()
+        assert page.locator('#snapshot-shard-count').inner_text() == f'2 of {len(day_paths)} verified'
+        assert before_reentry == {path: scenario_request_count(scenario, path) for path in day_paths}
+
+        # Allow every shard except the final manifest entry; all visible progress remains factual.
+        for path in day_paths[:-1]:
+            gates[path].set()
+        expect(page.locator('#snapshot-shard-count')).to_have_text(f'{len(day_paths) - 1} of {len(day_paths)} verified', timeout=60_000)
+        assert page.locator('#snapshot-shard-progress').evaluate('(element) => element.value') == len(day_paths) - 1
+        expect(loader).to_be_visible()
+        assert page.locator('#record-list .record-row').count() == 0
+        assert page.locator('#feed-view').get_attribute('aria-busy') == 'true'
+        assert page.locator('#snapshot-epss-state').inner_text() == 'Waiting for daily shards'
+        page.screenshot(path=str(SCREENSHOTS / '05-cve-loader-30-of-31-pending.png'), animations='disabled')
+
+        # The final shard can complete and the view still stays busy until the EPSS schema is accepted.
+        gates[day_paths[-1]].set()
+        expect(page.locator('#snapshot-shard-count')).to_have_text(f'{len(day_paths)} of {len(day_paths)} verified', timeout=20_000)
+        expect(loader).to_be_visible()
+        assert page.locator('#snapshot-epss-state').inner_text() == 'Waiting for daily shards'
+        for width, height in ((320, 740), (390, 844), (1440, 1000)):
+            metrics = width_audit(page, width, height)
+            assert metrics['activePageId'] == 'page-center'
+        gates[epss_path].set()
+        expect(page.locator('#snapshot-epss-state')).to_have_text('Verified', timeout=30_000)
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=30_000)
+        expect(loader).to_be_hidden()
+        assert page.locator('#feed-view').get_attribute('aria-busy') == 'false'
+        assert page.locator('#record-list').get_attribute('aria-busy') == 'false'
+        assert page.locator('.record-row').count() == 24
+
+        # Re-entering after completion uses the in-memory, already-verified data without another request.
+        before_loaded_reentry = {path: scenario_request_count(scenario, path) for path in [*day_paths, epss_path]}
+        page.locator('#tab-overview').click()
+        page.locator('#tab-center').click()
+        expect(loader).to_be_hidden()
+        assert before_loaded_reentry == {path: scenario_request_count(scenario, path) for path in [*day_paths, epss_path]}
+        result['delayed_manifest'] = True
+        result['out_of_order_shard_completion'] = {'completion_order': [manifest['days'][4]['date'], manifest['days'][1]['date']], 'progress': f'{len(day_paths)}/{len(day_paths)} verified'}
+        result['held_until_last_shard_and_sidecar'] = True
+        result['pending_and_loaded_reentry'] = True
+        motion = page.locator('#snapshot-loader-status').evaluate("element => ({reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, name: getComputedStyle(element, '::before').animationName, duration: getComputedStyle(element, '::before').animationDuration})")
+        duration = motion['duration']
+        duration_seconds = float(duration[:-2]) / 1000 if duration.endswith('ms') else float(duration[:-1])
+        result['reduced_motion_static'] = motion['reduced'] and motion['name'] == 'none' and duration_seconds <= 0.00001
+        result['responsive_loader'] = {'widths': [320, 390, 1440], 'horizontal_overflow': False}
+        assert result['reduced_motion_static'], 'Loader status animation remains active with reduced motion enabled.'
+    finally:
+        for gate in gates.values():
+            gate.set()
+        page.close()
+        server.shutdown()
+        server.server_close()
+
+    # A failed shard exits loading, presents the explicit retry state, then reloads successfully.
+    retry_scenario = new_scenario()
+    retry_gates = {path: threading.Event() for path in [*day_paths[1:], epss_path]}
+    retry_scenario['gates'] = retry_gates
+    retry_scenario['responses'][day_paths[0]] = lambda count: (503, b'upstream unavailable') if count == 1 else None
+    retry_server = serve_scenario(retry_scenario)
+    retry_origin = f'http://127.0.0.1:{retry_server.server_port}'
+    retry_page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    try:
+        retry_page.goto(f'{retry_origin}/?page=center', wait_until='domcontentloaded')
+        expect(retry_page.locator('#result-status')).to_contain_text('could not be verified', timeout=30_000)
+        expect(retry_page.locator('#snapshot-loader')).to_be_hidden()
+        assert retry_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
+        assert retry_page.locator('#record-list').get_attribute('aria-busy') == 'false'
+        expect(retry_page.get_by_role('button', name='Reload snapshot')).to_be_visible()
+        retry_page.wait_for_timeout(180)
+        expect(retry_page.locator('#snapshot-loader')).to_be_hidden()
+        for gate in retry_gates.values():
+            gate.set()
+        retry_page.get_by_role('button', name='Reload snapshot').click()
+        expect(retry_page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(retry_page.locator('#snapshot-loader')).to_be_hidden()
+        assert scenario_request_count(retry_scenario, day_paths[0]) >= 2
+        result['source_failure_exits_loading'] = True
+        result['retry_reloads_verified_data'] = True
+    finally:
+        for gate in retry_gates.values():
+            gate.set()
+        retry_page.close()
+        retry_server.shutdown()
+        retry_server.server_close()
+
+    oversized_scenario = new_scenario()
+    oversized_scenario['declared_lengths'][day_paths[0]] = 16 * 1024 * 1024 + 1
+    oversized_server = serve_scenario(oversized_scenario)
+    oversized_origin = f'http://127.0.0.1:{oversized_server.server_port}'
+    oversized_page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    try:
+        oversized_page.goto(f'{oversized_origin}/?page=center', wait_until='domcontentloaded')
+        expect(oversized_page.locator('#result-status')).to_contain_text('could not be verified', timeout=30_000)
+        expect(oversized_page.locator('#snapshot-loader')).to_be_hidden()
+        assert oversized_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
+        assert oversized_page.locator('#record-list .record-row').count() == 0
+        result['oversized_shard_exits_loading'] = True
+    finally:
+        oversized_page.close()
+        oversized_server.shutdown()
+        oversized_server.server_close()
+    return result
 
 
 def main() -> None:
@@ -217,6 +439,10 @@ def main() -> None:
             page.locator('#date-form button[type="submit"]').click()
             print('PASS: date filter, exact-ID search, separate signal details, and filtered result/focus restoration.')
 
+            loader_results = run_snapshot_loader_tests(browser, manifest)
+            print('PASS: truthful loader progress through delayed manifest, out-of-order verified shards, final sidecar validation, responsive/reduced-motion states, re-entry, source failure, and retry.')
+            print('Loader QA details:', json.dumps(loader_results, sort_keys=True))
+
             # A correctly re-hashed malicious text fixture remains text, never active markup.
             malicious_rows = json.loads((ROOT / 'snapshot' / latest_day['path']).read_text(encoding='utf-8'))
             victim = next((record for record in malicious_rows if record['id'] not in expected_latest), malicious_rows[0])
@@ -258,8 +484,24 @@ def main() -> None:
             expect(tamper_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
             expect(tamper_page.locator('#record-list .record-row')).to_have_count(0)
             expect(tamper_page.locator('#result-status')).to_contain_text('No partial records are shown')
+            expect(tamper_page.locator('#snapshot-loader')).to_be_hidden()
+            assert tamper_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
             assert 'SHA-256' not in tamper_page.locator('#result-status').inner_text()
             tamper_page.close()
+
+            # A correctly digested resource with an invalid record schema fails visibly, not as loading.
+            invalid_rows = json.loads((ROOT / 'snapshot' / latest_day['path']).read_text(encoding='utf-8'))
+            invalid_rows[0]['title'] = ''
+            schema_manifest, schema_shard, schema_day = snapshot_override(manifest, latest_day, invalid_rows)
+            schema_page = browser.new_page(viewport={'width': 1280, 'height': 900})
+            browser_issue_track(schema_page, issues, origin)
+            install_snapshot_override(schema_page, schema_manifest, schema_shard, schema_day)
+            schema_page.goto(f'{origin}/?page=center', wait_until='load')
+            expect(schema_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
+            expect(schema_page.locator('#snapshot-loader')).to_be_hidden()
+            assert schema_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
+            assert schema_page.locator('#record-list .record-row').count() == 0
+            schema_page.close()
 
             # Oversized manifest response must be rejected without rendering any records.
             oversized_page = browser.new_page(viewport={'width': 1280, 'height': 900})
@@ -269,9 +511,11 @@ def main() -> None:
             ))
             oversized_page.goto(f'{origin}/?page=center', wait_until='load')
             expect(oversized_page.locator('#result-status')).to_contain_text('could not be verified', timeout=30_000)
+            expect(oversized_page.locator('#snapshot-loader')).to_be_hidden()
+            assert oversized_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
             expect(oversized_page.locator('#record-list .record-row')).to_have_count(0)
             oversized_page.close()
-            print('PASS: unauthenticated data tampering and oversized manifest responses fail closed with generic errors and no partial feed.')
+            print('PASS: bad digest, bad schema, oversized manifest/resource and source failures leave loading for the explicit retry state with no partial records.')
 
             # Exercise every page at mobile and desktop widths without external requests.
             page.locator('#tab-overview').click()
