@@ -55,9 +55,11 @@ body[data-skin="glass"] { color-scheme: dark; background-color: #090e12; --nav-b
 .preview-mark > span { width: 7px; height: 7px; border-radius: 50%; background: #8dbacb; }
 
 .page { min-height: calc(100vh - var(--nav-height)); }
-#main-content { overflow-x: clip; }
+#main-content { overflow-x: clip; touch-action: pan-y pinch-zoom; }
 .page-enter { animation: page-arrive 360ms var(--ease-page) both; }
 @keyframes page-arrive { from { opacity: .72; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+.page.is-swipe-tracking { transition: none !important; will-change: transform; }
+.page.is-swipe-settling { transition: transform 240ms var(--ease-page); }
 .section-context { margin: 0 0 14px; color: var(--muted); font-size: 13px; letter-spacing: .02em; }
 
 /* Overview: open space, wide type, and real records as the focal material. */
@@ -359,6 +361,7 @@ body[data-skin="glass"] { color-scheme: dark; background-color: #090e12; --nav-b
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .page.is-swipe-tracking, .page.is-swipe-settling { will-change: auto; transition: none !important; }
   .metal-layer { will-change: auto; }
   .terminal-caret { animation: none; }
 }

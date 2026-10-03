@@ -1170,6 +1170,183 @@
     window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
   }
 
+  function bindSwipeNavigation() {
+    const main = $('#main-content');
+    if (!main || typeof window.PointerEvent !== 'function') return;
+
+    const pageOrder = ['overview', 'center', 'community'];
+    const blockedSelector = [
+      'a[href]', 'button', 'input', 'select', 'textarea', 'option', 'summary', 'details',
+      '[role="button"]', '[role="link"]', '[role="combobox"]', '[role="textbox"]',
+      '[role="dialog"]', '[aria-modal="true"]', '[contenteditable]:not([contenteditable="false"])',
+      '.record-list', '.record-row', '.center-dock', '.filter-controls', '.severity-distribution',
+      '.pagination', '.detail-view', '.snapshot-loader', '.ui-stage',
+    ].join(',');
+    const horizontalIntentRatio = 1.2;
+    let gesture = null;
+    let settlement = null;
+
+    const hasTextSelection = () => {
+      const selection = window.getSelection();
+      return Boolean(selection && !selection.isCollapsed);
+    };
+
+    function finishSettlement(current) {
+      if (!current || settlement !== current) return;
+      settlement = null;
+      current.page.removeEventListener('transitionend', current.onEnd);
+      window.clearTimeout(current.timer);
+      current.page.classList.remove('is-swipe-settling');
+      current.page.style.removeProperty('transform');
+    }
+
+    function stopSettlement(page) {
+      if (settlement && settlement.page === page) finishSettlement(settlement);
+    }
+
+    function clearGesture(shouldSettle = false) {
+      const current = gesture;
+      if (!current) return;
+      gesture = null;
+
+      try {
+        if (main.hasPointerCapture(current.pointerId)) main.releasePointerCapture(current.pointerId);
+      } catch (_) {
+        // The browser may already have released capture after a native scroll or cancellation.
+      }
+
+      const page = current.page;
+      page.classList.remove('is-swipe-tracking');
+      stopSettlement(page);
+      if (shouldSettle && !page.hidden && !reducedMotion.matches) {
+        page.classList.add('is-swipe-settling');
+        page.style.transform = 'translate3d(0, 0, 0)';
+        const nextSettlement = { page, timer: 0, onEnd: null };
+        nextSettlement.onEnd = (event) => {
+          if (event.target === page && event.propertyName === 'transform') finishSettlement(nextSettlement);
+        };
+        settlement = nextSettlement;
+        page.addEventListener('transitionend', nextSettlement.onEnd);
+        nextSettlement.timer = window.setTimeout(() => finishSettlement(nextSettlement), 300);
+      } else {
+        page.classList.remove('is-swipe-settling');
+        page.style.removeProperty('transform');
+      }
+    }
+
+    function onPointerDown(event) {
+      if (event.pointerType !== 'touch' || !event.isPrimary || event.button !== 0 || gesture) return;
+      const target = event.target;
+      if (!(target instanceof Element) || target.closest(blockedSelector) || hasTextSelection()) return;
+      const page = target.closest('.page');
+      if (!page || page.hidden || page !== pages.get(activePage)) return;
+      stopSettlement(page);
+
+      gesture = {
+        pointerId: event.pointerId,
+        page,
+        startX: event.clientX,
+        startY: event.clientY,
+        startTime: event.timeStamp,
+        sampleX: event.clientX,
+        sampleTime: event.timeStamp,
+        velocityX: 0,
+        deltaX: 0,
+        deltaY: 0,
+        axis: 'pending',
+      };
+    }
+
+    function onPointerMove(event) {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (hasTextSelection()) {
+        clearGesture(true);
+        return;
+      }
+      const current = gesture;
+      const deltaX = event.clientX - current.startX;
+      const deltaY = event.clientY - current.startY;
+      current.deltaX = deltaX;
+      current.deltaY = deltaY;
+
+      if (current.axis === 'pending') {
+        if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 8) return;
+        if (Math.abs(deltaY) >= Math.abs(deltaX) * horizontalIntentRatio) {
+          clearGesture();
+          return;
+        }
+        if (Math.abs(deltaX) < Math.abs(deltaY) * horizontalIntentRatio) return;
+        current.axis = 'horizontal';
+        current.page.classList.remove('page-enter');
+        try {
+          main.setPointerCapture(current.pointerId);
+        } catch (_) {
+          // Continue tracking while the pointer remains over the main content.
+        }
+      }
+
+      const now = event.timeStamp;
+      const elapsed = now - current.sampleTime;
+      const sampleDelta = event.clientX - current.sampleX;
+      if (elapsed > 0 && Math.abs(sampleDelta) > 0) {
+        current.velocityX = sampleDelta / elapsed;
+        current.sampleX = event.clientX;
+        current.sampleTime = now;
+      }
+
+      if (reducedMotion.matches) return;
+      current.page.classList.add('is-swipe-tracking');
+      const index = pageOrder.indexOf(activePage);
+      const canNavigate = deltaX < 0 ? index < pageOrder.length - 1 : deltaX > 0 && index > 0;
+      const distance = Math.abs(deltaX);
+      const effectiveX = canNavigate
+        ? Math.sign(deltaX) * Math.min(distance, Math.min(window.innerWidth * 0.55, 320))
+        : Math.sign(deltaX) * Math.min(24, distance * 0.16);
+      current.page.style.transform = `translate3d(${effectiveX.toFixed(1)}px, 0, 0)`;
+    }
+
+    function onPointerUp(event) {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      const current = gesture;
+      const deltaX = event.clientX - current.startX;
+      const deltaY = event.clientY - current.startY;
+      const elapsed = event.timeStamp - current.sampleTime;
+      const sampleDelta = event.clientX - current.sampleX;
+      if (elapsed > 0 && Math.abs(sampleDelta) > 0) current.velocityX = sampleDelta / elapsed;
+
+      const index = pageOrder.indexOf(activePage);
+      const direction = deltaX < 0 ? 1 : -1;
+      const destination = pageOrder[index + direction];
+      const threshold = Math.min(100, window.innerWidth * 0.2);
+      const freshVelocity = event.timeStamp - current.sampleTime <= 120;
+      const fastSwipe = Math.abs(deltaX) >= 28
+        && freshVelocity
+        && Math.abs(current.velocityX) >= 0.65
+        && Math.sign(current.velocityX) === Math.sign(deltaX);
+      const clearlyHorizontal = Math.abs(deltaX) >= Math.abs(deltaY) * horizontalIntentRatio;
+      const shouldNavigate = current.axis === 'horizontal'
+        && clearlyHorizontal
+        && Boolean(destination)
+        && (Math.abs(deltaX) >= threshold || fastSwipe);
+
+      clearGesture(!shouldNavigate);
+      if (shouldNavigate) switchPage(destination);
+    }
+
+    main.addEventListener('pointerdown', onPointerDown, { passive: true });
+    document.addEventListener('pointermove', onPointerMove, { passive: true });
+    document.addEventListener('pointerup', onPointerUp, { passive: true });
+    document.addEventListener('pointercancel', () => clearGesture(true), { passive: true });
+    main.addEventListener('selectstart', () => clearGesture(true), true);
+    document.addEventListener('selectionchange', () => {
+      if (gesture && hasTextSelection()) clearGesture(true);
+    });
+    window.addEventListener('blur', () => clearGesture(true));
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) clearGesture(true);
+    });
+  }
+
   function moveNavTab(currentIndex, delta) {
     const nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
     const nextTab = tabs[nextIndex];
@@ -1248,6 +1425,7 @@
     $('#explore-cves').addEventListener('click', () => switchPage('center'));
     $('#back-to-results').addEventListener('click', backToResults);
     $('#telegram-cta').addEventListener('click', handleTelegramClick);
+    bindSwipeNavigation();
 
     searchInput.addEventListener('input', () => {
       pageIndex = 0;
