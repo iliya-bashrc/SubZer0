@@ -62,6 +62,7 @@
   let snapshotLoading = false;
   let epssScores = Object.create(null);
   let activePage = 'overview';
+  let finishActiveSwipeSettlement = () => {};
   let activeSeverity = 'all';
   let appliedFrom = '';
   let appliedTo = '';
@@ -1149,6 +1150,7 @@
 
   function switchPage(name, focusPage = false, options = {}) {
     if (!pages.has(name)) return;
+    finishActiveSwipeSettlement();
     if (name === 'center') startSnapshot();
     const next = pages.get(name);
     const previous = pages.get(activePage);
@@ -1188,14 +1190,70 @@
       '.record-list', '.record-row', '.center-dock', '.filter-controls', '.severity-distribution',
       '.pagination', '.detail-view', '.snapshot-loader', '.ui-stage',
     ].join(',');
+    const desktopCardSelector = '.snapshot-status-strip, .snapshot-rail, .latest-list, .snapshot-summary, article, .terminal-frame';
     const horizontalIntentRatio = 1.2;
     let gesture = null;
     let settlement = null;
+    let suppressedClickPointerId = null;
+    let suppressedClickTimer = 0;
 
     const hasTextSelection = () => {
       const selection = window.getSelection();
       return Boolean(selection && !selection.isCollapsed);
     };
+
+    function hasTextAtPoint(x, y) {
+      let node = null;
+      let offset = 0;
+      if (typeof document.caretRangeFromPoint === 'function') {
+        const range = document.caretRangeFromPoint(x, y);
+        node = range?.startContainer ?? null;
+        offset = range?.startOffset ?? 0;
+      } else if (typeof document.caretPositionFromPoint === 'function') {
+        const caret = document.caretPositionFromPoint(x, y);
+        node = caret?.offsetNode ?? null;
+        offset = caret?.offset ?? 0;
+      }
+      if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+
+      const text = node.textContent || '';
+      for (const index of [offset, offset - 1]) {
+        if (index < 0 || index >= text.length || /\s/u.test(text[index])) continue;
+        const character = document.createRange();
+        character.setStart(node, index);
+        character.setEnd(node, index + 1);
+        for (const rect of character.getClientRects()) {
+          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true;
+        }
+      }
+      return false;
+    }
+
+    const isDesktopPointer = (pointerType) => pointerType === 'mouse' || pointerType === 'pen';
+
+    function clearDraggedClickProtection() {
+      window.clearTimeout(suppressedClickTimer);
+      suppressedClickTimer = 0;
+      suppressedClickPointerId = null;
+    }
+
+    function suppressDraggedClick(event) {
+      if (suppressedClickPointerId === null || event.detail === 0) return;
+      if ('pointerId' in event && event.pointerId !== suppressedClickPointerId) return;
+      if (event.target instanceof Element && event.target.closest(blockedSelector)) {
+        clearDraggedClickProtection();
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clearDraggedClickProtection();
+    }
+
+    function protectAgainstDraggedClick(pointerId) {
+      clearDraggedClickProtection();
+      suppressedClickPointerId = pointerId;
+      suppressedClickTimer = window.setTimeout(clearDraggedClickProtection, 600);
+    }
 
     function removeSwipePresentation(page) {
       if (!page) return;
@@ -1272,6 +1330,10 @@
       if (current.committed) window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
     }
 
+    finishActiveSwipeSettlement = () => {
+      if (settlement) finishSettlement(settlement);
+    };
+
     function beginSettlement(items, committed = false) {
       const current = { items: [], pending: new Set(), timer: 0, committed };
       settlement = current;
@@ -1334,15 +1396,18 @@
     }
 
     function onPointerDown(event) {
-      if (event.pointerType !== 'touch' || !event.isPrimary || event.button !== 0 || gesture) return;
+      const desktopPointer = isDesktopPointer(event.pointerType);
+      if ((!desktopPointer && event.pointerType !== 'touch') || !event.isPrimary || event.button !== 0 || gesture) return;
       const target = event.target;
       if (!(target instanceof Element) || target.closest(blockedSelector) || hasTextSelection()) return;
+      if (desktopPointer && (target.closest(desktopCardSelector) || hasTextAtPoint(event.clientX, event.clientY))) return;
       const page = target.closest('.page');
       if (!page || page.hidden || page !== pages.get(activePage)) return;
       stopSettlement(page);
 
       gesture = {
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         page,
         startX: event.clientX,
         startY: event.clientY,
@@ -1367,6 +1432,13 @@
         return;
       }
       const current = gesture;
+      if (isDesktopPointer(current.pointerType)) {
+        const target = document.elementFromPoint(event.clientX, event.clientY);
+        if (!(target instanceof Element) || target.closest(blockedSelector) || target.closest(desktopCardSelector) || hasTextAtPoint(event.clientX, event.clientY)) {
+          clearGesture(true);
+          return;
+        }
+      }
       const deltaX = event.clientX - current.startX;
       const deltaY = event.clientY - current.startY;
       current.deltaX = deltaX;
@@ -1420,9 +1492,13 @@
       const index = pageOrder.indexOf(activePage);
       const direction = deltaX < 0 ? 1 : -1;
       const destination = pageOrder[index + direction];
-      const threshold = Math.min(100, window.innerWidth * 0.2);
+      const touchPointer = current.pointerType === 'touch';
+      const threshold = touchPointer
+        ? Math.min(100, window.innerWidth * 0.2)
+        : Math.min(140, Math.max(96, window.innerWidth * 0.1));
       const freshVelocity = event.timeStamp - current.sampleTime <= 120;
-      const fastSwipe = Math.abs(deltaX) >= 28
+      const fastSwipe = touchPointer
+        && Math.abs(deltaX) >= 28
         && freshVelocity
         && Math.abs(current.velocityX) >= 0.65
         && Math.sign(current.velocityX) === Math.sign(deltaX);
@@ -1441,6 +1517,7 @@
       releasePointer(current);
       stopSettlement(current.page);
       const destinationPage = current.destination;
+      if (!touchPointer) protectAgainstDraggedClick(current.pointerId);
       if (reducedMotion.matches || !destinationPage) {
         removeSwipePresentation(current.page);
         restorePreview(current);
@@ -1461,11 +1538,19 @@
       ], true);
     }
 
+    document.addEventListener('click', suppressDraggedClick, true);
     main.addEventListener('pointerdown', onPointerDown, { passive: true });
     document.addEventListener('pointermove', onPointerMove, { passive: true });
     document.addEventListener('pointerup', onPointerUp, { passive: true });
     document.addEventListener('pointercancel', () => clearGesture(true), { passive: true });
-    main.addEventListener('selectstart', () => clearGesture(true), true);
+    main.addEventListener('selectstart', () => {
+      if (!gesture) return;
+      if (isDesktopPointer(gesture.pointerType)) {
+        if (hasTextSelection() || hasTextAtPoint(gesture.startX, gesture.startY)) clearGesture(true);
+        return;
+      }
+      clearGesture(true);
+    }, true);
     document.addEventListener('selectionchange', () => {
       if (gesture && hasTextSelection()) clearGesture(true);
     });

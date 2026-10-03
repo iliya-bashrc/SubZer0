@@ -617,7 +617,13 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         for candidate in ('overview', 'center', 'community'):
             tab = page.locator(f'#tab-{candidate}')
             selected = candidate == name
-            assert tab.get_attribute('aria-selected') == str(selected).lower()
+            actual = tab.get_attribute('aria-selected')
+            actual_tabs = page.locator('.nav-tab').evaluate_all(
+                '(items) => items.map((item) => [item.id, item.getAttribute("aria-selected"), item.tabIndex])'
+            )
+            assert actual == str(selected).lower(), (
+                f'{candidate} aria-selected={actual} after expecting {name}; tabs={actual_tabs}'
+            )
             assert tab.evaluate('(element) => element.tabIndex') == (0 if selected else -1)
         page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
 
@@ -630,6 +636,57 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         box = page.locator(selector).bounding_box()
         assert box is not None, f'Missing visible test target: {selector}'
         return round(box['x'] + box['width'] * x_fraction), round(box['y'] + box['height'] * y_fraction)
+
+    def safe_drag_corridor(target_page, direction: str = 'left', distance: int = 190) -> dict:
+        corridor = target_page.evaluate('''({direction, distance}) => {
+          const active = document.querySelector('.page:not([hidden])');
+          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .center-dock, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .ui-stage, .snapshot-status-strip, .snapshot-rail, .latest-list, .snapshot-summary, article, .terminal-frame';
+          const hasTextAtPoint = (x, y) => {
+            let node = null;
+            let offset = 0;
+            if (typeof document.caretRangeFromPoint === 'function') {
+              const range = document.caretRangeFromPoint(x, y);
+              node = range?.startContainer ?? null;
+              offset = range?.startOffset ?? 0;
+            } else if (typeof document.caretPositionFromPoint === 'function') {
+              const caret = document.caretPositionFromPoint(x, y);
+              node = caret?.offsetNode ?? null;
+              offset = caret?.offset ?? 0;
+            }
+            if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+            const text = node.textContent || '';
+            for (const index of [offset, offset - 1]) {
+              if (index < 0 || index >= text.length || /\\s/u.test(text[index])) continue;
+              const character = document.createRange();
+              character.setStart(node, index);
+              character.setEnd(node, index + 1);
+              for (const rect of character.getClientRects()) {
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true;
+              }
+            }
+            return false;
+          };
+          const sign = direction === 'left' ? -1 : 1;
+          const firstX = direction === 'left' ? innerWidth - distance - 24 : 24;
+          const lastX = direction === 'left' ? distance + 24 : innerWidth - distance - 24;
+          for (let y = 92; y < innerHeight - 28; y += 12) {
+            for (let x = firstX; direction === 'left' ? x >= lastX : x <= lastX; x += direction === 'left' ? -12 : 12) {
+              let safe = true;
+              for (let offset = 0; offset <= distance; offset += 6) {
+                const px = x + sign * offset;
+                const hit = document.elementFromPoint(px, y);
+                if (!(hit instanceof Element) || hit.closest('.page') !== active || hit.closest(blocked) || hasTextAtPoint(px, y)) {
+                  safe = false;
+                  break;
+                }
+              }
+              if (safe) return {x, y, active: active?.id ?? null, target: document.elementFromPoint(x, y)?.tagName ?? null};
+            }
+          }
+          return null;
+        }''', {'direction': direction, 'distance': distance})
+        assert corridor is not None, f'No empty safe desktop drag corridor found on {target_page.url}: {direction} {distance}px'
+        return corridor
 
     def best_detail_record() -> str:
         best_id = ''
@@ -657,8 +714,18 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         start_x, start_y = 382, 500
         dispatch_touch('touchStart', start_x, start_y)
         dispatch_touch('touchMove', start_x - 24, start_y)
-        visual = page.locator('#page-overview').evaluate('element => ({tracking: element.classList.contains("is-swipe-tracking"), transform: getComputedStyle(element).transform})')
-        assert visual['tracking'] and visual['transform'] != 'none', f'Page did not track a short horizontal drag: {visual}'
+        visual = page.evaluate('''() => {
+          const current = document.querySelector('#page-overview');
+          const next = document.querySelector('#page-center');
+          return {
+            currentTracking: current.classList.contains('is-swipe-tracking'),
+            currentTransform: getComputedStyle(current).transform,
+            nextTracking: next.classList.contains('is-swipe-tracking'),
+            nextTransform: getComputedStyle(next).transform,
+          };
+        }''')
+        assert visual['currentTracking'] and visual['currentTransform'] != 'none', f'Current page did not track a short horizontal drag: {visual}'
+        assert visual['nextTracking'] and visual['nextTransform'] != 'none', f'Adjacent page did not track alongside the current page: {visual}'
         dispatch_touch('touchEnd')
         expect_active('overview')
         page.wait_for_function("() => !document.querySelector('#page-overview').classList.contains('is-swipe-settling')", timeout=2_000)
@@ -811,16 +878,118 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert not page.locator('#page-center').evaluate('element => element.classList.contains("page-enter")')
         context.close()
 
-        # Desktop mouse movement remains ordinary page content; keyboard/tab navigation is unchanged.
+        # Desktop drags only navigate from empty, text-free safe areas; text, controls, and click state stay native.
         desktop = browser.new_context(viewport={'width': 1280, 'height': 900}, has_touch=False)
         desktop_page = desktop.new_page()
         browser_issue_track(desktop_page, issues, origin)
         desktop_page.goto(url, wait_until='load')
-        desktop_page.mouse.move(1100, 500)
+        expect(desktop_page.locator('#page-overview')).to_be_visible()
+
+        safe = safe_drag_corridor(desktop_page)
+        desktop_page.mouse.click(safe['x'], safe['y'])
+        expect(desktop_page.locator('#page-overview')).to_be_visible()
+
+        heading = desktop_page.locator('#page-overview h1').bounding_box()
+        assert heading is not None
+        text_start = (round(heading['x'] + 8), round(heading['y'] + heading['height'] / 2))
+        assert desktop_page.evaluate('([x, y]) => { const range = document.caretRangeFromPoint(x, y); return Boolean(range && range.startContainer.nodeType === Node.TEXT_NODE); }', list(text_start)), 'Desktop selection test did not start on actual Overview text.'
+        desktop_page.mouse.move(*text_start)
         desktop_page.mouse.down()
-        desktop_page.mouse.move(700, 500, steps=8)
+        desktop_page.mouse.move(text_start[0] + 72, text_start[1], steps=5)
+        desktop_page.mouse.up()
+        assert desktop_page.evaluate('window.getSelection()?.toString().length > 0'), 'A mouse drag on Overview text no longer selects text.'
+        expect(desktop_page.locator('#page-overview')).to_be_visible()
+        desktop_page.evaluate('window.getSelection()?.removeAllRanges()')
+
+        # Overview's stacked record cards are never desktop swipe surfaces, even in their blank margins.
+        stage = desktop_page.locator('.ui-stage').bounding_box()
+        assert stage is not None
+        card_point = (round(stage['x'] + stage['width'] * 0.95), round(stage['y'] + stage['height'] * 0.08))
+        assert desktop_page.evaluate('([x, y]) => Boolean(document.elementFromPoint(x, y)?.closest(".ui-stage"))', list(card_point))
+        desktop_page.mouse.move(*card_point)
+        desktop_page.mouse.down()
+        desktop_page.mouse.move(card_point[0] - 190, card_point[1], steps=8)
         desktop_page.mouse.up()
         expect(desktop_page.locator('#page-overview')).to_be_visible()
+
+        desktop_page.locator('#tab-community').click()
+        expect(desktop_page.locator('#page-community')).to_be_visible()
+        desktop_page.locator('#tab-overview').click()
+        safe = safe_drag_corridor(desktop_page)
+        desktop_page.mouse.move(safe['x'], safe['y'])
+        desktop_page.mouse.down()
+        desktop_page.mouse.move(safe['x'] - 36, safe['y'], steps=3)
+        live_pair = desktop_page.evaluate('''() => {
+          const current = document.querySelector('#page-overview');
+          const next = document.querySelector('#page-center');
+          return {
+            currentTracking: current.classList.contains('is-swipe-tracking'),
+            currentTransform: getComputedStyle(current).transform,
+            nextTracking: next.classList.contains('is-swipe-tracking'),
+            nextTransform: getComputedStyle(next).transform,
+          };
+        }''')
+        assert live_pair['currentTracking'] and live_pair['currentTransform'] != 'none', f'Mouse drag did not move Overview during tracking: {live_pair}'
+        assert live_pair['nextTracking'] and live_pair['nextTransform'] != 'none', f'Mouse drag did not move the adjacent page during tracking: {live_pair}'
+        desktop_page.mouse.move(safe['x'] - 190, safe['y'], steps=10)
+        desktop_page.mouse.up()
+        expect(desktop_page.locator('#page-center')).to_be_visible()
+        desktop_page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
+        assert desktop_page.locator('#tab-center').get_attribute('aria-selected') == 'true'
+        assert desktop_page.locator('#tab-center').evaluate('element => element.tabIndex') == 0
+        assert desktop_page.locator('#tab-overview').evaluate('element => element.tabIndex') == -1
+        assert desktop_page.url == url, 'A desktop drag changed the established URL/history model.'
+
+        # A successful drag's generated click is contained; the next deliberate navigation-button click still works.
+        desktop_page.locator('#tab-overview').click()
+        desktop_page.locator('#explore-cves').click()
+        expect(desktop_page.locator('#page-center')).to_be_visible()
+        assert desktop_page.locator('#tab-center').get_attribute('aria-selected') == 'true'
+
+        # Chromium's native input protocol emits pen Pointer Events; only a safe, primary-tip drag may navigate.
+        desktop_page.locator('#tab-overview').click()
+        safe = safe_drag_corridor(desktop_page)
+        desktop_page.evaluate('''() => {
+          window.__observedPenDown = false;
+          document.addEventListener('pointerdown', event => {
+            if (event.pointerType === 'pen' && event.isPrimary && event.button === 0) window.__observedPenDown = true;
+          }, true);
+        }''')
+        pen = desktop.new_cdp_session(desktop_page)
+        pen.send('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': safe['x'], 'y': safe['y'], 'button': 'left', 'buttons': 1, 'pointerType': 'pen'})
+        pen.send('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': safe['x'] - 190, 'y': safe['y'], 'buttons': 1, 'pointerType': 'pen'})
+        pen.send('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': safe['x'] - 190, 'y': safe['y'], 'button': 'left', 'buttons': 0, 'pointerType': 'pen'})
+        assert desktop_page.evaluate('window.__observedPenDown'), 'Chromium did not deliver the expected primary pen Pointer Event.'
+        expect(desktop_page.locator('#page-center')).to_be_visible()
+        assert desktop_page.locator('#tab-center').get_attribute('aria-selected') == 'true'
+
+        # A manual tab change immediately after a swipe wins over the pending page animation cleanup.
+        desktop_page.locator('#tab-overview').click()
+        desktop_page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
+        expect(desktop_page.locator('#page-overview')).to_be_visible()
+        expect(desktop_page.locator('#page-center')).to_be_hidden()
+        assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
+
+        # A primary pen drag that starts on actual text leaves the text and active route native.
+        heading = desktop_page.locator('#page-overview h1').bounding_box()
+        assert heading is not None
+        pen_text_x = round(heading['x'] + 8)
+        pen_text_y = round(heading['y'] + heading['height'] / 2)
+        pen.send('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': pen_text_x, 'y': pen_text_y, 'button': 'left', 'buttons': 1, 'pointerType': 'pen'})
+        pen.send('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': pen_text_x + 72, 'y': pen_text_y, 'buttons': 1, 'pointerType': 'pen'})
+        pen.send('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': pen_text_x + 72, 'y': pen_text_y, 'button': 'left', 'buttons': 0, 'pointerType': 'pen'})
+        expect(desktop_page.locator('#page-overview')).to_be_visible()
+        assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
+
+        desktop_page.emulate_media(reduced_motion='reduce')
+        safe = safe_drag_corridor(desktop_page)
+        desktop_page.mouse.move(safe['x'], safe['y'])
+        desktop_page.mouse.down()
+        desktop_page.mouse.move(safe['x'] - 190, safe['y'], steps=8)
+        desktop_page.mouse.up()
+        expect(desktop_page.locator('#page-center')).to_be_visible()
+        assert not desktop_page.locator('#page-center').evaluate('element => element.classList.contains("page-enter")')
+
         desktop_page.locator('#tab-overview').focus()
         desktop_page.keyboard.press('ArrowRight')
         expect_active_name = desktop_page.locator('#tab-center').get_attribute('aria-selected')
@@ -857,7 +1026,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         'community_terminal_background_and_selection_cancel': True,
         'url_and_history_model_preserved': True,
         'reduced_motion_and_keyboard_navigation': True,
-        'desktop_mouse_drag_ignored': True,
+        'desktop_mouse_pen_safe_area_drag_and_click_selection_protection': True,
+        'paired_page_live_transforms': True,
         'external_requests': 0,
     }
 
