@@ -75,7 +75,7 @@
   top: var(--nav-height);
   padding: 12px 0 10px;
   border-bottom-color: #334147;
-  background: #0c1216f5;
+  background: #0c1216;
 }
 .search-label { margin-bottom: 5px; }
 .search-field-wrap input { height: 46px; }

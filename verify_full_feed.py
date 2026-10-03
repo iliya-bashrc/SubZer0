@@ -165,6 +165,72 @@ def width_audit(page, width: int, height: int = 900) -> dict:
     return metrics
 
 
+def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_count: int) -> list[dict]:
+    results = []
+    scenarios = (
+        (False, ((1440, 900), (1440, 624))),
+        (True, ((390, 844), (320, 740))),
+    )
+    for is_touch, viewports in scenarios:
+        first_width, first_height = viewports[0]
+        page = browser.new_page(
+            viewport={'width': first_width, 'height': first_height},
+            device_scale_factor=1,
+            is_mobile=is_touch,
+            has_touch=is_touch,
+        )
+        page.emulate_media(reduced_motion='reduce')
+        browser_issue_track(page, issues, origin)
+        page.goto(f'{origin}/?page=center', wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
+        expect(page.locator('#record-list')).to_have_attribute('aria-busy', 'false')
+        for width, height in viewports:
+            page.set_viewport_size({'width': width, 'height': height})
+            page.evaluate('window.scrollTo(0, 0)')
+            page.wait_for_timeout(30)
+            page.evaluate('window.scrollTo(0, 1800)')
+            page.wait_for_function('Math.abs(scrollY - Math.min(1800, document.documentElement.scrollHeight - innerHeight)) < 2')
+            page.wait_for_timeout(40)
+            metrics = page.evaluate('''() => {
+              const rect = element => {
+                const r = element.getBoundingClientRect();
+                return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};
+              };
+              const alpha = element => {
+                const color = getComputedStyle(element).backgroundColor;
+                const components = color.match(/rgba?\\(([^)]+)\\)/)?.[1].split(',') ?? [];
+                return components.length === 4 ? Number(components[3]) : 1;
+              };
+              const header = document.querySelector('.site-header');
+              const dock = document.querySelector('.center-dock');
+              const search = document.querySelector('#record-search');
+              const filters = document.querySelector('#filter-controls');
+              const searchRect = rect(search);
+              const hit = document.elementFromPoint(searchRect.left + searchRect.width / 2, searchRect.top + searchRect.height / 2);
+              return {
+                scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
+                header:rect(header), dock:rect(dock), search:searchRect, filters:rect(filters),
+                dockAlpha:alpha(dock), filterAlpha:alpha(filters),
+                headerZ:Number(getComputedStyle(header).zIndex), dockZ:Number(getComputedStyle(dock).zIndex),
+                dockPosition:getComputedStyle(dock).position, searchReceivesHit:hit === search,
+                searchEnabled:!search.disabled, searchLabel:search.getAttribute('aria-label')
+              };
+            }''')
+            assert metrics['scrollY'] >= 1798, f'scroll did not reach the sticky state at {width}x{height}: {metrics}'
+            assert metrics['dockPosition'] == 'sticky', metrics
+            assert abs(metrics['dock']['top'] - (metrics['header']['bottom'] - 1)) <= 1.1, f'search dock overlaps the sticky header at {width}x{height}: {metrics}'
+            assert metrics['search']['top'] > metrics['header']['bottom'], f'search input is obscured by the header at {width}x{height}: {metrics}'
+            assert metrics['filters']['bottom'] <= metrics['dock']['bottom'] + 1, metrics
+            assert metrics['headerZ'] > metrics['dockZ'], metrics
+            assert all(metrics[key] >= 0.999 for key in ('dockAlpha', 'filterAlpha')), f'CVE search surfaces let record text bleed through at {width}x{height}: {metrics}'
+            assert metrics['searchReceivesHit'] and metrics['searchEnabled'] and metrics['searchLabel'], f'sticky search is not accessible at {width}x{height}: {metrics}'
+            assert metrics['documentWidth'] == metrics['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {metrics}'
+            page.screenshot(path=str(SCREENSHOTS / f'center-sticky-{width}x{height}.png'), animations='disabled')
+            results.append({'viewport': [width, height], 'touch': is_touch, **metrics})
+        page.close()
+    return results
+
+
 def snapshot_override(manifest: dict, day: dict, records: list[dict]) -> tuple[bytes, bytes, str]:
     changed = json.loads(json.dumps(manifest))
     body = json.dumps(records, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
@@ -1067,6 +1133,7 @@ def main() -> None:
             overview_page.goto(f'{origin}/', wait_until='load')
             expect(overview_page.locator('#overview-status')).to_contain_text(f'{nfmt(expected_count)} CVE records')
             expect(overview_page.locator('#overview-status')).to_have_attribute('aria-busy', 'false')
+            expect(overview_page.locator('#page-overview footer')).to_have_text('© 2026 RootAccessClub. All rights reserved.')
             assert overview_page.locator('.latest-id').all_text_contents() == expected_latest
             assert overview_page.locator('.latest-id').evaluate_all('links => links.map(link => link.getAttribute("href"))') == [
                 f'?page=center&cve={cve_id}' for cve_id in expected_latest
@@ -1094,7 +1161,7 @@ def main() -> None:
             expect(overview_page.locator('.record-row')).to_have_count(min(24, expected_count))
             assert len(overview_requests) >= len(manifest['days'])
             overview_page.close()
-            print('PASS: authenticated Overview content, generated timestamp, no eager shard fetch, complete lazy Explore, deep links, and focus restoration.')
+            print('PASS: authenticated Overview content, copyright footer, generated timestamp, no eager shard fetch, complete lazy Explore, deep links, and focus restoration.')
 
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             browser_issue_track(page, issues, origin)
@@ -1256,6 +1323,9 @@ def main() -> None:
                 for tab in ('overview', 'center', 'community'):
                     page.locator(f'#tab-{tab}').click()
                     width_metrics[width][tab] = width_audit(page, width)
+            sticky_metrics = center_sticky_surface_audit(browser, origin, issues, expected_count)
+            print('PASS: CVE search surfaces are opaque and accessible, aligned below sticky navigation, and scroll correctly at desktop, short-height, and touch widths.')
+            print('Sticky surface metrics:', json.dumps(sticky_metrics, sort_keys=True))
             page.locator('#tab-community').click()
             expect(page.locator('#page-community')).to_be_visible()
             page.locator('#idle-prompt:not([hidden])').wait_for(timeout=10_000)
