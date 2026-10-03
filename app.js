@@ -2,6 +2,7 @@
   'use strict';
 
   const SNAPSHOT_BASE = 'snapshot/';
+  const FETCH_CACHE = Object.freeze({ manifest: 'no-cache', data: 'default', retry: 'reload' });
   const LIMITS = Object.freeze({
     manifestBytes: 512 * 1024,
     overviewBytes: 64 * 1024,
@@ -82,6 +83,13 @@
   const KEV_SOURCE = 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog';
   const GITHUB_SEARCH = (id) => `https://github.com/search?q=${encodeURIComponent(`${id} poc exploit`)}&type=repositories`;
   const nf = new Intl.NumberFormat('en-US');
+
+  class SnapshotIntegrityError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = 'SnapshotIntegrityError';
+    }
+  }
 
   function safeString(value, fallback = '') {
     return typeof value === 'string' ? value : fallback;
@@ -458,11 +466,11 @@
     return candidate;
   }
 
-  async function fetchBytes(path, maximum) {
+  async function fetchBytes(path, maximum, cache = FETCH_CACHE.data) {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), LIMITS.fetchTimeoutMs);
     try {
-      const response = await fetch(path, { signal: controller.signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+      const response = await fetch(path, { signal: controller.signal, credentials: 'same-origin', cache, redirect: 'error' });
       if (!response.ok) throw new Error('Snapshot request failed.');
       const declaredLength = response.headers.get('content-length');
       if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maximum)) throw new Error('Snapshot resource exceeds its byte limit.');
@@ -505,22 +513,30 @@
   }
 
   async function verifyBlob(bytes, config) {
-    if (bytes.byteLength !== config.bytes || !window.crypto?.subtle?.digest) throw new Error('Snapshot integrity checks are unavailable.');
+    if (bytes.byteLength !== config.bytes) throw new SnapshotIntegrityError('Snapshot byte-count verification failed.');
+    if (!window.crypto?.subtle?.digest) throw new Error('Snapshot integrity checks are unavailable.');
     const digest = await window.crypto.subtle.digest('SHA-256', bytes);
     const actual = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-    if (actual.toLowerCase() !== config.sha256.toLowerCase()) throw new Error('Snapshot integrity verification failed.');
+    if (actual.toLowerCase() !== config.sha256.toLowerCase()) throw new SnapshotIntegrityError('Snapshot integrity verification failed.');
   }
 
   async function fetchVerifiedJson(config, maximum) {
-    const bytes = await fetchBytes(`${SNAPSHOT_BASE}${config.path}`, maximum);
-    await verifyBlob(bytes, config);
+    const path = `${SNAPSHOT_BASE}${config.path}`;
+    let bytes = await fetchBytes(path, maximum, FETCH_CACHE.data);
+    try {
+      await verifyBlob(bytes, config);
+    } catch (error) {
+      if (!(error instanceof SnapshotIntegrityError)) throw error;
+      bytes = await fetchBytes(path, maximum, FETCH_CACHE.retry);
+      await verifyBlob(bytes, config);
+    }
     return parseJsonBytes(bytes);
   }
 
   async function getManifest() {
     if (!manifestPromise) {
       manifestPromise = (async () => {
-        const bytes = await fetchBytes(`${SNAPSHOT_BASE}manifest.json`, LIMITS.manifestBytes);
+        const bytes = await fetchBytes(`${SNAPSHOT_BASE}manifest.json`, LIMITS.manifestBytes, FETCH_CACHE.manifest);
         return validateManifest(parseJsonBytes(bytes));
       })().catch((error) => {
         manifestPromise = null;

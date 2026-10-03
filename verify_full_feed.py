@@ -8,6 +8,7 @@ import http.server
 import json
 import shutil
 import threading
+import time
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +61,63 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.close_connection = True
             return
         return super().do_GET()
+
+
+class CacheSemanticsHandler(http.server.SimpleHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def __init__(self, *args, scenario: dict, **kwargs):
+        self.scenario = scenario
+        super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def log_message(self, _format, *args):
+        pass
+
+    def do_GET(self):
+        path = urlsplit(self.path).path.lstrip('/') or 'index.html'
+        with self.scenario['lock']:
+            count = self.scenario['counts'].get(path, 0) + 1
+            self.scenario['counts'][path] = count
+            override = self.scenario['overrides'].get(path)
+            response = self.scenario['responses'].get(path)
+            cache_control = self.scenario['cache_control'].get(path, 'public, max-age=600')
+
+        if response is not None:
+            status, body = response(count) if callable(response) else response
+        else:
+            source = (ROOT / path).resolve()
+            if not source.is_relative_to(ROOT.resolve()) or not source.is_file():
+                status, body = 404, b'not found'
+            else:
+                status, body = 200, override if override is not None else source.read_bytes()
+
+        etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+        if status == 200 and self.headers.get('If-None-Match') == etag:
+            status, body = 304, b''
+        event = {
+            'path': path,
+            'status': status,
+            'body_bytes': len(body),
+            'if_none_match': self.headers.get('If-None-Match'),
+            'request_cache_control': self.headers.get('Cache-Control'),
+            'etag': etag,
+            'cache_control': cache_control,
+        }
+        with self.scenario['lock']:
+            self.scenario['events'].append(event)
+
+        self.send_response(status)
+        content_type = 'application/json; charset=utf-8' if path.endswith('.json') else self.guess_type(path)
+        if content_type.startswith('text/') or content_type in {'application/javascript', 'application/xml'}:
+            content_type += '; charset=utf-8'
+        self.send_header('Content-Type', content_type)
+        self.send_header('Cache-Control', cache_control)
+        self.send_header('ETag', etag)
+        if status != 304:
+            self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
 
 
 def nfmt(value: int) -> str:
@@ -305,6 +363,213 @@ def run_snapshot_loader_tests(browser, manifest: dict) -> dict:
     return result
 
 
+def new_cache_scenario() -> dict:
+    return {
+        'lock': threading.Lock(), 'counts': {}, 'events': [],
+        'overrides': {}, 'responses': {}, 'cache_control': {},
+    }
+
+
+def cache_scenario_events(scenario: dict) -> list[dict]:
+    with scenario['lock']:
+        return list(scenario['events'])
+
+
+def serve_cache_scenario(scenario: dict) -> http.server.ThreadingHTTPServer:
+    handler = functools.partial(CacheSemanticsHandler, scenario=scenario)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def run_http_cache_tests(browser, manifest: dict) -> dict:
+    manifest_path = 'snapshot/manifest.json'
+    manifest_raw = (ROOT / manifest_path).read_bytes()
+    overview_ids = {item['id'] for item in json.loads((ROOT / 'snapshot' / 'data' / 'overview.json').read_bytes())['records']}
+    target_day = None
+    target_rows = None
+    target = None
+    for day in manifest['days']:
+        if not day['count']:
+            continue
+        rows = json.loads((ROOT / 'snapshot' / day['path']).read_bytes())
+        candidate = next((row for row in rows if row['id'] not in overview_ids), None)
+        if candidate:
+            target_day, target_rows, target = day, rows, candidate
+            break
+    assert target_day and target_rows and target, 'Could not choose a non-Overview CVE for the cache fixture.'
+
+    changed_rows = json.loads(json.dumps(target_rows))
+    changed_title = 'C' * len(target['title'].encode('utf-8'))
+    assert changed_title != target['title'], 'Could not create a same-byte-length digest-mismatch fixture.'
+    next(row for row in changed_rows if row['id'] == target['id'])['title'] = changed_title
+    updated_manifest_raw, updated_shard_raw, _ = snapshot_override(manifest, target_day, changed_rows)
+    target_path = f"snapshot/{target_day['path']}"
+    expected_resource_paths = {
+        manifest_path,
+        *(f"snapshot/{day['path']}" for day in manifest['days']),
+        f"snapshot/{manifest['overview']['path']}",
+        f"snapshot/{manifest['epss']['path']}",
+    }
+    scenario = new_cache_scenario()
+    server = serve_cache_scenario(scenario)
+    origin = f'http://127.0.0.1:{server.server_port}'
+    issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
+    context = browser.new_context(viewport={'width': 1280, 'height': 900})
+    page = context.new_page()
+    browser_issue_track(page, issues, origin)
+    results: dict = {}
+    try:
+        cold_started = time.monotonic()
+        page.goto(f'{origin}/?page=center', wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        cold_elapsed = time.monotonic() - cold_started
+        cold_events = [event for event in cache_scenario_events(scenario) if event['path'] in expected_resource_paths]
+        cold_full = [event for event in cold_events if event['status'] == 200]
+        cold_counts = {path: sum(event['path'] == path for event in cold_full) for path in expected_resource_paths}
+        assert all(count == 1 for count in cold_counts.values()), f'Cold load did not fetch each resource exactly once: {cold_counts}'
+        cold_manifest_event = next(event for event in cold_full if event['path'] == manifest_path)
+        assert cold_manifest_event['cache_control'] == 'public, max-age=600'
+        cold_data_bytes = sum(event['body_bytes'] for event in cold_full if event['path'] != manifest_path)
+        assert cold_data_bytes == sum(day['bytes'] for day in manifest['days']) + manifest['overview']['bytes'] + manifest['epss']['bytes']
+
+        repeat_started = time.monotonic()
+        repeat_marker = len(cache_scenario_events(scenario))
+        page.reload(wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        repeat_elapsed = time.monotonic() - repeat_started
+        repeat_events = [event for event in cache_scenario_events(scenario)[repeat_marker:] if event['path'] in expected_resource_paths]
+        repeat_manifest = [event for event in repeat_events if event['path'] == manifest_path]
+        assert len(repeat_manifest) == 1 and repeat_manifest[0]['status'] == 304, f'Manifest was not ETag-revalidated: {repeat_events}'
+        assert repeat_manifest[0]['if_none_match'] == cold_manifest_event['etag'], 'Manifest revalidation omitted the cached ETag.'
+        assert not [event for event in repeat_events if event['path'] != manifest_path], f'Unchanged data resources were re-requested: {repeat_events}'
+        repeat_data_bytes = sum(event['body_bytes'] for event in repeat_events if event['path'] != manifest_path)
+        assert repeat_data_bytes == 0
+        results['cold_visit'] = {'seconds': round(cold_elapsed, 3), 'data_body_bytes': cold_data_bytes, 'resource_count': len(expected_resource_paths) - 1}
+        results['unchanged_repeat'] = {
+            'seconds': round(repeat_elapsed, 3), 'manifest_revalidation': '304 with matching ETag',
+            'data_resource_requests': 0, 'data_body_bytes': repeat_data_bytes,
+            'data_body_bytes_saved': cold_data_bytes,
+            'data_body_savings_percent': 100.0,
+        }
+
+        # Re-entering the loaded page and using browser history preserves verified in-memory/cache data.
+        reentry_marker = len(cache_scenario_events(scenario))
+        page.locator('#tab-overview').click()
+        page.locator('#tab-center').click()
+        assert not [event for event in cache_scenario_events(scenario)[reentry_marker:] if event['path'] in expected_resource_paths]
+        page.locator('#tab-overview').click()
+        first_overview_id = json.loads((ROOT / 'snapshot' / 'data' / 'overview.json').read_bytes())['records'][0]['id']
+        page.locator('.latest-id').first.click()
+        expect(page.locator('#detail-heading')).to_have_text(first_overview_id, timeout=120_000)
+        page.go_back(wait_until='domcontentloaded')
+        page.go_forward(wait_until='domcontentloaded')
+        expect(page.locator('#detail-heading')).to_have_text(first_overview_id, timeout=120_000)
+        history_events = [event for event in cache_scenario_events(scenario)[reentry_marker:] if event['path'] in expected_resource_paths]
+        assert not [event for event in history_events if event['path'] != manifest_path and event['body_bytes']], f'Re-entry/history redownloaded JSON bodies: {history_events}'
+        results['same_page_and_history'] = {'in_memory_reentry': True, 'back_forward': True, 'data_body_bytes': 0}
+
+        # A fresh manifest changes the hash for a same-path shard; the stale cached body must be retried once.
+        page.goto(f'{origin}/?page=center', wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        with scenario['lock']:
+            scenario['overrides'][manifest_path] = updated_manifest_raw
+            scenario['overrides'][target_path] = updated_shard_raw
+        update_marker = len(cache_scenario_events(scenario))
+        page.reload(wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        page.locator('#record-search').fill(target['id'])
+        expect(page.locator('.record-row')).to_have_count(1)
+        expect(page.locator('.record-title')).to_have_text(changed_title)
+        update_events = [event for event in cache_scenario_events(scenario)[update_marker:] if event['path'] in expected_resource_paths]
+        new_manifest_events = [event for event in update_events if event['path'] == manifest_path]
+        new_shard_events = [event for event in update_events if event['path'] == target_path]
+        assert len(new_manifest_events) == 1 and new_manifest_events[0]['status'] == 200 and new_manifest_events[0]['body_bytes'] == len(updated_manifest_raw)
+        assert len(new_shard_events) == 1 and new_shard_events[0]['status'] == 200 and new_shard_events[0]['body_bytes'] == len(updated_shard_raw), f'Changed shard was not fetched exactly once after cache mismatch: {new_shard_events}'
+        results['changed_manifest_and_shard'] = {
+            'manifest': 'fresh 200', 'changed_same_path_shard': 'one cache-reload request; digest and schema verified',
+            'updated_record_rendered': target['id'], 'shard_response_body_bytes': len(updated_shard_raw),
+        }
+
+        # Force one resource's cached validator to expire, then confirm default fetch revalidates by ETag.
+        expired_day = next(day for day in manifest['days'] if day['count'] and day['path'] != target_day['path'])
+        expired_path = f"snapshot/{expired_day['path']}"
+        with scenario['lock']:
+            scenario['cache_control'][expired_path] = 'public, max-age=0'
+        probe = page.evaluate('''async (path) => {
+          const response = await fetch(path, {cache: 'no-cache', credentials: 'same-origin'});
+          return {status: response.status, bytes: (await response.arrayBuffer()).byteLength};
+        }''', f'/{expired_path}')
+        assert probe == {'status': 200, 'bytes': expired_day['bytes']}, f'ETag probe did not recover the cached body: {probe}'
+        probe_event = [event for event in cache_scenario_events(scenario) if event['path'] == expired_path][-1]
+        assert probe_event['status'] == 304 and probe_event['if_none_match'], f'Expired ETag probe did not receive 304: {probe_event}'
+        expiry_marker = len(cache_scenario_events(scenario))
+        page.reload(wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expiry_events = [event for event in cache_scenario_events(scenario)[expiry_marker:] if event['path'] == expired_path]
+        assert len(expiry_events) == 1 and expiry_events[0]['status'] == 304 and expiry_events[0]['if_none_match'], f'Default cache mode did not revalidate the expired ETag: {expiry_events}'
+        results['expired_etag'] = {'probe_revalidation': 304, 'application_default_cache_revalidation': 304, 'body_bytes': 0}
+    finally:
+        context.close()
+
+    # A tampered response is retried once, remains untrusted, and never renders partial rows.
+    tampered_body = (ROOT / target_path).read_bytes()
+    tampered_body = tampered_body[:-1] + (b' ' if tampered_body.endswith(b'\n') else b'!')
+    with scenario['lock']:
+        scenario['overrides'] = {manifest_path: manifest_raw}
+        scenario['responses'] = {target_path: (200, tampered_body)}
+        scenario['events'] = []
+        scenario['counts'] = {}
+    tamper_context = browser.new_context(viewport={'width': 1280, 'height': 900})
+    tamper_page = tamper_context.new_page()
+    browser_issue_track(tamper_page, issues, origin)
+    try:
+        tamper_page.goto(f'{origin}/?page=center', wait_until='load')
+        expect(tamper_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
+        expect(tamper_page.locator('#record-list .record-row')).to_have_count(0)
+        assert tamper_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
+        tamper_events = [event for event in cache_scenario_events(scenario) if event['path'] == target_path]
+        assert len(tamper_events) == 2, f'Tampered shard did not receive exactly one retry: {tamper_events}'
+        results['tampered_network_resource'] = {'attempts': len(tamper_events), 'rendered_records': 0, 'state': 'fail-closed'}
+    finally:
+        tamper_context.close()
+
+    # Malformed JSON with a matching declared byte count/hash fails parsing without a retry or partial success.
+    malformed = b'{not valid JSON'
+    malformed_manifest = json.loads(json.dumps(manifest))
+    malformed_day = malformed_manifest['days'][0]
+    malformed_day['bytes'] = len(malformed)
+    malformed_day['sha256'] = hashlib.sha256(malformed).hexdigest()
+    malformed_manifest_raw = json.dumps(malformed_manifest, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    malformed_path = f"snapshot/{malformed_day['path']}"
+    with scenario['lock']:
+        scenario['overrides'] = {manifest_path: malformed_manifest_raw, malformed_path: malformed}
+        scenario['responses'] = {}
+        scenario['events'] = []
+        scenario['counts'] = {}
+    malformed_context = browser.new_context(viewport={'width': 1280, 'height': 900})
+    malformed_page = malformed_context.new_page()
+    browser_issue_track(malformed_page, issues, origin)
+    try:
+        malformed_page.goto(f'{origin}/?page=center', wait_until='load')
+        expect(malformed_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
+        expect(malformed_page.locator('#record-list .record-row')).to_have_count(0)
+        malformed_events = [event for event in cache_scenario_events(scenario) if event['path'] == malformed_path]
+        assert len(malformed_events) == 1, f'Hash-valid malformed JSON should fail schema parsing without cache retry: {malformed_events}'
+        results['malformed_json'] = {'attempts': 1, 'rendered_records': 0, 'state': 'fail-closed'}
+    finally:
+        malformed_context.close()
+        server.shutdown()
+        server.server_close()
+
+    assert not issues['page_errors'], f"Cache browser page errors: {issues['page_errors']}"
+    assert not issues['console_errors'], f"Cache browser console errors: {issues['console_errors']}"
+    assert not issues['request_failures'], f"Cache browser request failures: {issues['request_failures']}"
+    assert not issues['external_requests'], f"Unexpected external requests in cache tests: {issues['external_requests']}"
+    return results
+
+
 def main() -> None:
     manifest, overview, days = load_contract()
     expected_count = manifest['totals']['cves']
@@ -442,6 +707,10 @@ def main() -> None:
             loader_results = run_snapshot_loader_tests(browser, manifest)
             print('PASS: truthful loader progress through delayed manifest, out-of-order verified shards, final sidecar validation, responsive/reduced-motion states, re-entry, source failure, and retry.')
             print('Loader QA details:', json.dumps(loader_results, sort_keys=True))
+
+            cache_results = run_http_cache_tests(browser, manifest)
+            print('PASS: HTTP cache revalidation, changed-hash retry, expired ETag, malformed/tampered fail-closed behavior, and zero unnecessary repeat JSON bodies.')
+            print('HTTP cache QA details:', json.dumps(cache_results, sort_keys=True))
 
             # A correctly re-hashed malicious text fixture remains text, never active markup.
             malicious_rows = json.loads((ROOT / 'snapshot' / latest_day['path']).read_text(encoding='utf-8'))
