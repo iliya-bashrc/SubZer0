@@ -1,0 +1,341 @@
+from __future__ import annotations
+
+import gzip
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from unittest import mock
+from urllib.parse import parse_qs, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import update_data as feed  # noqa: E402
+
+
+class PaginationTests(unittest.TestCase):
+    def test_nvd_walks_every_offset_page_and_checks_constant_totals(self):
+        calls = []
+        sleeps = []
+        pages = {
+            0: {"totalResults": 3, "startIndex": 0, "resultsPerPage": 2, "vulnerabilities": [
+                {"cve": {"id": "CVE-2026-0001"}}, {"cve": {"id": "CVE-2026-0002"}},
+            ]},
+            2: {"totalResults": 3, "startIndex": 2, "resultsPerPage": 1, "vulnerabilities": [
+                {"cve": {"id": "CVE-2026-0003"}},
+            ]},
+        }
+
+        def request(url, headers=None):
+            params = parse_qs(urlparse(url).query)
+            offset = int(params["startIndex"][0])
+            calls.append(params)
+            return pages[offset], {}
+
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        records, total, page_count = feed.iter_nvd(start, end, request, sleeps.append, page_size=2)
+        self.assertEqual((len(records), total, page_count), (3, 3, 2))
+        self.assertEqual([int(call["startIndex"][0]) for call in calls], [0, 2])
+        self.assertEqual(sleeps, [feed.NVD_PAGE_PAUSE_SECONDS])
+        self.assertEqual(calls[0]["pubStartDate"], ["2026-09-01T00:00:00.000"])
+
+    def test_nvd_fails_on_empty_or_changing_pages(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        pages = iter([
+            ({"totalResults": 2, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]}, {}),
+            ({"totalResults": 3, "vulnerabilities": [{"cve": {"id": "CVE-2026-0002"}}]}, {}),
+        ])
+        with self.assertRaises(feed.FeedError):
+            feed.iter_nvd(start, end, lambda *args, **kwargs: next(pages), lambda _: None, page_size=1)
+
+        with self.assertRaises(feed.FeedError):
+            feed.iter_nvd(start, end, lambda *args, **kwargs: ({"totalResults": 1, "vulnerabilities": []}, {}), lambda _: None)
+
+        for malformed in (
+            {"totalResults": 1, "startIndex": False, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]},
+            {"totalResults": 1, "startIndex": 0, "resultsPerPage": -1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]},
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises(feed.FeedError):
+                feed.iter_nvd(start, end, lambda *args, **kwargs: (malformed, {}), lambda _: None)
+
+    def test_github_follows_only_official_link_cursor_and_preserves_token_header(self):
+        cursor = "https://api.github.com/advisories?after=next-cursor"
+        calls = []
+
+        def request(url, headers=None):
+            calls.append((url, headers or {}))
+            if len(calls) == 1:
+                return [{"ghsa_id": "GHSA-one", "cve_id": "CVE-2026-0001"}], {"Link": f'<{cursor}>; rel="next"'}
+            return [{"ghsa_id": "GHSA-two", "cve_id": "CVE-2026-0002"}], {}
+
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        items, pages = feed.iter_github_advisories(start, end, request, token="test-token")
+        self.assertEqual(pages, 2)
+        self.assertEqual([item["ghsa_id"] for item in items], ["GHSA-one", "GHSA-two"])
+        self.assertEqual(calls[0][1]["Authorization"], "Bearer test-token")
+        self.assertEqual(calls[0][1]["X-GitHub-Api-Version"], "2026-03-10")
+        self.assertEqual(parse_qs(urlparse(calls[0][0]).query)["per_page"], ["100"])
+
+    def test_github_rejects_off_origin_cursor_and_empty_success(self):
+        bad_cursor = "https://attacker.example/advisories?after=next"
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        with self.assertRaises(feed.FeedError):
+            feed.iter_github_advisories(start, end, lambda *_args, **_kwargs: ([{"ghsa_id": "GHSA-one"}], {"Link": f'<{bad_cursor}>; rel="next"'}))
+        with self.assertRaises(feed.FeedError):
+            feed.iter_github_advisories(start, end, lambda *_args, **_kwargs: ([], {}))
+
+    def test_cisa_requires_nonempty_count_matched_catalog(self):
+        with self.assertRaises(feed.FeedError):
+            feed.fetch_kev(lambda *_args, **_kwargs: ({"count": 0, "vulnerabilities": []}, {}))
+        with self.assertRaises(feed.FeedError):
+            feed.fetch_kev(lambda *_args, **_kwargs: ({"count": 2, "vulnerabilities": [{"cveID": "CVE-2026-0001"}]}, {}))
+
+
+class NormalizationTests(unittest.TestCase):
+    def test_cvss_zero_is_none_and_thresholds_are_exact(self):
+        self.assertEqual(feed.severity_for(0), "none")
+        self.assertEqual(feed.severity_for(None), "unknown")
+        self.assertEqual(feed.severity_for(0.1), "low")
+        self.assertEqual(feed.severity_for(3.9), "low")
+        self.assertEqual(feed.severity_for(4.0), "medium")
+        self.assertEqual(feed.severity_for(7.0), "high")
+        self.assertEqual(feed.severity_for(9.0), "critical")
+
+    def test_safe_url_accepts_real_http_references_and_rejects_active_or_credential_urls(self):
+        self.assertEqual(feed._safe_url("http://example.org/advisory"), "http://example.org/advisory")
+        self.assertEqual(feed._safe_url("https://example.org/advisory"), "https://example.org/advisory")
+        for candidate in (
+            "javascript:alert(1)", "data:text/html,hello", "file:///etc/passwd",
+            "https://user:pass@example.org/", "http://@example.org/", "https://example.org/with space",
+        ):
+            self.assertIsNone(feed._safe_url(candidate), candidate)
+
+    def test_nvd_and_github_cvss_are_finite_and_in_range(self):
+        with self.assertRaises(feed.FeedError):
+            feed._cvss({"metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 99}}]}})
+        bad = {
+            "ghsa_id": "GHSA-bad-score", "cve_id": "CVE-2026-0001",
+            "published_at": "2026-09-10T11:00:00Z", "cvss_severities": {"cvss_v3": {"score": 1e100}},
+        }
+        with self.assertRaises(feed.FeedError):
+            feed.build_records([], [bad], [], datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 30, tzinfo=timezone.utc))
+
+    def test_sources_merge_once_and_preserve_cvss_kev_and_attribution(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        nvd = [{"cve": {
+            "id": "CVE-2026-1001", "published": "2026-09-10T11:00:00.123",
+            "lastModified": "2026-09-12T12:00:00",
+            "descriptions": [{"lang": "en", "value": "A serious flaw in Acme Router."}],
+            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8}}]},
+            "references": [{"url": "http://vendor.example/security/advisory"}],
+        }}]
+        advisory = {
+            "ghsa_id": "GHSA-test", "cve_id": "cve-2026-1001",
+            "summary": "Acme Router command injection", "published_at": "2026-09-10T11:00:00Z",
+            "html_url": "https://github.com/advisories/GHSA-test",
+        }
+        kev = [{
+            "cveID": "CVE-2026-1001", "dateAdded": "2026-09-15", "vendorProject": "Acme",
+            "product": "Router", "vulnerabilityName": "Acme Router remote code execution",
+            "shortDescription": "Known exploitation observed.", "dueDate": "2026-09-22",
+            "requiredAction": "Apply vendor updates.", "knownRansomwareCampaignUse": "Unknown",
+        }]
+        records = feed.build_records(nvd, [advisory], kev, start, end)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual((record["id"], record["score"], record["sev"]), ("CVE-2026-1001", 9.8, "critical"))
+        self.assertEqual(record["published"], "2026-09-10T11:00:00.123Z")
+        self.assertEqual(record["modified"], "2026-09-12T12:00:00Z")
+        self.assertEqual(record["window_date"], "2026-09-15")
+        self.assertEqual(record["sources"], ["NVD", "GitHub Advisory Database", "CISA KEV"])
+        self.assertEqual(record["kev"]["date_added"], "2026-09-15")
+        self.assertIn("http://vendor.example/security/advisory", [item["url"] for item in record["refs"]])
+        self.assertEqual(record["primary_url"], "https://nvd.nist.gov/vuln/detail/CVE-2026-1001")
+
+
+class EpssTests(unittest.TestCase):
+    def test_csv_parser_reads_score_date_and_filters_ids(self):
+        csv_text = (
+            "#model_version:v2026.06.15,score_date:2026-09-29T12:00:22Z\n"
+            "cve,epss,percentile\n"
+            "CVE-2026-0101,0.05000,0.93000\n"
+            "CVE-2026-0102,0.00001,0.20000\n"
+        )
+        scores, score_date, updated_at = feed.parse_epss_csv(io.StringIO(csv_text), {"CVE-2026-0101"})
+        self.assertEqual(score_date, "2026-09-29")
+        self.assertEqual(updated_at, "2026-09-29T12:00:22Z")
+        self.assertEqual(scores, {"CVE-2026-0101": {"score": 0.05, "percentile": 0.93}})
+
+    def test_csv_rejects_nan_duplicate_headers_and_invalid_target_scores(self):
+        header = "# score_date:2026-09-29T12:00:22Z\n"
+        for body in (
+            "cve,epss,epss\nCVE-2026-0101,0.2,0.3\n",
+            "cve,epss,percentile\nCVE-2026-0101,NaN,0.9\n",
+        ):
+            with self.subTest(body=body), self.assertRaises(feed.FeedError):
+                feed.parse_epss_csv(io.StringIO(header + body), {"CVE-2026-0101"})
+
+    def test_epss_failure_does_not_turn_missing_scores_into_zero(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot"
+            output.mkdir()
+
+            def unavailable(_):
+                raise RuntimeError("offline")
+
+            snapshot, status = feed.build_epss_snapshot(
+                [{"id": "CVE-2026-0104"}], output,
+                datetime(2026, 9, 30, 1, tzinfo=timezone.utc), unavailable,
+            )
+            self.assertFalse(status["ok"])
+            self.assertEqual(status["records"], 1)
+            self.assertEqual(snapshot["scores"], {})
+            self.assertIn("scores", snapshot)
+
+    def test_epss_gzip_reader_is_bounded(self):
+        payload = gzip.compress(b"# score_date:2026-09-29T12:00:22Z\ncve,epss,percentile\nCVE-2026-0101,0.1,0.5\n")
+        limited = feed._BoundedReader(io.BytesIO(payload), len(payload) - 1, "compressed")
+        with self.assertRaises(feed.FeedError):
+            limited.read(len(payload))
+
+
+class PipelineFailureTests(unittest.TestCase):
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(timezone.utc).replace(microsecond=0)
+
+    def _request_for(self, now: datetime):
+        activity = feed.iso_z(now - timedelta(hours=1))
+        cve = {
+            "id": "CVE-2026-7001", "published": activity, "lastModified": activity,
+            "descriptions": [{"lang": "en", "value": "A fixture vulnerability in Widget."}],
+            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.1}}]},
+            "references": [{"url": "https://vendor.example/security/7001"}],
+        }
+        advisory = {
+            "ghsa_id": "GHSA-fixture-7001", "cve_id": "CVE-2026-7001",
+            "summary": "Fixture security advisory", "published_at": activity,
+            "html_url": "https://github.com/advisories/GHSA-fixture-7001",
+        }
+        kev = {
+            "cveID": "CVE-2026-7001", "dateAdded": now.date().isoformat(),
+            "vendorProject": "Fixture", "product": "Widget", "dueDate": "",
+            "requiredAction": "Apply the vendor update.", "knownRansomwareCampaignUse": "Unknown",
+        }
+
+        def request(url, headers=None):
+            if url.startswith(feed.NVD_API):
+                offset = int(parse_qs(urlparse(url).query)["startIndex"][0])
+                return ({"totalResults": 1, "startIndex": offset, "resultsPerPage": 1, "vulnerabilities": [{"cve": cve}]}, {})
+            if url.startswith(feed.GITHUB_API):
+                return [advisory], {}
+            if url == feed.CISA_KEV:
+                return {"count": 1, "vulnerabilities": [kev]}, {}
+            raise AssertionError(f"Unexpected source URL: {url}")
+
+        def epss(ids):
+            return ({"CVE-2026-7001": {"score": 0.2, "percentile": 0.95}}, now.date().isoformat(), feed.iso_z(now))
+
+        return request, epss
+
+    def test_success_writes_only_current_static_paths_and_validation_report(self):
+        now = self._now()
+        request, epss = self._request_for(now)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot"
+            manifest = feed.refresh(output, now, request, lambda _: None, epss_csv_loader=epss)
+            self.assertTrue((output / "manifest.json").is_file())
+            self.assertTrue((output / "VALIDATION.json").is_file())
+            self.assertTrue((output / "data" / "overview.json").is_file())
+            self.assertTrue((output / "data" / "epss.json").is_file())
+            self.assertEqual(manifest["totals"]["cves"], 1)
+            self.assertFalse((Path(temporary) / "api").exists())
+            data_names = {path.name for path in (output / "data").iterdir()}
+            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json"})
+
+    def test_core_source_failure_or_empty_result_preserves_every_prior_snapshot_byte(self):
+        now = self._now()
+        request, epss = self._request_for(now)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot"
+            feed.refresh(output, now, request, lambda _: None, epss_csv_loader=epss)
+            before = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+
+            def empty_nvd(url, headers=None):
+                if url.startswith(feed.NVD_API):
+                    return {"totalResults": 0, "vulnerabilities": []}, {}
+                raise AssertionError("An empty NVD result must abort before later sources")
+
+            with self.assertRaises(feed.FeedError):
+                feed.refresh(output, now, empty_nvd, lambda _: None, epss_csv_loader=epss)
+            after = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+            self.assertEqual(after, before)
+
+            def fail_github(url, headers=None):
+                if url.startswith(feed.NVD_API):
+                    return request(url, headers)
+                raise feed.FeedError("GitHub unavailable")
+
+            with self.assertRaises(feed.FeedError):
+                feed.refresh(output, now, fail_github, lambda _: None, epss_csv_loader=epss)
+            after_second = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+            self.assertEqual(after_second, before)
+
+    def test_directory_commit_rolls_back_when_replacement_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            output = parent / "snapshot"
+            output.mkdir()
+            (output / "marker").write_text("old", encoding="utf-8")
+            stage = parent / ".snapshot-stage"
+            stage.mkdir()
+            (stage / "marker").write_text("new", encoding="utf-8")
+            real_replace = os.replace
+            calls = 0
+
+            def fail_second_replace(source, target):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("simulated directory swap error")
+                return real_replace(source, target)
+
+            with mock.patch.object(feed.os, "replace", side_effect=fail_second_replace):
+                with self.assertRaises(OSError):
+                    feed._commit_snapshot(stage, output)
+            self.assertEqual((output / "marker").read_text(encoding="utf-8"), "old")
+            self.assertTrue(stage.is_dir())
+
+    def test_aggregate_upstream_json_ingress_is_bounded(self):
+        budget = feed._JSONIngressBudget(limit=8)
+        with self.assertRaisesRegex(feed.FeedError, "Combined upstream JSON"):
+            budget.fetch(lambda *_args, **_kwargs: ({"payload": "longer than budget"}, {}), feed.NVD_API)
+
+    def test_request_policy_rejects_official_api_redirect_targets_and_large_bodies(self):
+        with self.assertRaises(feed.FeedError):
+            feed.request_json("https://attacker.example/advisories")
+
+        class Response:
+            headers = {"Content-Length": "101"}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self, size=-1): return b"x" * min(size, 101)
+
+        opener = mock.Mock()
+        opener.open.return_value = Response()
+        with mock.patch.object(feed, "MAX_HTTP_JSON_BYTES", 100), mock.patch.object(feed.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(feed.FeedError):
+                feed.request_json(feed.NVD_API)
+
+
+if __name__ == "__main__":
+    unittest.main()

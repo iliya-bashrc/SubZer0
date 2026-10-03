@@ -1,20 +1,16 @@
 # Data provenance and trust boundaries
 
-## Source and capture
+## Snapshot provenance
 
-The snapshot was captured from the current public SubZer0 rolling 30-day feed:
+The current checked-in snapshot has `generated_at` **2026-10-02T06:00:04Z** and covers the rolling 30-day window **2026-09-02T06:00:04Z through 2026-10-02T06:00:04Z**. It contains **15,318 unique CVE records** in 31 date shards, including 45 CISA KEV listings. The manifest is [`snapshot/manifest.json`](snapshot/manifest.json); the full JSON records are under [`snapshot/data/`](snapshot/data/).
 
-- Manifest: [https://iliya-bashrc.github.io/SubZer0/api/v1/manifest.json](https://iliya-bashrc.github.io/SubZer0/api/v1/manifest.json)
-- Shard base: [https://iliya-bashrc.github.io/SubZer0/](https://iliya-bashrc.github.io/SubZer0/)
-- Published manifest `generated_at`: **2026-10-02T06:00:04Z**.
-- UTC window: **2026-09-02T06:00:04Z through 2026-10-02T06:00:04Z**. The feed window combines NVD CVE publication timestamps, GitHub advisory publication timestamps and CISA KEV date-added entries.
-- **15,318 CVE records** across **31 manifest-listed UTC daily shards**, totaling 45 CISA KEV listings.
+The 2026-10-03 security-review migration preserved every existing daily-shard and EPSS file byte-for-byte. It retained the original `generated_at`, added a small derived Overview sidecar, and updated the manifest and [`snapshot/VALIDATION.json`](snapshot/VALIDATION.json) to describe and validate the current static file layout. The Overview sidecar is derived only from the included records. This migration was not an upstream data refresh, and fixture tests did not make source API calls.
 
-The snapshot contains the original published JSON bytes in `snapshot/manifest.json` and `snapshot/data/`. `snapshot/VALIDATION.json` is the generated audit record, with every shard's declared row count and SHA-256, the manifest SHA-256, and the EPSS file SHA-256. The capture script checked every listed shard's bytes/hash and row count; each day's severity and KEV counts; cross-shard ID uniqueness; global severity/KEV totals; and EPSS score count. A second local check independently recomputed every bundled day-shard byte hash and count: **31/31 matched**.
+A subsequent scheduled refresh obtains records from the official [NVD CVE API 2.0](https://services.nvd.nist.gov/rest/json/cves/2.0), [GitHub Security Advisory Database](https://api.github.com/advisories) and [CISA KEV catalog](https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json), with scores from [FIRST EPSS](https://epss.empiricalsecurity.com/epss_scores-current.csv.gz) and an optional [FIRST API](https://api.first.org/data/v1/epss) fallback. The app served in a browser does not contact those services; it reads only the static snapshot from its own origin.
 
-Manifest SHA-256: `2caaaa7674afe79af8fe094185b7346c2d5f7c9cdf5c0e266bcfef254449b834`.
+The offline verifier records manifest and shard hashes, exact byte and row counts, total CVE/severity/KEV counts, EPSS coverage and data-size limits. The producer stages a complete replacement, validates it before an atomic directory swap, and restores the prior snapshot if the swap fails. The browser independently checks the manifest-declared SHA-256 values before rendering. These hashes detect accidental corruption or a shard that disagrees with its manifest; they do **not** authenticate the source against an attacker able to replace both the manifest and files on the same Pages origin.
 
-## Manifest totals
+## Snapshot totals and source meaning
 
 | Source CVSS category | Count | Center treatment |
 |---|---:|---|
@@ -24,19 +20,25 @@ Manifest SHA-256: `2caaaa7674afe79af8fe094185b7346c2d5f7c9cdf5c0e266bcfef254449b
 | Low | 949 | Low, icy blue |
 | None | 1,527 | Neutral Unrated; source category retained |
 | Unknown | 19 | Neutral Unrated; source category retained |
-| CISA KEV listings | 45 | Shown as separate catalog evidence |
+| CISA KEV listings | 45 | Separate catalog evidence |
 
-Unrated is a browsing group only. It does not rewrite the record's `None` or `Unknown` source state. A present numeric CVSS value such as `0.0` is displayed as such, but is not used as a substitute for a missing score.
+“Unrated” is a browsing group only; it does not replace the source's `None` or `Unknown` value. A supplied numeric CVSS value is kept distinct from a missing score. The project does not invent or calculate a combined “SubZer0 priority score.”
 
-## EPSS status
+The signal layers are intentionally independent:
 
-The manifest's EPSS section lists 14,760 scores for 15,318 records. The captured FIRST EPSS date is **2026-09-29**, its source timestamp is **2026-09-29T12:00:22Z**, and `source_status` marks FIRST EPSS `ok: false` with the note that the score set is older than 36 hours or has an invalid timestamp. The stale state is shown separately in the CVE center and record detail. **No score entry means unscored, not 0%**; present values (including a genuine score of zero if one existed) are validated before display.
+- **CVSS** is the severity score/category supplied by a CVE record.
+- **EPSS** is FIRST's probability estimate and percentile; the score-set date and staleness are shown.
+- **CISA KEV** records catalog membership and the catalog's supplied date, product and action fields.
+- **GitHub advisories** and user-started repository searches are leads, not proof of a working exploit or current exploitation.
 
-The source signal layers are intentionally distinct:
+## EPSS freshness
 
-- CVSS is a severity score and source category from the CVE feed record.
-- EPSS is a FIRST probability estimate and percentile, with score-set date/staleness shown.
-- CISA KEV is catalog membership with its date, product, due date and supplied catalog fields.
-- GitHub advisories attached to a record and user-initiated repository search links are leads; a repository result is not proof of a working PoC or exploitation.
+The snapshot contains **14,760 EPSS score entries** for 15,318 CVE records. The captured EPSS score date is **2026-09-29**, with source timestamp **2026-09-29T12:00:22Z**; the manifest marks this set stale. The app shows that state in the CVE Center and record details. A missing EPSS entry means **unscored**, not zero probability.
 
-Record descriptions, titles, product fields, labels, reference labels/URLs and catalog text are treated as untrusted input. Data strings are inserted with text nodes (`textContent`), never interpreted as markup. Only parsed HTTPS URLs without credentials are linked, in new tabs with `noopener noreferrer`; unsafe schemes are omitted. The page uses only its bundled files for automatic data requests. A source hyperlink leaves the local preview only after the person activates it.
+The updater treats EPSS as optional data: if the daily CSV and API fallback both fail validation or are unavailable, it may retain the previous score set but records it as stale/unavailable. A stale score is never reported as current. The NVD, GitHub and CISA core sources are required; an empty, malformed, inconsistent or incomplete core response aborts the refresh.
+
+## Trust boundaries and browser behavior
+
+Snapshot titles, descriptions, products, labels, references and catalog text are untrusted data. The interface creates DOM nodes and assigns content with `textContent`; it does not interpret snapshot strings as HTML. Links accept parsed HTTP or HTTPS URLs only, reject credentials and active schemes, and open new tabs with `noopener noreferrer`. Reference navigation occurs only after a person activates a link; ordinary data fetching is same-origin.
+
+The Pages application has a restrictive same-origin Content Security Policy in its HTML, no inline JavaScript, and explicit client-side limits for manifests, shards, total snapshot bytes, record counts, request duration and shard concurrency. GitHub Pages does not provide a repository-controlled HTTP response-header configuration here, so CSP protections that can only be delivered as HTTP headers—especially `frame-ancestors`—cannot be enforced by the HTML meta policy. The audit documents this hosting limitation.

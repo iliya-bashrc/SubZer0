@@ -4,8 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#080c0f">
-  <meta name="description" content="Independent local preview of a three-page SubZer0 redesign.">
-  <title>SubZer0 — Independent redesign preview</title>
+  <meta name="description" content="Browse a verified static snapshot of CVE intelligence from NVD, GitHub advisories and CISA KEV.">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>SubZer0 — CVE intelligence snapshot</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 30 16 16 30 2 16Z' fill='none' stroke='%232e647a' stroke-width='2'/%3E%3Cpath d='M16 7v18M8 11.5l16 9M24 11.5l-16 9' fill='none' stroke='%232e647a' stroke-width='1.5'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="severity-effects.css">
@@ -31,7 +33,7 @@
         <button class="nav-tab" id="tab-community" type="button" role="tab" aria-selected="false" aria-controls="page-community" tabindex="-1" data-page="community">Community</button>
       </nav>
 
-      <span class="preview-mark"><span aria-hidden="true"></span>Local preview</span>
+      <span class="preview-mark"><span aria-hidden="true"></span>Static snapshot</span>
     </div>
   </header>
 
@@ -50,34 +52,34 @@
             <button class="primary-action" id="explore-cves" type="button">Explore CVEs</button>
           </div>
 
-          <div class="ui-stage" aria-label="Offset layers of real SubZer0 record data from the captured public snapshot">
-            <article class="metal-layer layer-back">
-              <p class="layer-kicker">Record · CVE-2026-93367</p>
+          <div class="ui-stage" role="group" aria-label="Recent records in the verified SubZer0 snapshot" aria-busy="true">
+            <article class="metal-layer layer-back" data-overview-card="0">
+              <p class="layer-kicker">Loading snapshot data</p>
               <div class="layer-mainline">
-                <strong>Visitors Traffic Real Time Statistics Pro</strong>
-                <span class="severity-tag high">High</span>
+                <strong>Recent CVE record</strong>
+                <span class="severity-tag unrated">Not verified</span>
               </div>
-              <p class="layer-foot">CVSS 7.2 <span aria-hidden="true">/</span> 02 Oct 2026</p>
+              <p class="layer-foot">Loading snapshot data…</p>
             </article>
-            <article class="metal-layer layer-mid">
-              <p class="layer-kicker">Record · CVE-2026-10026</p>
+            <article class="metal-layer layer-mid" data-overview-card="1">
+              <p class="layer-kicker">Loading snapshot data</p>
               <div class="layer-mainline">
-                <strong>CTX Feed Pro for WordPress</strong>
-                <span class="severity-tag high">High</span>
+                <strong>Recent CVE record</strong>
+                <span class="severity-tag unrated">Not verified</span>
               </div>
-              <p class="layer-foot">CVSS 7.2 <span aria-hidden="true">/</span> 02 Oct 2026</p>
+              <p class="layer-foot">Loading snapshot data…</p>
             </article>
-            <article class="metal-layer layer-front">
-              <p class="layer-kicker">CVE record · NVD</p>
+            <article class="metal-layer layer-front" data-overview-card="2">
+              <p class="layer-kicker">Loading snapshot data</p>
               <div class="layer-mainline">
-                <strong>CVE-2026-19660</strong>
-                <span class="severity-tag critical">Critical</span>
+                <strong>Recent CVE record</strong>
+                <span class="severity-tag unrated">Not verified</span>
               </div>
-              <p class="layer-description">Divi Membership · authentication bypass</p>
+              <p class="layer-description">The current snapshot will appear here after its integrity checks pass.</p>
               <div class="layer-foot-row">
-                <span>CVSS 9.8</span>
-                <span>NVD</span>
-                <time datetime="2026-10-02">02 Oct 2026</time>
+                <span>CVSS —</span>
+                <span>Source pending</span>
+                <time>—</time>
               </div>
             </article>
             <span class="stage-rule stage-rule-one" data-depth="0.35" aria-hidden="true"></span>
@@ -88,25 +90,10 @@
         <section class="snapshot-rail" aria-labelledby="latest-heading">
           <div class="snapshot-heading">
             <h2 id="latest-heading">Latest in this snapshot</h2>
-            <p>Last successful snapshot · <time datetime="2026-10-02T06:00:04Z">02 Oct 2026 · 06:00:04 UTC</time></p>
+            <p>Last successful snapshot · <span id="overview-generated-at">Loading</span></p>
           </div>
-          <ul class="latest-list">
-            <li>
-              <a class="latest-id" href="?page=center&amp;cve=CVE-2026-19660">CVE-2026-19660</a>
-              <span class="severity-tag critical">Critical</span>
-              <time datetime="2026-10-02">02 Oct 2026</time>
-            </li>
-            <li>
-              <a class="latest-id" href="?page=center&amp;cve=CVE-2026-10026">CVE-2026-10026</a>
-              <span class="severity-tag high">High</span>
-              <time datetime="2026-10-02">02 Oct 2026</time>
-            </li>
-            <li>
-              <a class="latest-id" href="?page=center&amp;cve=CVE-2026-93367">CVE-2026-93367</a>
-              <span class="severity-tag high">High</span>
-              <time datetime="2026-10-02">02 Oct 2026</time>
-            </li>
-          </ul>
+          <ul class="latest-list" id="latest-list" aria-busy="true"></ul>
+          <p class="overview-status" id="overview-status" role="status" aria-live="polite" aria-busy="true">Verifying the latest static snapshot…</p>
         </section>
       </div>
     </section>

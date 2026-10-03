@@ -1,0 +1,178 @@
+name: Refresh validated static CVE snapshot
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: subzero-static-snapshot-refresh
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the Pages source on main without retaining credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Record the exact main revision used to build the candidate
+        run: |
+          mkdir -p bundle
+          git rev-parse HEAD > bundle/base.sha
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install pinned browser-test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Check source syntax
+        run: |
+          node --check app.js
+          node --check community.js
+          python -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_community_ansi_shadow.py
+
+      - name: Test updater and snapshot verifier with deterministic fixtures
+        run: python -m unittest discover -s tests -v
+
+      - name: Collect the complete upstream feed into a staged static snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/update_data.py
+
+      - name: Validate complete, fresh snapshot before publication
+        run: python scripts/verify_data_snapshot.py --max-age-hours 36
+
+      - name: Re-run deterministic tests against the newly generated snapshot
+        run: python -m unittest discover -s tests -v
+
+      - name: Install pinned Chromium runtime
+        run: python -m playwright install --with-deps chromium
+
+      - name: Verify the generated feed in a real browser before publication
+        run: python verify_full_feed.py
+
+      - name: Verify Community interactions without external navigation
+        run: python verify_community_ansi_shadow.py --community-only
+
+      - name: Package the validated candidate snapshot
+        run: cp -a snapshot bundle/snapshot
+
+      - name: Upload the validated candidate for the isolated publication job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: validated-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out main without storing the write credential
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Download the candidate artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: validated-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/validated-candidate
+
+      - name: Verify the candidate matches the exact main revision used for validation
+        run: |
+          set -euo pipefail
+          test -f "$RUNNER_TEMP/validated-candidate/base.sha"
+          BASE_SHA="$(cat "$RUNNER_TEMP/validated-candidate/base.sha")"
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          if [ "$BASE_SHA" != "$CURRENT_SHA" ]; then
+            echo "main changed during validation; refusing to publish this candidate."
+            exit 1
+          fi
+
+      - name: Revalidate the downloaded artifact before promotion
+        run: python scripts/verify_data_snapshot.py --root "$RUNNER_TEMP/validated-candidate/snapshot" --max-age-hours 36
+
+      - name: Stage only the independently revalidated snapshot
+        id: commit
+        run: |
+          set -euo pipefail
+          rm -rf -- snapshot
+          cp -a "$RUNNER_TEMP/validated-candidate/snapshot" snapshot
+          git add -- snapshot/
+          if ! git diff --cached --name-only | grep -qv '^snapshot/'; then
+            echo "Only snapshot/ files may be published."
+          else
+            echo "Refusing to publish paths outside snapshot/."
+            exit 1
+          fi
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The validated snapshot is unchanged; no commit is needed."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Refresh validated CVE snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the validated snapshot commit without persisting credentials
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BASE_SHA="$(cat "$RUNNER_TEMP/validated-candidate/base.sha")"
+          REMOTE_SHA="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$REMOTE_SHA" != "$BASE_SHA" ]; then
+            echo "main moved after candidate validation; refusing to push."
+            exit 1
+          fi
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git push origin HEAD:refs/heads/main
+
+  verify-pages:
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the published Pages source without retaining credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Verify the public site serves the exact committed app and snapshot
+        run: python scripts/verify_pages.py --root snapshot --timeout-seconds 900 --interval-seconds 15
