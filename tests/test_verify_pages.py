@@ -41,6 +41,15 @@ class PagesVerifierPolicyTests(unittest.TestCase):
         self.assertIn("snapshot/data/overview.json", paths)
         self.assertIn("snapshot/data/epss.json", paths)
 
+    def test_telegram_mark_uses_the_existing_steel_palette(self):
+        root = Path(__file__).resolve().parents[1]
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+        mark = (root / "assets/telegram-mark.svg").read_text(encoding="utf-8")
+        self.assertIn("--steel-bright: #64747b;", styles)
+        self.assertIn("--steel-edge: #3b4a51;", styles)
+        self.assertIn('stop-color="#64747b"', mark)
+        self.assertIn('stop-color="#3b4a51"', mark)
+
     def test_readme_telegram_images_resolve_to_their_channel_destinations(self):
         readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
         expected = (

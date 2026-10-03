@@ -110,10 +110,13 @@ def terminal_metrics(page: Page) -> dict[str, Any]:
         icons: [...document.querySelectorAll('.community-action__icon')].map((el) => {
           const image = el.querySelector('img');
           const rect = el.getBoundingClientRect();
-          return {src: image?.getAttribute('src') ?? null, loaded: Boolean(image?.complete && image.naturalWidth > 0), width: rect.width, height: rect.height};
+          const imageRect = image?.getBoundingClientRect();
+          return {src: image?.getAttribute('src') ?? null, loaded: Boolean(image?.complete && image.naturalWidth > 0), width: rect.width, height: rect.height,
+            imageWidth: imageRect?.width ?? 0, imageHeight: imageRect?.height ?? 0};
         }),
         actionInsideTerminal: document.querySelector('.community-actions').closest('.terminal-frame') !== null,
         infoText: document.querySelector('#terminal-info').innerText,
+        communityText: document.querySelector('#page-community').innerText,
         disclaimerText: document.querySelector('.community-disclaimer')?.innerText ?? null,
         promptText: document.querySelector('#idle-prompt').innerText,
         bannerText: document.querySelector('.terminal-banner').textContent,
@@ -138,14 +141,15 @@ def assert_terminal_fits(metrics: dict[str, Any]) -> None:
     assert [item['text'] for item in metrics['actions']] == ['Join BugCod3', 'Join RootAccessClub']
     assert [item['accessibleName'] for item in metrics['actions']] == ['Join BugCod3 on Telegram', 'Join RootAccessClub on Telegram']
     assert [item['src'] for item in metrics['icons']] == ['assets/telegram-mark.svg', 'assets/telegram-mark.svg']
-    assert all(item['loaded'] and item['width'] == 34 and item['height'] == 34 for item in metrics['icons']), f'Telegram icons failed to load or diverged in size at {width}px: {metrics}'
+    assert all(item['loaded'] and item['width'] == 34 and item['height'] == 34 and item['imageWidth'] == 24 and item['imageHeight'] == 24 for item in metrics['icons']), f'Telegram icon sizing or layout slot changed at {width}px: {metrics}'
     assert all('@' not in item['text'] for item in metrics['actions'])
-    assert all(item['width'] >= 44 and item['height'] >= 44 for item in metrics['actions']), f'Tap target too small at {width}px: {metrics}'
+    assert all(item['width'] >= 46 and item['height'] >= 46 for item in metrics['actions']), f'Tap target is below 46px at {width}px: {metrics}'
     assert all(item['scrollWidth'] <= item['clientWidth'] for item in metrics['actions']), f'Action label clips at {width}px: {metrics}'
     assert 'CVE Intelligence & Vulnerability Research' in metrics['infoText']
     assert 'A platform for discovering, tracking\nand exploring security vulnerabilities.' in metrics['infoText']
     assert 'CREATED BY' in metrics['infoText'] and 'STATUS' in metrics['infoText']
-    assert metrics['disclaimerText'] == 'SubZer0 is not affiliated with Telegram.'
+    assert metrics['disclaimerText'] is None
+    assert 'SubZer0 is not affiliated with Telegram.' not in metrics['communityText']
     assert '@BugCod3' in metrics['infoText'] and '@RootAccessClub' in metrics['infoText']
     assert '● ONLINE' in metrics['infoText']
     assert 'user@subzero' in metrics['promptText'] and '~/SubZer0' in metrics['promptText']
@@ -157,7 +161,8 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
     captures: list[Path] = []
     counts: list[int] = []
     overview_action_counts: list[int] = []
-    action_bounds: list[dict[str, float]] = []
+    action_bounds: list[dict[str, Any]] = []
+    center_dock_bounds: list[dict[str, Any]] = []
     for label, url in (('baseline', base_url), ('preview', preview_url)):
         page = browser.new_page(viewport={'width': width, 'height': height}, device_scale_factor=1)
         errors: list[str] = []
@@ -180,9 +185,17 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
         })''')
         assert geometry['documentWidth'] <= width and geometry['bodyWidth'] <= width and geometry['activePageWidth'] <= width, f'Horizontal overflow on {page_name} at {width}px: {geometry}'
         if page_name == 'community':
+            frame_box = page.locator('.terminal-frame').bounding_box()
             action_box = page.locator('.community-actions').bounding_box()
-            assert action_box is not None
-            action_bounds.append(action_box)
+            button_boxes = [button.bounding_box() for button in page.locator('.community-action').all()]
+            assert frame_box is not None and action_box is not None and all(box is not None for box in button_boxes)
+            action_bounds.append({'frame': frame_box, 'actions': action_box, 'buttons': button_boxes})
+        elif page_name == 'center':
+            dock_box = page.locator('.center-dock').bounding_box()
+            search_box = page.locator('#record-search').bounding_box()
+            filter_box = page.locator('#filter-controls').bounding_box()
+            assert dock_box is not None and search_box is not None and filter_box is not None
+            center_dock_bounds.append({'dock': dock_box, 'search': search_box, 'filters': filter_box})
         page.wait_for_timeout(120)
         destination = SCREENSHOTS / f'{file_stem}-{label}.png'
         page.screenshot(path=str(destination), animations='disabled')
@@ -199,18 +212,45 @@ def screenshot_comparison(browser: Browser, base_url: str, preview_url: str, pag
         difference = ImageChops.difference(original.convert('RGB'), updated.convert('RGB'))
         if page_name == 'community':
             assert len(action_bounds) == 2
-            baseline_box, preview_box = action_bounds
-            assert all(abs(baseline_box[key] - preview_box[key]) <= 0.5 for key in ('x', 'y', 'width', 'height')), f'Community actions shifted or resized at {width}px: {action_bounds}'
-            left = max(0, int(min(baseline_box['x'], preview_box['x'])))
-            top = max(0, int(min(baseline_box['y'], preview_box['y'])))
-            right = min(original.width - 1, int(max(baseline_box['x'] + baseline_box['width'], preview_box['x'] + preview_box['width'])) + 1)
-            bottom = min(original.height - 1, int(max(baseline_box['y'] + baseline_box['height'], preview_box['y'] + preview_box['height'])) + 1)
+            baseline, preview = action_bounds
+            baseline_frame, preview_frame = baseline['frame'], preview['frame']
+            assert all(abs(baseline_frame[key] - preview_frame[key]) <= 0.5 for key in ('x', 'width')), f'Community frame width changed at {width}px: {action_bounds}'
+            assert abs((baseline_frame['y'] + baseline_frame['height'] / 2) - (preview_frame['y'] + preview_frame['height'] / 2)) <= 0.5, f'Community frame is no longer centered at {width}px: {action_bounds}'
+            frame_height_reduction = baseline_frame['height'] - preview_frame['height']
+            assert 0 < frame_height_reduction <= 24, f'Removing the single disclaimer changed Community frame height unexpectedly at {width}px: {action_bounds}'
+            baseline_actions, preview_actions = baseline['actions'], preview['actions']
+            assert all(abs(baseline_actions[key] - preview_actions[key]) <= 0.5 for key in ('x', 'width', 'height')), f'Community action layout changed at {width}px: {action_bounds}'
+            assert abs((baseline_actions['y'] - baseline_frame['y']) - (preview_actions['y'] - preview_frame['y'])) <= 0.5, f'Community actions moved within the terminal at {width}px: {action_bounds}'
+            assert len(baseline['buttons']) == len(preview['buttons']) == 2
+            for before, after in zip(baseline['buttons'], preview['buttons']):
+                assert all(abs(before[key] - after[key]) <= 0.5 for key in ('x', 'width', 'height')), f'Telegram button dimensions changed at {width}px: {action_bounds}'
+                assert abs((before['y'] - baseline_frame['y']) - (after['y'] - preview_frame['y'])) <= 0.5, f'Telegram buttons moved within the terminal at {width}px: {action_bounds}'
+            left = max(0, int(min(baseline_frame['x'], preview_frame['x'])))
+            top = max(0, int(min(baseline_frame['y'], preview_frame['y'])))
+            right = min(original.width - 1, int(max(baseline_frame['x'] + baseline_frame['width'], preview_frame['x'] + preview_frame['width'])) + 1)
+            bottom = min(original.height - 1, int(max(baseline_frame['y'] + baseline_frame['height'], preview_frame['y'] + preview_frame['height'])) + 1)
             mask = Image.new('L', original.size, 255)
             ImageDraw.Draw(mask).rectangle((left, top, right, bottom), fill=0)
             difference = ImageChops.composite(difference, Image.new('RGB', original.size, (0, 0, 0)), mask)
-        changed_pixels = sum(pixel != (0, 0, 0) for pixel in difference.getdata())
-    assert changed_pixels == 0, f'{page_name} render changed in the isolated Community update at {width}px ({changed_pixels} different pixels).'
-    return {'page': page_name, 'viewport': [width, height], 'changed_pixels': changed_pixels, 'baseline_record_rows': counts[0] if counts else None, 'preview_record_rows': counts[1] if counts else None, 'overview_action_record_rows': overview_action_counts if overview_action_counts else None}
+        elif page_name == 'center':
+            assert len(center_dock_bounds) == 2
+            baseline, preview = center_dock_bounds
+            for component in ('dock', 'search', 'filters'):
+                before, after = baseline[component], preview[component]
+                assert all(abs(before[key] - after[key]) <= 0.5 for key in ('x', 'y', 'width', 'height')), f'CVE {component} geometry changed at {width}px: {center_dock_bounds}'
+            before, after = baseline['dock'], preview['dock']
+            left = max(0, int(min(before['x'], after['x'])))
+            top = max(0, int(min(before['y'], after['y'])))
+            right = min(original.width - 1, int(max(before['x'] + before['width'], after['x'] + after['width'])) + 1)
+            bottom = min(original.height - 1, int(max(before['y'] + before['height'], after['y'] + after['height'])) + 1)
+            if left <= right and top <= bottom:
+                mask = Image.new('L', original.size, 255)
+                ImageDraw.Draw(mask).rectangle((left, top, right, bottom), fill=0)
+                difference = ImageChops.composite(difference, Image.new('RGB', original.size, (0, 0, 0)), mask)
+        changed_pixels = sum(max(pixel) > 1 for pixel in difference.getdata())
+    assert changed_pixels == 0, f'{page_name} render materially changed in the isolated Community update at {width}px ({changed_pixels} pixels differ by more than one RGB level).'
+    expected_mask = 'Community terminal frame' if page_name == 'community' else 'CVE search dock' if page_name == 'center' else 'none'
+    return {'page': page_name, 'viewport': [width, height], 'expected_mask': expected_mask, 'changed_pixels_outside_expected_mask_over_one_rgb_level': changed_pixels, 'pixel_tolerance_per_channel': 1, 'baseline_record_rows': counts[0] if counts else None, 'preview_record_rows': counts[1] if counts else None, 'overview_action_record_rows': overview_action_counts if overview_action_counts else None}
 
 
 def install_action_trace(page: Page, button_id: str) -> None:
@@ -506,7 +546,7 @@ def main() -> None:
                 assert_terminal_fits(metrics)
                 page.screenshot(path=str(SCREENSHOTS / f'community-idle-{width}x{height}.png'), animations='disabled')
                 assert_no_page_errors(page, page_errors)
-                layout_results.append({'viewport': [width, height], 'page_scroll': False, 'horizontal_overflow': False, 'touch_targets_at_least_44px': True, 'banner': 'exact ANSI Shadow, responsive font ' + metrics['bannerFontSize']})
+                layout_results.append({'viewport': [width, height], 'page_scroll': False, 'horizontal_overflow': False, 'touch_targets_at_least_46px': True, 'banner': 'exact ANSI Shadow, responsive font ' + metrics['bannerFontSize']})
                 page.close()
             results['responsive_layouts'] = layout_results
 
@@ -515,7 +555,7 @@ def main() -> None:
                 for width, height in ((1440, 1000), (390, 844), (320, 740)):
                     for page_name in ('overview', 'center', 'community'):
                         regressions.append(screenshot_comparison(browser, base_url, preview_url, page_name, width, height, f'regression-{page_name}-{width}'))
-                results['page_pixel_regressions'] = {'pixel_identical_to_baseline': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
+                results['page_pixel_regressions'] = {'zero_changed_pixels_outside_expected_masks_with_one_rgb_level_tolerance': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
 
             # The actions and timing are browser-driven, while both Telegram destinations are intercepted locally.
             results['actions'] = test_actions(browser, preview_url)

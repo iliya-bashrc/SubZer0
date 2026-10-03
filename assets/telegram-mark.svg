@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000" role="img" aria-labelledby="title desc">
   <title id="title">Telegram logo</title>
-  <desc id="desc">A white paper plane on Telegram's blue circle.</desc>
+  <desc id="desc">A white paper plane on a steel-blue circle.</desc>
   <defs>
     <linearGradient id="telegram-blue" x1="50%" y1="0%" x2="50%" y2="99.2583404%">
-      <stop offset="0%" stop-color="#2AABEE"/>
-      <stop offset="100%" stop-color="#229ED9"/>
+      <stop offset="0%" stop-color="#64747b"/>
+      <stop offset="100%" stop-color="#3b4a51"/>
     </linearGradient>
   </defs>
   <circle cx="500" cy="500" r="500" fill="url(#telegram-blue)"/>
