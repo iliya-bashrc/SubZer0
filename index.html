@@ -40,6 +40,16 @@
   <main id="main-content">
     <section class="page page-overview is-current" id="page-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
       <div class="overview-wrap">
+        <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot status">
+          <p class="snapshot-status-strip__state" data-snapshot-state data-state="loading" role="status" aria-live="polite" aria-atomic="true">Loading snapshot manifest…</p>
+          <dl class="snapshot-status-strip__facts">
+            <div><dt>Generated</dt><dd><time data-snapshot-generated>Checking…</time></dd></div>
+            <div class="snapshot-status-strip__window"><dt>30-day UTC window</dt><dd><time data-snapshot-window-start>Checking…</time><span aria-hidden="true"> → </span><time data-snapshot-window-end>Checking…</time></dd></div>
+            <div><dt>CVE records</dt><dd data-snapshot-records>Waiting</dd></div>
+            <div><dt>CISA KEV</dt><dd data-snapshot-kev>Waiting</dd></div>
+            <div><dt>FIRST EPSS</dt><dd><time data-snapshot-epss-date>Waiting</time></dd></div>
+          </dl>
+        </section>
         <div class="overview-hero">
           <div class="overview-copy">
             <p class="section-context">Vulnerability intelligence</p>
@@ -111,6 +121,17 @@
             <p><strong id="snapshot-kev-total">—</strong><span>CISA KEV listings</span></p>
           </div>
         </header>
+
+        <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot status">
+          <p class="snapshot-status-strip__state" data-snapshot-state data-state="loading" role="status" aria-live="polite" aria-atomic="true">Waiting to load the static snapshot…</p>
+          <dl class="snapshot-status-strip__facts">
+            <div><dt>Generated</dt><dd><time data-snapshot-generated>Not verified</time></dd></div>
+            <div class="snapshot-status-strip__window"><dt>30-day UTC window</dt><dd><time data-snapshot-window-start>Not verified</time><span aria-hidden="true"> → </span><time data-snapshot-window-end>Not verified</time></dd></div>
+            <div><dt>CVE records</dt><dd data-snapshot-records>Not verified</dd></div>
+            <div><dt>CISA KEV</dt><dd data-snapshot-kev>Not verified</dd></div>
+            <div><dt>FIRST EPSS</dt><dd><time data-snapshot-epss-date>Not verified</time></dd></div>
+          </dl>
+        </section>
 
         <p class="epss-warning" id="epss-warning" role="note" hidden></p>
 
