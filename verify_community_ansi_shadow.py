@@ -114,6 +114,7 @@ def terminal_metrics(page: Page) -> dict[str, Any]:
         }),
         actionInsideTerminal: document.querySelector('.community-actions').closest('.terminal-frame') !== null,
         infoText: document.querySelector('#terminal-info').innerText,
+        disclaimerText: document.querySelector('.community-disclaimer')?.innerText ?? null,
         promptText: document.querySelector('#idle-prompt').innerText,
         bannerText: document.querySelector('.terminal-banner').textContent,
         bannerFontSize: getComputedStyle(document.querySelector('.terminal-banner')).fontSize,
@@ -136,7 +137,7 @@ def assert_terminal_fits(metrics: dict[str, Any]) -> None:
     assert all(item['top'] >= 0 and item['bottom'] <= height for item in metrics['actions']), f'Community actions do not fit at {width}px: {metrics}'
     assert [item['text'] for item in metrics['actions']] == ['Join BugCod3', 'Join RootAccessClub']
     assert [item['accessibleName'] for item in metrics['actions']] == ['Join BugCod3 on Telegram', 'Join RootAccessClub on Telegram']
-    assert [item['src'] for item in metrics['icons']] == ['assets/telegram-bugcod3.svg', 'assets/telegram-rootaccessclub.svg']
+    assert [item['src'] for item in metrics['icons']] == ['assets/telegram-mark.svg', 'assets/telegram-mark.svg']
     assert all(item['loaded'] and item['width'] == 34 and item['height'] == 34 for item in metrics['icons']), f'Telegram icons failed to load or diverged in size at {width}px: {metrics}'
     assert all('@' not in item['text'] for item in metrics['actions'])
     assert all(item['width'] >= 44 and item['height'] >= 44 for item in metrics['actions']), f'Tap target too small at {width}px: {metrics}'
@@ -144,6 +145,7 @@ def assert_terminal_fits(metrics: dict[str, Any]) -> None:
     assert 'CVE Intelligence & Vulnerability Research' in metrics['infoText']
     assert 'A platform for discovering, tracking\nand exploring security vulnerabilities.' in metrics['infoText']
     assert 'CREATED BY' in metrics['infoText'] and 'STATUS' in metrics['infoText']
+    assert metrics['disclaimerText'] == 'SubZer0 is not affiliated with Telegram.'
     assert '@BugCod3' in metrics['infoText'] and '@RootAccessClub' in metrics['infoText']
     assert '● ONLINE' in metrics['infoText']
     assert 'user@subzero' in metrics['promptText'] and '~/SubZer0' in metrics['promptText']

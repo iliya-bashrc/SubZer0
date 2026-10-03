@@ -35,10 +35,24 @@ class PagesVerifierPolicyTests(unittest.TestCase):
         manifest = pages.verifier._loads(manifest_bytes, "manifest.json")
         paths = {resource[0] for resource in pages._resources(snapshot_root, manifest)}
         self.assertTrue(set(pages.SITE_ASSETS).issubset(paths))
+        self.assertIn("assets/telegram-mark.svg", pages.SITE_ASSETS)
         self.assertIn("assets/telegram-bugcod3.svg", pages.SITE_ASSETS)
         self.assertIn("assets/telegram-rootaccessclub.svg", pages.SITE_ASSETS)
         self.assertIn("snapshot/data/overview.json", paths)
         self.assertIn("snapshot/data/epss.json", paths)
+
+    def test_readme_telegram_images_resolve_to_their_channel_destinations(self):
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+        expected = (
+            ("[![Join @RootAccessClub on Telegram](assets/telegram-rootaccessclub.svg)](https://t.me/RootAccessClub)", "assets/telegram-rootaccessclub.svg"),
+            ("[![Join @BugCod3 on Telegram](assets/telegram-bugcod3.svg)](https://t.me/BugCod3)", "assets/telegram-bugcod3.svg"),
+        )
+        root = Path(__file__).resolve().parents[1]
+        for markdown, asset in expected:
+            with self.subTest(asset=asset):
+                self.assertIn(markdown, readme)
+                self.assertTrue((root / asset).is_file())
+        self.assertIn("not affiliated with Telegram", readme)
 
     def test_cross_origin_redirects_are_rejected(self):
         _, origin, path = pages._validate_base_url(pages.DEFAULT_BASE_URL)
