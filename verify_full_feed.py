@@ -319,31 +319,59 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const capsule = document.querySelector('#search-capsule');
               return {compact:document.querySelector('.center-dock').classList.contains('is-compact'), width:wrap.width, height:wrap.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity)};
             }''')
-            page.evaluate('window.scrollBy({top: 52, behavior: "instant"})')
-            page.wait_for_selector('.center-dock.is-compact', timeout=5_000)
-            page.wait_for_timeout(70)
-            morph_mid = page.evaluate('''() => {
-              const wrap = document.querySelector('.search-wrap').getBoundingClientRect();
-              const expanded = document.querySelector('#search-expanded');
-              const capsule = document.querySelector('#search-capsule');
-              return {compact:document.querySelector('.center-dock').classList.contains('is-compact'), width:wrap.width, height:wrap.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity)};
-            }''')
+            # Pin CSS transition timelines at a fixed point instead of trusting elapsed wall time on a busy CI runner.
+            morph_mid = page.evaluate('''() => new Promise(resolve => {
+              const dock = document.querySelector('.center-dock');
+              const sample = () => {
+                if (!dock.classList.contains('is-compact')) { requestAnimationFrame(sample); return; }
+                const wrap = document.querySelector('.search-wrap');
+                const expanded = document.querySelector('#search-expanded');
+                const capsule = document.querySelector('#search-capsule');
+                wrap.getBoundingClientRect();
+                const transitions = document.getAnimations({subtree:true}).filter(animation => {
+                  const target = animation.effect?.target;
+                  return animation.playState === 'running' && target && dock.contains(target);
+                });
+                transitions.forEach(animation => { animation.pause(); animation.currentTime = 70; });
+                requestAnimationFrame(() => {
+                  const rect = wrap.getBoundingClientRect();
+                  resolve({compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), animationCount:transitions.length});
+                });
+              };
+              window.scrollBy({top:52,behavior:'instant'});
+              requestAnimationFrame(sample);
+            })''')
             compact_width = min(216, width - 26)
             assert not morph_start['compact'] and morph_start['width'] > compact_width, f'expanded shell did not start at full width at {width}x{height}: {morph_start}'
+            assert morph_mid['animationCount'] > 0, f'no live CSS transitions were available for the midpoint sample at {width}x{height}: {morph_mid}'
             assert morph_mid['compact'] and compact_width < morph_mid['width'] < morph_start['width'], f'search shell did not interpolate continuously while collapsing at {width}x{height}: start={morph_start}, mid={morph_mid}'
             assert 44 < morph_mid['height'] < morph_start['height'], f'search shell height did not morph between dock and capsule at {width}x{height}: start={morph_start}, mid={morph_mid}'
             assert 0 < morph_mid['expandedOpacity'] < 1 and 0 < morph_mid['capsuleOpacity'] < 1, f'search contents must crossfade during the shared-shell morph at {width}x{height}: start={morph_start}, mid={morph_mid}'
 
-            page.evaluate('window.scrollBy({top: -110, behavior: "instant"})')
-            page.wait_for_selector('.center-dock:not(.is-compact)', timeout=5_000)
-            page.wait_for_timeout(80)
-            morph_reversed = page.evaluate('''() => {
-              const wrap = document.querySelector('.search-wrap').getBoundingClientRect();
-              const expanded = document.querySelector('#search-expanded');
-              const capsule = document.querySelector('#search-capsule');
-              return {compact:document.querySelector('.center-dock').classList.contains('is-compact'), width:wrap.width, height:wrap.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity)};
-            }''')
-            assert not morph_reversed['compact'] and morph_reversed['width'] > compact_width and morph_reversed['expandedOpacity'] > morph_mid['expandedOpacity'] and morph_reversed['capsuleOpacity'] < morph_mid['capsuleOpacity'], f'search shell did not reverse smoothly when scrolling up mid-transition at {width}x{height}: mid={morph_mid}, reverse={morph_reversed}'
+            morph_reversed = page.evaluate('''() => new Promise(resolve => {
+              const dock = document.querySelector('.center-dock');
+              const sample = () => {
+                if (dock.classList.contains('is-compact')) { requestAnimationFrame(sample); return; }
+                const wrap = document.querySelector('.search-wrap');
+                const expanded = document.querySelector('#search-expanded');
+                const capsule = document.querySelector('#search-capsule');
+                wrap.getBoundingClientRect();
+                const transitions = document.getAnimations({subtree:true}).filter(animation => {
+                  const target = animation.effect?.target;
+                  return animation.playState === 'running' && target && dock.contains(target);
+                });
+                transitions.forEach(animation => { animation.pause(); animation.currentTime = 16; });
+                requestAnimationFrame(() => {
+                  const rect = wrap.getBoundingClientRect();
+                  const result = {compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), animationCount:transitions.length};
+                  transitions.forEach(animation => animation.play());
+                  resolve(result);
+                });
+              };
+              window.scrollBy({top:-110,behavior:'instant'});
+              requestAnimationFrame(sample);
+            })''')
+            assert morph_reversed['animationCount'] > 0 and not morph_reversed['compact'] and morph_reversed['width'] > morph_mid['width'] and morph_reversed['width'] < morph_start['width'] and morph_reversed['height'] > morph_mid['height'] and morph_reversed['height'] < morph_start['height'] and morph_reversed['expandedOpacity'] > morph_mid['expandedOpacity'] and morph_reversed['capsuleOpacity'] < morph_mid['capsuleOpacity'], f'search shell did not reverse continuously when scrolling up mid-transition at {width}x{height}: mid={morph_mid}, reverse={morph_reversed}'
             page.wait_for_timeout(300)
             page.evaluate('''() => {
               const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
