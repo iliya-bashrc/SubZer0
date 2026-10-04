@@ -1518,6 +1518,11 @@
 
     function onPointerUp(event) {
       if (!gesture || event.pointerId !== gesture.pointerId) return;
+      // A selection can exist before its selectionchange callback is delivered.
+      if (hasTextSelection()) {
+        clearGesture(true);
+        return;
+      }
       const current = gesture;
       const deltaX = event.clientX - current.startX;
       const deltaY = event.clientY - current.startY;
