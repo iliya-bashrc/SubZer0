@@ -14,7 +14,7 @@ SubZer0 is a static CVE-intelligence browser served by [GitHub Pages](https://il
 - **CVE Center** — search CVE IDs, products and descriptions; filter by CVSS severity or activity date; browse pages and inspect source-linked evidence.
 - **Community** — view a terminal-style introduction and optionally open either Telegram destination. The displayed `xdg-open` command is a visual simulation; no shell command is executed.
 
-CVSS, FIRST EPSS and CISA KEV are separate signals. A GitHub repository search is only a lead, not evidence that a proof of concept works. The application does not calculate a combined SubZer0 priority score.
+CVSS, FIRST EPSS and CISA KEV are separate signals. The CVE Center supports CISA KEV-only and explicit vendor filters; vendor relationships come only from the supplied affected-vendor or KEV vendor fields. A GitHub repository search is only a lead, not evidence that a proof of concept works. The application does not calculate a combined SubZer0 priority score.
 
 ## Static snapshot and refresh
 
@@ -22,9 +22,13 @@ GitHub Actions gathers records from the NVD CVE API, GitHub Security Advisory Da
 
 The browser itself remains offline from those upstream APIs. It fetches the same-origin static manifest and shards on demand, validates their schema and SHA-256 digests, applies byte/record limits, and shows an error rather than an empty or partially verified feed when a request fails. Hashes detect a shard that disagrees with its manifest; they are **not a digital signature**, because both are served from the same origin.
 
-The snapshot currently in this source tree was generated at **2026-10-02 06:00:04 UTC** and contains **15,318 CVE records** across 31 UTC-day shards. Its EPSS data is dated **2026-09-29** and is marked stale. The security-review change adds a validated updater, but the existing data was not refreshed from upstream during that review. Treat these records as a dated snapshot, not a real-time feed. Static hosting provides no accounts, server-side search, push alerts or guarantee of source freshness; an upstream outage leaves the last complete snapshot in place.
+The snapshot currently in this source tree was generated at **2026-10-04 17:08:24 UTC** and contains **14,903 CVE records** across 31 UTC-day shards, including **40 CISA KEV listings** in the window. The validated manifest reports **14,749 EPSS scores** dated **2026-10-04**; missing scores remain unscored, not zero. Treat these records as a dated snapshot, not a real-time feed. Static hosting provides no accounts, server-side search, push alerts or guarantee of source freshness; an upstream outage leaves the last complete snapshot in place.
 
-See the [snapshot manifest](snapshot/manifest.json), [validation record](snapshot/VALIDATION.json), [source and trust notes](SOURCE-NOTES.md), and [security audit](AUDIT.md).
+### Shareable CVE Center state
+
+The Center keeps its active page and filters in the URL. Supported parameters include `page=center`, `search=…`, `severity=critical|high|medium|low|unrated`, `kev=true`, `vendor=…`, inclusive `from=YYYY-MM-DD` and `to=YYYY-MM-DD`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` for a record detail. Search covers IDs, titles, descriptions, source labels, explicit affected vendor/product/version/CPE values, KEV vendor/product values, advisory identifiers/URLs, and reference labels/sources/URLs. A vendor filter matches only explicit affected-vendor and KEV-vendor fields; it does not infer product ownership.
+
+See the [snapshot manifest](snapshot/manifest.json), [validation record](snapshot/VALIDATION.json), [source and trust notes](SOURCE-NOTES.md), [security audit](AUDIT.md), and [2026-10-04 review report](AUDIT-REPORT-2026-10-04.md).
 
 ## Run locally
 
@@ -38,10 +42,10 @@ Open [Overview](http://127.0.0.1:8766/) or the [CVE Center](http://127.0.0.1:876
 
 ## Validate changes
 
-Python unit tests use deterministic fixtures and do not call upstream APIs. The browser checks use Playwright and Chromium; the Community suite intercepts every Telegram navigation locally.
+Python unit tests use deterministic fixtures and do not call upstream APIs. The browser checks use Playwright and Chromium; the Community suite intercepts every Telegram navigation locally. Direct development pins live in [`requirements-dev.in`](requirements-dev.in); `requirements-dev.txt` is the SHA-256 lock.
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+python3 -m pip install --require-hashes --index-url https://pypi.org/simple -r requirements-dev.txt
 python3 -m playwright install --with-deps chromium
 node --check app.js
 node --check community.js

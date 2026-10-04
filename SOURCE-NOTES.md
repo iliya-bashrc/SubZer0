@@ -2,25 +2,25 @@
 
 ## Snapshot provenance
 
-The current checked-in snapshot has `generated_at` **2026-10-02T06:00:04Z** and covers the rolling 30-day window **2026-09-02T06:00:04Z through 2026-10-02T06:00:04Z**. It contains **15,318 unique CVE records** in 31 date shards, including 45 CISA KEV listings. The manifest is [`snapshot/manifest.json`](snapshot/manifest.json); the full JSON records are under [`snapshot/data/`](snapshot/data/).
+The current checked-in snapshot has `generated_at` **2026-10-04T17:08:24Z** and covers the rolling 30-day window **2026-09-04T17:08:24Z through 2026-10-04T17:08:24Z**. It contains **14,903 unique CVE records** in 31 date shards, including **40 CISA KEV listings** in the window. The manifest is [`snapshot/manifest.json`](snapshot/manifest.json); the full JSON records are under [`snapshot/data/`](snapshot/data/). The manifest records successful source checks at the generation time; the local validation record was checked at **2026-10-04T17:12:35Z** and confirms **33,869,716 JSON bytes**.
 
-The 2026-10-03 security-review migration preserved every existing daily-shard and EPSS file byte-for-byte. It retained the original `generated_at`, added a small derived Overview sidecar, and updated the manifest and [`snapshot/VALIDATION.json`](snapshot/VALIDATION.json) to describe and validate the current static file layout. The Overview sidecar is derived only from the included records. This migration was not an upstream data refresh, and fixture tests did not make source API calls.
+The 2026-10-03 security-review migration preserved the then-current daily-shard and EPSS files byte-for-byte, retained that snapshot's original `generated_at`, and added a derived Overview sidecar. That historical migration was not an upstream refresh. The later checked-in snapshot has its own manifest-recorded source checks and newly validated shard/EPSS bytes; no upstream refresh was run during this 2026-10-04 review.
 
 A subsequent scheduled refresh obtains records from the official [NVD CVE API 2.0](https://services.nvd.nist.gov/rest/json/cves/2.0), [GitHub Security Advisory Database](https://api.github.com/advisories) and [CISA KEV catalog](https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json), with scores from [FIRST EPSS](https://epss.empiricalsecurity.com/epss_scores-current.csv.gz) and an optional [FIRST API](https://api.first.org/data/v1/epss) fallback. The app served in a browser does not contact those services; it reads only the static snapshot from its own origin.
 
-The offline verifier records manifest and shard hashes, exact byte and row counts, total CVE/severity/KEV counts, EPSS coverage and data-size limits. The producer stages a complete replacement, validates it before an atomic directory swap, and restores the prior snapshot if the swap fails. The browser independently checks the manifest-declared SHA-256 values before rendering. These hashes detect accidental corruption or a shard that disagrees with its manifest; they do **not** authenticate the source against an attacker able to replace both the manifest and files on the same Pages origin.
+The offline verifier records manifest and shard hashes, exact byte and row counts, total CVE/severity/KEV counts, EPSS coverage and data-size limits. The producer stages a complete replacement and validates it before swapping directories. If installation of the staged directory fails, it restores the prior snapshot; if that recovery rename also fails, it preserves the old directory at a reported backup path. The browser independently checks the manifest-declared SHA-256 values before rendering. These hashes detect accidental corruption or a shard that disagrees with its manifest; they do **not** authenticate the source against an attacker able to replace both the manifest and files on the same Pages origin.
 
 ## Snapshot totals and source meaning
 
 | Source CVSS category | Count | Center treatment |
 |---|---:|---|
-| Critical | 1,507 | Critical, red |
-| High | 6,361 | High, orange |
-| Medium | 4,955 | Medium, gold |
-| Low | 949 | Low, icy blue |
-| None | 1,527 | Neutral Unrated; source category retained |
-| Unknown | 19 | Neutral Unrated; source category retained |
-| CISA KEV listings | 45 | Separate catalog evidence |
+| Critical | 1,444 | Critical, red |
+| High | 6,192 | High, orange |
+| Medium | 4,816 | Medium, gold |
+| Low | 935 | Low, icy blue |
+| None | 1,503 | Neutral Unrated; source category retained |
+| Unknown | 13 | Neutral Unrated; source category retained |
+| CISA KEV listings | 40 | Separate catalog evidence |
 
 “Unrated” is a browsing group only; it does not replace the source's `None` or `Unknown` value. A supplied numeric CVSS value is kept distinct from a missing score. The project does not invent or calculate a combined “SubZer0 priority score.”
 
@@ -33,7 +33,7 @@ The signal layers are intentionally independent:
 
 ## EPSS freshness
 
-The snapshot contains **14,760 EPSS score entries** for 15,318 CVE records. The captured EPSS score date is **2026-09-29**, with source timestamp **2026-09-29T12:00:22Z**; the manifest marks this set stale. The app shows that state in the CVE Center and record details. A missing EPSS entry means **unscored**, not zero probability.
+The snapshot contains **14,749 EPSS score entries** for 14,903 CVE records. The captured EPSS score date is **2026-10-04**, with source timestamp **2026-10-04T12:00:21Z**; the checked-in manifest and validation report mark this set **current** under the project's 36-hour freshness policy. The app shows the score-set date and distinguishes stale scores when applicable. The other **154 records are unscored** in this captured EPSS file; a missing entry means **unscored**, not zero probability.
 
 The updater treats EPSS as optional data: if the daily CSV and API fallback both fail validation or are unavailable, it may retain the previous score set but records it as stale/unavailable. A stale score is never reported as current. The NVD, GitHub and CISA core sources are required; an empty, malformed, inconsistent or incomplete core response aborts the refresh.
 

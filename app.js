@@ -19,17 +19,32 @@
   const PAGE_SIZES = new Set([24, 48, 96]);
   const CVE_ID_RE = /^CVE-\d{4,}-\d+$/i;
   const BASE_SEVERITIES = ['critical', 'high', 'medium', 'low'];
+  const VALID_SEVERITIES = new Set([...BASE_SEVERITIES, 'unrated']);
+  const initialUrlParams = new URLSearchParams(window.location.search);
+  const readUrlText = (key, params = initialUrlParams) => (params.get(key) || '').trim().slice(0, 200);
+  let requestedCve = initialUrlParams.get('cve');
+  let requestedCveId = requestedCve && CVE_ID_RE.test(requestedCve) ? requestedCve.toUpperCase() : null;
+  let requestedSearch = readUrlText('search');
+  let severityParam = (initialUrlParams.get('severity') || '').toLowerCase();
+  let requestedSeverity = VALID_SEVERITIES.has(severityParam) ? severityParam : 'all';
+  let requestedKevOnly = (initialUrlParams.get('kev') || '').toLowerCase() === 'true';
+  let requestedVendor = readUrlText('vendor');
+  let requestedDateFrom = initialUrlParams.get('from') || '';
+  let requestedDateTo = initialUrlParams.get('to') || '';
+  let requestedSize = Number(initialUrlParams.get('size'));
+  let initialPageSize = PAGE_SIZES.has(requestedSize) ? requestedSize : 24;
+  let requestedPageIndex = initialUrlParams.get('pageIndex') || '';
+  let initialPageIndex = /^[1-9]\d{0,4}$/.test(requestedPageIndex) ? Number(requestedPageIndex) - 1 : 0;
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const tabs = $$('.nav-tab');
   const pages = new Map($$('.page').map((page) => [page.id.replace('page-', ''), page]));
   const searchInput = $('#record-search');
-  const searchExpanded = $('#search-expanded');
-  const searchCapsule = $('#search-capsule');
   const searchAnchor = $('.center-search-anchor');
   const siteHeader = $('.site-header');
   const centerPage = $('#page-center');
+  const headerSearchReturn = $('#header-search-return');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
   const snapshotLoaderStatus = $('#snapshot-loader-status');
@@ -49,16 +64,13 @@
   const dateTo = $('#date-to');
   const dateFilter = $('#date-filter');
   const dateSummary = $('#date-summary');
+  const vendorFilterInput = $('#vendor-filter');
+  const kevOnlyInput = $('#kev-only');
   const pageSizeSelect = $('#page-size');
   const pagination = $('#pagination');
   const pageIndicator = $('#page-indicator');
   const pagePrevious = $('#page-prev');
   const pageNext = $('#page-next');
-  const feedObserver = 'IntersectionObserver' in window
-    ? new IntersectionObserver((entries) => {
-      entries.forEach((entry) => entry.target.classList.toggle('effect-visible', entry.isIntersecting));
-    }, { root: null, rootMargin: '0px', threshold: 0.12 })
-    : null;
 
   let manifest = null;
   let manifestPromise = null;
@@ -68,11 +80,12 @@
   let epssScores = Object.create(null);
   let activePage = 'overview';
   let finishActiveSwipeSettlement = () => {};
-  let activeSeverity = 'all';
+  let activeSeverity = requestedSeverity;
+  let activeCveId = requestedCveId;
   let appliedFrom = '';
   let appliedTo = '';
-  let pageIndex = 0;
-  let pageSize = 24;
+  let pageIndex = initialPageIndex;
+  let pageSize = initialPageSize;
   let matchedRecords = [];
   let lastDetailFocus = null;
   let lastScrollY = 0;
@@ -81,8 +94,6 @@
   let communityRedirectTimer = 0;
   let communityCharacterIndex = 0;
   let recordButtons = new Map();
-  const requestedCve = new URLSearchParams(window.location.search).get('cve');
-  const requestedCveId = requestedCve && CVE_ID_RE.test(requestedCve) ? requestedCve.toUpperCase() : null;
 
   const TELEGRAM_COMMAND = 'xdg-open "https://www.t.me/RootAccessClub"';
   const TELEGRAM_DESTINATION = 'https://t.me/RootAccessClub';
@@ -225,8 +236,8 @@
         windowStart.removeAttribute('datetime');
         windowEnd.textContent = unavailable;
         windowEnd.removeAttribute('datetime');
-        recordsValue.textContent = unavailable;
-        kevValue.textContent = unavailable;
+        if (recordsValue) recordsValue.textContent = unavailable;
+        if (kevValue) kevValue.textContent = unavailable;
         epssDate.textContent = unavailable;
         epssDate.removeAttribute('datetime');
         return;
@@ -238,12 +249,16 @@
       windowStart.textContent = formatTimestamp(candidate.window.start, 'Unavailable');
       windowEnd.dateTime = candidate.window.end;
       windowEnd.textContent = formatTimestamp(candidate.window.end, 'Unavailable');
-      recordsValue.textContent = verifiedTotals
-        ? `${nf.format(verifiedTotals.records)} verified`
-        : `${nf.format(candidate.totals.cves)} in manifest`;
-      kevValue.textContent = verifiedTotals
-        ? `${nf.format(verifiedTotals.kev)} verified`
-        : `${nf.format(candidate.totals.known_exploited)} in manifest`;
+      if (recordsValue) {
+        recordsValue.textContent = verifiedTotals
+          ? `${nf.format(verifiedTotals.records)} verified`
+          : `${nf.format(candidate.totals.cves)} in manifest`;
+      }
+      if (kevValue) {
+        kevValue.textContent = verifiedTotals
+          ? `${nf.format(verifiedTotals.kev)} verified`
+          : `${nf.format(candidate.totals.known_exploited)} in manifest`;
+      }
 
       const scoreDate = safeString(candidate.epss?.score_date);
       const freshness = epssFreshness(candidate);
@@ -334,23 +349,28 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
       throw new Error('The captured manifest has no valid UTC date window.');
     }
-    appliedFrom = start;
-    appliedTo = end;
     dateFrom.min = start;
     dateFrom.max = end;
-    dateFrom.value = start;
     dateTo.min = start;
     dateTo.max = end;
-    dateTo.value = end;
-    updateDateSummary(start, end);
+    const requestedRangeIsValid = isCanonicalDate(requestedDateFrom)
+      && isCanonicalDate(requestedDateTo)
+      && requestedDateFrom <= requestedDateTo
+      && requestedDateFrom >= start
+      && requestedDateTo <= end;
+    appliedFrom = requestedRangeIsValid ? requestedDateFrom : start;
+    appliedTo = requestedRangeIsValid ? requestedDateTo : end;
+    dateFrom.value = appliedFrom;
+    dateTo.value = appliedTo;
+    updateDateSummary(appliedFrom, appliedTo);
 
     const scoreDate = safeString(manifest.epss?.score_date, 'not supplied');
     const epssMessage = epssMarkedStale()
-      ? `FIRST EPSS scores are dated ${formatDate(scoreDate)} and marked stale by the captured manifest. Missing scores remain unscored—not 0%.`
-      : `FIRST EPSS score set date: ${formatDate(scoreDate)}. A missing score is not 0%.`;
+      ? `Stale · ${formatDate(scoreDate)}. Missing: unscored, not 0%.`
+      : `Score set date: ${formatDate(scoreDate)}. Missing scores are not 0%.`;
     const epssWarning = $('#epss-warning');
     if (epssWarning) {
-      epssWarning.textContent = epssMessage;
+      $('#epss-warning-copy').textContent = epssMessage;
       epssWarning.classList.toggle('is-stale', epssMarkedStale());
       epssWarning.hidden = false;
     }
@@ -361,7 +381,101 @@
   }
 
   function updateDateSummary(from, to) {
-    dateSummary.textContent = `Activity date · ${formatDate(from).replace(',', '')} — ${formatDate(to).replace(',', '')}`;
+    dateSummary.textContent = `Activity · ${formatDate(from).replace(',', '')} — ${formatDate(to).replace(',', '')}`;
+  }
+
+  function updateAddressBar({ pushHistory = false } = {}) {
+    const url = new URL(window.location.href);
+    ['page', 'cve', 'search', 'severity', 'kev', 'vendor', 'from', 'to', 'size', 'pageIndex']
+      .forEach((key) => url.searchParams.delete(key));
+    if (activePage !== 'overview' || activeCveId) url.searchParams.set('page', activePage);
+    const query = searchInput.value.trim().slice(0, 200);
+    if (activeCveId) url.searchParams.set('cve', activeCveId);
+    if (query && query.toUpperCase() !== activeCveId) url.searchParams.set('search', query);
+    if (activeSeverity !== 'all') url.searchParams.set('severity', activeSeverity);
+    if (kevOnlyInput.checked) url.searchParams.set('kev', 'true');
+    const vendor = vendorFilterInput.value.trim().slice(0, 200);
+    if (vendor) url.searchParams.set('vendor', vendor);
+    const dateRangeIsNarrowed = appliedFrom && appliedTo && dateFrom.min && dateTo.max
+      && (appliedFrom !== dateFrom.min || appliedTo !== dateTo.max);
+    if (dateRangeIsNarrowed) {
+      url.searchParams.set('from', appliedFrom);
+      url.searchParams.set('to', appliedTo);
+    }
+    if (pageSize !== 24) url.searchParams.set('size', String(pageSize));
+    if (pageIndex > 0) url.searchParams.set('pageIndex', String(pageIndex + 1));
+    const nextAddress = `${url.pathname}${url.search}${url.hash}`;
+    const currentAddress = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextAddress !== currentAddress) {
+      if (pushHistory) window.history.pushState(window.history.state, '', nextAddress);
+      else window.history.replaceState(window.history.state, '', nextAddress);
+    }
+  }
+
+  function restoreLocationState() {
+    const params = new URLSearchParams(window.location.search);
+    requestedCve = params.get('cve');
+    requestedCveId = requestedCve && CVE_ID_RE.test(requestedCve) ? requestedCve.toUpperCase() : null;
+    requestedSearch = readUrlText('search', params);
+    severityParam = (params.get('severity') || '').toLowerCase();
+    requestedSeverity = VALID_SEVERITIES.has(severityParam) ? severityParam : 'all';
+    requestedKevOnly = (params.get('kev') || '').toLowerCase() === 'true';
+    requestedVendor = readUrlText('vendor', params);
+    requestedDateFrom = params.get('from') || '';
+    requestedDateTo = params.get('to') || '';
+    requestedSize = Number(params.get('size'));
+    initialPageSize = PAGE_SIZES.has(requestedSize) ? requestedSize : 24;
+    requestedPageIndex = params.get('pageIndex') || '';
+    initialPageIndex = /^[1-9]\d{0,4}$/.test(requestedPageIndex) ? Number(requestedPageIndex) - 1 : 0;
+
+    activeCveId = requestedCveId;
+    activeSeverity = requestedSeverity;
+    pageIndex = initialPageIndex;
+    pageSize = initialPageSize;
+    searchInput.value = requestedSearch || requestedCveId || '';
+    vendorFilterInput.value = requestedVendor;
+    kevOnlyInput.checked = requestedKevOnly;
+    pageSizeSelect.value = String(pageSize);
+    $$('.severity-tab').forEach((button) => {
+      const selected = button.dataset.severity === activeSeverity;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+
+    const pageParam = params.get('page');
+    const nextPage = pageParam === 'center' || pageParam === 'community'
+      ? pageParam
+      : pageParam === null && requestedCveId ? 'center' : 'overview';
+    switchPage(nextPage, false, { updateUrl: false, deferScroll: true, swipeTransition: true });
+
+    if (!manifest || snapshotLoading || records.length === 0) return;
+    const start = dateFrom.min;
+    const end = dateTo.max;
+    const requestedRangeIsValid = isCanonicalDate(requestedDateFrom)
+      && isCanonicalDate(requestedDateTo)
+      && requestedDateFrom <= requestedDateTo
+      && requestedDateFrom >= start
+      && requestedDateTo <= end;
+    appliedFrom = requestedRangeIsValid ? requestedDateFrom : start;
+    appliedTo = requestedRangeIsValid ? requestedDateTo : end;
+    dateFrom.value = appliedFrom;
+    dateTo.value = appliedTo;
+    updateDateSummary(appliedFrom, appliedTo);
+    renderRecords();
+
+    if (requestedCveId) {
+      if (nextPage === 'center') {
+        const record = records.find((candidate) => candidate.id === requestedCveId);
+        if (record && (detailView.hidden || $('#detail-heading').textContent !== requestedCveId)) {
+          openDetails(record, recordButtons.get(requestedCveId));
+        } else if (!record && !detailView.hidden) {
+          restoreResultsView({ restoreFocus: false, restoreScroll: false });
+        }
+      }
+    } else if (!detailView.hidden) {
+      restoreResultsView({ restoreFocus: false, restoreScroll: false });
+    }
+    updateAddressBar();
   }
 
   function isCount(value, maximum = LIMITS.records) {
@@ -821,13 +935,15 @@
       acceptSnapshotSidecar();
 
       setSnapshotStats();
-      setSnapshotStatus('Snapshot verified. This is a dated static capture, not a live feed.', 'verified', manifest, {
+      setSnapshotStatus('Snapshot verified · dated static capture · not live.', 'verified', manifest, {
         records: records.length,
         kev: records.filter((record) => record.kev !== null).length
       }, 'center');
       renderRecords();
-      if (requestedCveId && matchedRecords.length === 1 && matchedRecords[0].id === requestedCveId) {
-        openDetails(matchedRecords[0], recordButtons.get(requestedCveId));
+      updateAddressBar();
+      const requestedRecord = requestedCveId ? records.find((record) => record.id === requestedCveId) : null;
+      if (requestedRecord) {
+        openDetails(requestedRecord, recordButtons.get(requestedCveId));
       }
       closeSnapshotLoader();
     } catch {
@@ -854,23 +970,45 @@
   }
 
   function searchHaystack(record) {
-    const affected = Array.isArray(record.affected) ? record.affected.map((item) => [item?.vendor, item?.product, item?.versions].filter(Boolean).join(' ')).join(' ') : '';
-    return [record.id, record.title, record.desc, record.date_basis, ...safeStringList(record.sources), affected]
+    const affected = Array.isArray(record.affected)
+      ? record.affected.map((item) => [item?.vendor, item?.product, item?.versions, item?.cpe]
+        .filter((part) => typeof part === 'string' && part.trim()).join(' ')).join(' ')
+      : '';
+    const kev = record.kev && typeof record.kev === 'object' ? [record.kev.vendor, record.kev.product].filter(Boolean).join(' ') : '';
+    const advisories = Array.isArray(record.advisories)
+      ? record.advisories.map((item) => [item?.label, item?.ghsa_id, item?.url].filter(Boolean).join(' ')).join(' ')
+      : '';
+    const references = Array.isArray(record.refs)
+      ? record.refs.map((item) => [item?.label, item?.source, item?.url].filter(Boolean).join(' ')).join(' ')
+      : '';
+    return [record.id, record.title, record.desc, record.date_basis, ...safeStringList(record.sources), affected, kev, advisories, references]
       .map((part) => typeof part === 'string' ? part : '')
       .join(' ')
       .toLocaleLowerCase();
   }
 
+  function matchesVendor(record, query) {
+    if (!query) return true;
+    const vendors = Array.isArray(record.affected)
+      ? record.affected.map((item) => safeString(item?.vendor)).filter(Boolean)
+      : [];
+    if (record.kev && typeof record.kev === 'object') vendors.push(safeString(record.kev.vendor));
+    return vendors.some((vendor) => vendor.toLocaleLowerCase().includes(query));
+  }
+
   function filteredRecords() {
     const query = searchInput.value.trim().toLocaleLowerCase();
     const exactCve = CVE_ID_RE.test(query) ? query.toUpperCase() : null;
+    const vendorQuery = vendorFilterInput.value.trim().toLocaleLowerCase();
     return records.filter((record) => {
       const category = severityKey(record);
       const date = activityDate(record);
       const severityMatches = activeSeverity === 'all' || category === activeSeverity;
       const dateMatches = date >= appliedFrom && date <= appliedTo;
+      const kevMatches = !kevOnlyInput.checked || Boolean(record.kev);
+      const vendorMatches = matchesVendor(record, vendorQuery);
       const textMatches = !query || (exactCve ? record.id === exactCve : searchHaystack(record).includes(query));
-      return severityMatches && dateMatches && textMatches;
+      return severityMatches && dateMatches && kevMatches && vendorMatches && textMatches;
     });
   }
 
@@ -886,15 +1024,6 @@
     open.className = 'record-open';
     open.dataset.cveId = record.id;
     open.setAttribute('aria-label', `${record.id}, ${severityName(category)} severity. Open record details.`);
-
-    const effects = document.createElement('span');
-    effects.className = 'record-effects';
-    effects.setAttribute('aria-hidden', 'true');
-    ['fleck-a', 'fleck-b', 'fleck-c'].forEach((name) => {
-      const fleck = document.createElement('span');
-      fleck.className = `record-fleck ${name}`;
-      effects.append(fleck);
-    });
 
     const id = addText(open, 'span', 'record-id', record.id);
     id.setAttribute('aria-hidden', 'true');
@@ -934,12 +1063,11 @@
       addText(signals, 'span', 'record-signal-chip github-chip', 'GitHub advisory');
     }
 
-    open.append(effects, body, signals);
+    open.append(body, signals);
     open.addEventListener('click', () => openDetails(record, open));
     row.append(open);
     recordList.append(row);
     recordButtons.set(record.id, open);
-    if (feedObserver) feedObserver.observe(row);
   }
 
   function updateResultStatus(start, end, total) {
@@ -952,10 +1080,6 @@
 
   function renderRecords() {
     if (!manifest || !records.length) return;
-    recordButtons.forEach((button) => {
-      const row = button.closest('.record-row');
-      if (row && feedObserver) feedObserver.unobserve(row);
-    });
     recordButtons = new Map();
     matchedRecords = filteredRecords();
     const pageCount = Math.max(1, Math.ceil(matchedRecords.length / pageSize));
@@ -971,7 +1095,7 @@
     if (!pageRecords.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
-      addText(empty, 'p', '', 'Adjust the severity or activity-date range, or clear the search to see more records.');
+      addText(empty, 'p', '', 'Adjust the search, vendor, KEV, severity or activity-date filters, or clear them to see more records.');
       const clear = document.createElement('button');
       clear.className = 'clear-filters';
       clear.type = 'button';
@@ -998,6 +1122,13 @@
     dateTo.value = appliedTo;
     dateFilter.open = false;
     searchInput.value = '';
+    vendorFilterInput.value = '';
+    kevOnlyInput.checked = false;
+    activeCveId = null;
+    requestedCve = null;
+    requestedCveId = null;
+    requestedDateFrom = '';
+    requestedDateTo = '';
     pageIndex = 0;
     updateDateSummary(appliedFrom, appliedTo);
     $$('.severity-tab').forEach((button) => {
@@ -1006,6 +1137,7 @@
       button.setAttribute('aria-pressed', String(selected));
     });
     renderRecords();
+    updateAddressBar();
   }
 
   function appendFact(list, label, value) {
@@ -1018,11 +1150,13 @@
 
   function openDetails(record, opener) {
     if (!record || !record.id) return;
+    activeCveId = record.id;
     lastDetailFocus = opener || document.activeElement;
     lastScrollY = window.scrollY;
-    if (feedObserver) $$('.record-row.effect-visible').forEach((row) => row.classList.remove('effect-visible'));
     severityDistribution.hidden = true;
     centerDock.hidden = true;
+    centerDock.classList.remove('is-released');
+    headerSearchReturn.hidden = true;
     feedView.hidden = true;
     detailView.hidden = false;
     detailContent.replaceChildren();
@@ -1136,6 +1270,7 @@
     if (sourceRecordUrl) addLink(sourceLine, 'Open primary source record', sourceRecordUrl);
     detailContent.append(sourceLine);
 
+    updateAddressBar();
     $('#back-to-results').focus({ preventScroll: true });
     requestAnimationFrame(() => {
       const top = detailView.getBoundingClientRect().top + window.scrollY - $('.site-header').getBoundingClientRect().height - 16;
@@ -1143,27 +1278,42 @@
     });
   }
 
-  function backToResults() {
+  function restoreResultsView({ restoreFocus = true, restoreScroll = true } = {}) {
     detailView.hidden = true;
+    activeCveId = null;
+    requestedCve = null;
+    requestedCveId = null;
     centerDock.hidden = false;
     severityDistribution.hidden = false;
     feedView.hidden = false;
     renderRecords();
-    window.scrollTo({ top: lastScrollY, behavior: 'auto' });
     const restore = lastDetailFocus?.dataset?.cveId ? recordButtons.get(lastDetailFocus.dataset.cveId) : null;
-    (restore || searchInput).focus({ preventScroll: true });
+    if (restoreScroll) window.scrollTo({ top: lastScrollY, behavior: 'auto' });
+    if (restoreFocus) (restore || searchInput).focus({ preventScroll: true });
+    lastDetailFocus = null;
     scheduleSearchDockSync();
+  }
+
+  function backToResults() {
+    restoreResultsView();
+    updateAddressBar();
   }
 
   function setSearchDockCompact(compact) {
     const nextCompact = Boolean(compact && document.activeElement !== searchInput);
     centerDock.classList.toggle('is-compact', nextCompact);
-    searchExpanded.toggleAttribute('inert', nextCompact);
-    if (nextCompact) searchExpanded.setAttribute('aria-hidden', 'true');
-    else searchExpanded.removeAttribute('aria-hidden');
-    searchInput.tabIndex = nextCompact ? -1 : 0;
-    searchCapsule.setAttribute('aria-expanded', String(!nextCompact));
-    searchCapsule.tabIndex = nextCompact ? 0 : -1;
+  }
+
+  function returnToSearch() {
+    if (activePage !== 'center' || centerPage.hidden || !detailView.hidden) return;
+    centerDock.classList.remove('is-released');
+    headerSearchReturn.hidden = true;
+    const headerBottom = siteHeader.getBoundingClientRect().bottom;
+    const anchorTop = searchAnchor.getBoundingClientRect().top;
+    const top = Math.max(0, window.scrollY + anchorTop - headerBottom - 8);
+    window.scrollTo({ top, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    searchInput.focus({ preventScroll: true });
+    scheduleSearchDockSync();
   }
 
   function scheduleSearchDockSync() {
@@ -1171,24 +1321,37 @@
     searchDockFrame = window.requestAnimationFrame(() => {
       searchDockFrame = 0;
       const centerIsActive = activePage === 'center' && !centerPage.hidden && !centerDock.hidden;
+      if (!centerIsActive) {
+        centerDock.classList.remove('is-released');
+        headerSearchReturn.hidden = true;
+        setSearchDockCompact(false);
+        return;
+      }
       const headerBottom = siteHeader.getBoundingClientRect().bottom;
       const searchTop = searchAnchor.getBoundingClientRect().top;
       const alreadyCompact = centerDock.classList.contains('is-compact');
       // Keep native scroll anchoring from flapping the dock across its threshold.
       const scrollHysteresis = 48;
       const collapseThreshold = headerBottom + (alreadyCompact ? scrollHysteresis : -scrollHysteresis);
-      setSearchDockCompact(centerIsActive && searchTop < collapseThreshold);
+      const shouldCompact = searchTop < collapseThreshold && document.activeElement !== searchInput;
+      const compactDockHeight = Number.parseFloat(getComputedStyle(centerDock).getPropertyValue('--center-dock-compact-height'))
+        || centerDock.getBoundingClientRect().height;
+      const releaseBoundary = headerBottom + compactDockHeight;
+      const feedTop = feedView.getBoundingClientRect().top;
+      const alreadyReleased = centerDock.classList.contains('is-released');
+      const searchReentryBoundary = headerBottom + 4;
+      const shouldRelease = alreadyReleased
+        ? searchTop < searchReentryBoundary
+        : feedTop <= releaseBoundary;
+      centerDock.classList.toggle('is-released', shouldRelease);
+      headerSearchReturn.hidden = !shouldRelease;
+      setSearchDockCompact(shouldCompact);
     });
-  }
-
-  function revealSearchFromCapsule() {
-    if (!centerDock.classList.contains('is-compact')) return;
-    setSearchDockCompact(false);
-    searchInput.focus({ preventScroll: true });
   }
 
   function switchPage(name, focusPage = false, options = {}) {
     if (!pages.has(name)) return;
+    const pageChanged = activePage !== name;
     finishActiveSwipeSettlement();
     if (name === 'center') startSnapshot();
     const next = pages.get(name);
@@ -1215,6 +1378,12 @@
     if (!options.swipeTransition && !reducedMotion.matches) requestAnimationFrame(() => next.classList.add('page-enter'));
     if (focusPage) next.focus({ preventScroll: true });
     if (!options.deferScroll) window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    if (options.updateUrl !== false) updateAddressBar({ pushHistory: pageChanged });
+    if (name === 'center' && requestedCveId && manifest &&
+        (detailView.hidden || $('#detail-heading').textContent !== requestedCveId)) {
+      const requestedRecord = records.find((record) => record.id === requestedCveId);
+      if (requestedRecord) openDetails(requestedRecord, recordButtons.get(requestedCveId));
+    }
     scheduleSearchDockSync();
   }
 
@@ -1673,10 +1842,14 @@
   function bind() {
     window.addEventListener('scroll', scheduleSearchDockSync, { passive: true });
     window.addEventListener('resize', scheduleSearchDockSync, { passive: true });
-    searchInput.addEventListener('focus', () => setSearchDockCompact(false));
+    searchInput.addEventListener('focus', () => {
+      if (centerDock.classList.contains('is-released')) {
+        centerDock.classList.remove('is-released');
+        headerSearchReturn.hidden = true;
+      }
+      setSearchDockCompact(false);
+    });
     searchInput.addEventListener('blur', scheduleSearchDockSync);
-    searchCapsule.addEventListener('focus', revealSearchFromCapsule);
-    searchCapsule.addEventListener('click', revealSearchFromCapsule);
     scheduleSearchDockSync();
 
     tabs.forEach((tab, index) => {
@@ -1689,13 +1862,49 @@
       });
     });
     $('#explore-cves').addEventListener('click', () => switchPage('center'));
+    $('.wordmark').addEventListener('click', (event) => {
+      event.preventDefault();
+      switchPage('overview');
+    });
+    headerSearchReturn.addEventListener('click', returnToSearch);
     $('#back-to-results').addEventListener('click', backToResults);
     $('#telegram-cta').addEventListener('click', handleTelegramClick);
     bindSwipeNavigation();
+    window.addEventListener('popstate', restoreLocationState);
+
+    searchInput.value = requestedSearch || requestedCveId || '';
+    vendorFilterInput.value = requestedVendor;
+    kevOnlyInput.checked = requestedKevOnly;
+    pageSizeSelect.value = String(pageSize);
+    $$('.severity-tab').forEach((button) => {
+      const selected = button.dataset.severity === activeSeverity;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
 
     searchInput.addEventListener('input', () => {
+      activeCveId = null;
+      requestedCve = null;
+      requestedCveId = null;
       pageIndex = 0;
       renderRecords();
+      updateAddressBar();
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      searchInput.blur();
+    });
+
+    vendorFilterInput.addEventListener('input', () => {
+      pageIndex = 0;
+      renderRecords();
+      updateAddressBar();
+    });
+    kevOnlyInput.addEventListener('change', () => {
+      pageIndex = 0;
+      renderRecords();
+      updateAddressBar();
     });
 
     $$('.severity-tab').forEach((button) => {
@@ -1708,6 +1917,7 @@
         });
         pageIndex = 0;
         renderRecords();
+        updateAddressBar();
       });
     });
 
@@ -1726,6 +1936,14 @@
       updateDateSummary(from, to);
       dateFilter.open = false;
       renderRecords();
+      updateAddressBar();
+    });
+
+    dateFilter.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !dateFilter.open) return;
+      event.preventDefault();
+      dateFilter.open = false;
+      dateSummary.focus();
     });
 
     pageSizeSelect.addEventListener('change', () => {
@@ -1734,17 +1952,20 @@
       pageSize = nextSize;
       pageIndex = 0;
       renderRecords();
+      updateAddressBar();
     });
     pagePrevious.addEventListener('click', () => {
       if (pageIndex === 0) return;
       pageIndex -= 1;
       renderRecords();
+      updateAddressBar();
       pagePrevious.focus({ preventScroll: true });
     });
     pageNext.addEventListener('click', () => {
       if ((pageIndex + 1) * pageSize >= matchedRecords.length) return;
       pageIndex += 1;
       renderRecords();
+      updateAddressBar();
       pageNext.focus({ preventScroll: true });
       $('#result-status').scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
     });
@@ -1754,7 +1975,7 @@
       const typing = target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
       if (event.key === '/' && !typing && activePage === 'center' && detailView.hidden) {
         event.preventDefault();
-        searchInput.focus();
+        returnToSearch();
       }
       if (event.key === 'Escape' && !detailView.hidden) backToResults();
     });
@@ -1781,10 +2002,9 @@
       }));
     }
 
-    const initialPage = new URLSearchParams(window.location.search).get('page');
-    if (requestedCveId) searchInput.value = requestedCveId;
-    if (initialPage === 'center' || requestedCveId) switchPage('center');
-    else if (initialPage === 'community') switchPage('community');
+    const initialPage = initialUrlParams.get('page');
+    if (initialPage === 'center' || (!initialPage && requestedCveId)) switchPage('center', false, { updateUrl: false });
+    else if (initialPage === 'community') switchPage('community', false, { updateUrl: false });
   }
 
   bind();

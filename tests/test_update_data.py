@@ -315,6 +315,36 @@ class PipelineFailureTests(unittest.TestCase):
             self.assertEqual((output / "marker").read_text(encoding="utf-8"), "old")
             self.assertTrue(stage.is_dir())
 
+    def test_directory_commit_reports_backup_when_rollback_rename_also_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            output = parent / "snapshot"
+            output.mkdir()
+            (output / "marker").write_text("old", encoding="utf-8")
+            stage = parent / ".snapshot-stage"
+            stage.mkdir()
+            (stage / "marker").write_text("new", encoding="utf-8")
+            real_replace = os.replace
+            calls = 0
+
+            def fail_swap_and_restore(source, target):
+                nonlocal calls
+                calls += 1
+                if calls in (2, 3):
+                    raise OSError("simulated directory swap/rollback error")
+                return real_replace(source, target)
+
+            with mock.patch.object(feed.os, "replace", side_effect=fail_swap_and_restore):
+                with self.assertRaisesRegex(feed.FeedError, "previous snapshot is preserved at") as caught:
+                    feed._commit_snapshot(stage, output)
+
+            backups = list(parent.glob(".snapshot.backup-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertIn(str(backups[0]), str(caught.exception))
+            self.assertEqual((backups[0] / "marker").read_text(encoding="utf-8"), "old")
+            self.assertFalse(output.exists())
+            self.assertTrue(stage.is_dir())
+
     def test_aggregate_upstream_json_ingress_is_bounded(self):
         budget = feed._JSONIngressBudget(limit=8)
         with self.assertRaisesRegex(feed.FeedError, "Combined upstream JSON"):

@@ -27,11 +27,18 @@
         <span>SubZer0</span>
       </a>
 
-      <nav class="page-nav" role="tablist" aria-label="SubZer0 pages">
-        <button class="nav-tab is-active" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="page-overview" tabindex="0" data-page="overview">Overview</button>
-        <button class="nav-tab" id="tab-center" type="button" role="tab" aria-selected="false" aria-controls="page-center" tabindex="-1" data-page="center">CVE center</button>
-        <button class="nav-tab" id="tab-community" type="button" role="tab" aria-selected="false" aria-controls="page-community" tabindex="-1" data-page="community">Community</button>
-      </nav>
+      <div class="header-navigation">
+        <nav class="page-nav" role="tablist" aria-label="SubZer0 pages">
+          <button class="nav-tab is-active" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="page-overview" tabindex="0" data-page="overview">Overview</button>
+          <button class="nav-tab" id="tab-center" type="button" role="tab" aria-selected="false" aria-controls="page-center" tabindex="-1" data-page="center">CVE center</button>
+          <button class="nav-tab" id="tab-community" type="button" role="tab" aria-selected="false" aria-controls="page-community" tabindex="-1" data-page="community">Community</button>
+        </nav>
+        <button class="header-search-return" id="header-search-return" type="button" aria-label="Return to CVE search" aria-keyshortcuts="/" title="Return to CVE search (/)" hidden>
+          <svg class="header-search-return__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
+          <span class="header-search-return__label">Search</span>
+          <kbd class="header-search-return__shortcut" aria-hidden="true">/</kbd>
+        </button>
+      </div>
 
       <span class="preview-mark"><span aria-hidden="true"></span>Static snapshot</span>
     </div>
@@ -116,8 +123,8 @@
         <header class="center-heading">
           <div>
             <p class="section-context">A dated local archive · Not live</p>
-            <h1>CVE center</h1>
-            <p class="center-intro">Browse the captured 30-day feed newest first. Records are already here; search and filters are optional ways to narrow them.</p>
+            <h1>CVE Center</h1>
+            <p class="center-intro">A verified 30-day CVE archive, ordered newest first.</p>
           </div>
           <div class="snapshot-summary" aria-label="Snapshot totals">
             <p><strong id="snapshot-total">—</strong><span>records in snapshot</span></p>
@@ -130,13 +137,16 @@
           <dl class="snapshot-status-strip__facts">
             <div><dt>Generated</dt><dd><time data-snapshot-generated>Not verified</time></dd></div>
             <div class="snapshot-status-strip__window"><dt>30-day UTC window</dt><dd><time data-snapshot-window-start>Not verified</time><span aria-hidden="true"> → </span><time data-snapshot-window-end>Not verified</time></dd></div>
-            <div><dt>CVE records</dt><dd data-snapshot-records>Not verified</dd></div>
-            <div><dt>CISA KEV</dt><dd data-snapshot-kev>Not verified</dd></div>
-            <div><dt>FIRST EPSS</dt><dd><time data-snapshot-epss-date>Not verified</time></dd></div>
+            <div class="snapshot-status-strip__headline-duplicate"><dt>CVE records</dt><dd data-snapshot-records>Not verified</dd></div>
+            <div class="snapshot-status-strip__headline-duplicate"><dt>CISA KEV</dt><dd data-snapshot-kev>Not verified</dd></div>
+            <div class="snapshot-status-strip__epss"><dt>FIRST EPSS</dt><dd><time data-snapshot-epss-date>Not verified</time></dd></div>
           </dl>
         </section>
 
-        <p class="epss-warning" id="epss-warning" role="note" hidden></p>
+        <p class="epss-warning" id="epss-warning" role="note" hidden>
+          <span class="epss-warning__label">FIRST EPSS</span>
+          <span class="epss-warning__copy" id="epss-warning-copy"></span>
+        </p>
 
         <section class="severity-distribution" aria-label="Filter by CVSS severity">
           <div class="severity-tabs" id="severity-tabs" role="group" aria-label="Filter records by CVSS severity">
@@ -147,24 +157,20 @@
             <button class="severity-tab" type="button" aria-pressed="false" data-severity="low"><span><i class="severity-dot low-dot" aria-hidden="true"></i>Low</span><strong data-count="low">—</strong></button>
             <button class="severity-tab" type="button" aria-pressed="false" data-severity="unrated"><span><i class="severity-dot unrated-dot" aria-hidden="true"></i>Unrated</span><strong data-count="unrated">—</strong></button>
           </div>
-          <p class="severity-note">Unrated groups source values None and Unknown; each record keeps its original CVSS state.</p>
+          <p class="severity-note">Unrated groups source None/Unknown; original CVSS stays unchanged.</p>
         </section>
 
         <div class="center-search-anchor" aria-hidden="true"></div>
         <div class="center-dock">
           <div class="search-wrap">
+            <svg class="search-rail-frame" viewBox="0 0 720 58" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M18 1 H702 C712 1 719 8 715 18 C711 25 709 27 709 29 C709 31 711 33 715 40 C719 50 712 57 702 57 H18 C8 57 1 50 5 40 C9 33 11 31 11 29 C11 27 9 25 5 18 C1 8 8 1 18 1 Z"/></svg>
             <div class="search-expanded" id="search-expanded">
-              <label class="search-label" for="record-search">Search records when useful</label>
               <div class="search-field-wrap">
                 <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
                 <input id="record-search" type="search" placeholder="CVE ID, product, or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, product names, summaries, and descriptions" aria-keyshortcuts="/">
                 <kbd aria-hidden="true">/</kbd>
               </div>
             </div>
-            <button class="search-capsule" id="search-capsule" type="button" aria-label="Open CVE search" aria-controls="search-expanded" aria-expanded="true">
-              <svg class="search-capsule-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-              <span>Search CVEs</span>
-            </button>
           </div>
         </div>
 
@@ -177,6 +183,16 @@
               <button class="date-apply" type="submit">Apply dates</button>
             </form>
           </details>
+          <div class="filter-extra-controls" role="group" aria-label="Additional CVE filters">
+            <label class="vendor-filter" for="vendor-filter">
+              <span>Vendor</span>
+              <input id="vendor-filter" type="search" maxlength="200" placeholder="Affected vendor" autocomplete="off" spellcheck="false" aria-label="Filter by explicitly supplied affected or CISA KEV vendor">
+            </label>
+            <label class="kev-filter" for="kev-only">
+              <input id="kev-only" type="checkbox">
+              <span>CISA KEV only</span>
+            </label>
+          </div>
           <label class="page-size-control" for="page-size">Rows per page
             <select id="page-size">
               <option value="24" selected>24</option>
@@ -297,7 +313,6 @@
           </div>
         </section>
         </div>
-      </div>
     </section>
   </main>
 
