@@ -54,6 +54,13 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertIn("git ls-remote origin refs/heads/main", publish)
         self.assertIn("main changed during validation", publish)
 
+    def test_snapshot_commits_use_owner_identity_not_github_actions_bot(self):
+        publish = _job_block(self.update, "publish", "verify-pages")
+        self.assertIn('git config user.name "iliya-bashrc"', publish)
+        self.assertIn('git config user.email "23017098+iliya-bashrc@users.noreply.github.com"', publish)
+        self.assertNotIn("github-actions[bot]", publish)
+        self.assertNotIn("41898282+github-actions[bot]@users.noreply.github.com", publish)
+
     def test_public_pages_verification_has_read_only_permissions_and_is_isolated(self):
         pages = _job_block(self.update, "verify-pages")
         self.assertIn("permissions:\n      contents: read", pages)
