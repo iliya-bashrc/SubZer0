@@ -200,10 +200,10 @@ def assert_header_background_pixels(page, screenshot_path: Path, expected_rgb: t
     return len(sample['pixels'])
 
 
-def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_count: int) -> list[dict]:
+def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_count: int, manifest: dict) -> list[dict]:
     results = []
     scenarios = (
-        (False, ((1440, 900), (1440, 624), (1024, 624), (768, 800))),
+        (False, ((1440, 900), (1440, 624), (1024, 900), (768, 800))),
         (True, ((390, 844), (360, 800), (320, 740), (320, 640))),
     )
     for is_touch, viewports in scenarios:
@@ -214,11 +214,34 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             is_mobile=is_touch,
             has_touch=is_touch,
         )
-        page.emulate_media(reduced_motion='reduce')
+        page.emulate_media(reduced_motion='no-preference')
         browser_issue_track(page, issues, origin)
         page.goto(f'{origin}/?page=center', wait_until='load')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
         expect(page.locator('#record-list')).to_have_attribute('aria-busy', 'false')
+        standard_motion = page.evaluate('''() => {
+          const expanded = getComputedStyle(document.querySelector('#search-expanded'));
+          const capsule = getComputedStyle(document.querySelector('#search-capsule'));
+          const milliseconds = value => {
+            const duration = parseFloat(value.trim());
+            return value.trim().endsWith('ms') ? duration : duration * 1000;
+          };
+          return {
+            expandedDurations: expanded.transitionDuration.split(',').map(milliseconds),
+            capsuleDurations: capsule.transitionDuration.split(',').map(milliseconds),
+            easing: expanded.transitionTimingFunction
+          };
+        }''')
+        assert max(standard_motion['expandedDurations']) == 200 and max(standard_motion['capsuleDurations']) == 200, standard_motion
+        assert '0.24, 1' in standard_motion['easing'], f'search collapse easing must settle without overshoot: {standard_motion}'
+        page.emulate_media(reduced_motion='reduce')
+        page.locator('#page-size').select_option('96')
+        page.locator('.severity-tab[data-severity="high"]').click()
+        page.locator('#date-filter summary').click()
+        page.locator('#date-from').fill(manifest['window']['start'][:10])
+        page.locator('#date-to').fill(manifest['window']['end'][:10])
+        page.locator('#date-form button[type="submit"]').click()
+        expect(page.locator('#result-status')).to_contain_text(f'of {nfmt(manifest["totals"]["high"])} matching records')
         theme_headers = page.evaluate('''() => {
           const rules = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules]);
           const skins = ['metal', 'center', 'glass'];
@@ -258,8 +281,45 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert top_layout['documentWidth'] == top_layout['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {top_layout}'
             assert top_layout['filters']['top'] >= top_layout['dock']['bottom'] - 1, f'filter controls are not in normal flow below search at {width}x{height}: {top_layout}'
             assert top_layout['filterPosition'] != 'sticky' and top_layout['filterZ'] < top_layout['dockZ'], f'secondary controls could cover the sticky search at {width}x{height}: {top_layout}'
-            page.evaluate('window.scrollTo(0, 1800)')
-            page.wait_for_timeout(60)
+            page.evaluate('''() => {
+              const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
+              const header = document.querySelector('.site-header').getBoundingClientRect();
+              window.scrollTo({top: Math.max(0, window.scrollY + anchor.top - header.bottom - 2), behavior: 'instant'});
+            }''')
+            page.wait_for_timeout(50)
+            full_state = page.evaluate('''() => {
+              const expanded = document.querySelector('#search-expanded');
+              const input = document.querySelector('#record-search');
+              const capsule = document.querySelector('#search-capsule');
+              const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
+              const header = document.querySelector('.site-header').getBoundingClientRect();
+              return {
+                compact: document.querySelector('.center-dock').classList.contains('is-compact'),
+                anchorTop: anchor.top, headerBottom: header.bottom,
+                searchLabel: input.getAttribute('aria-label'), searchTabIndex: input.tabIndex,
+                expandedHidden: expanded.getAttribute('aria-hidden'), expandedInert: expanded.inert,
+                capsuleVisibility: getComputedStyle(capsule).visibility,
+                capsuleExpanded: capsule.getAttribute('aria-expanded')
+              };
+            }''')
+            assert not full_state['compact'] and full_state['anchorTop'] >= full_state['headerBottom'] - 1, f'full search collapsed before its actual sticky threshold at {width}x{height}: {full_state}'
+            assert full_state['searchTabIndex'] == 0 and not full_state['expandedInert'] and full_state['expandedHidden'] is None, full_state
+            assert full_state['capsuleVisibility'] == 'hidden' and full_state['capsuleExpanded'] == 'true' and full_state['searchLabel'], full_state
+            page.screenshot(path=str(SCREENSHOTS / f'center-search-full-{width}x{height}.png'), animations='disabled')
+            page.evaluate('window.scrollBy({top: 52, behavior: "instant"})')
+            expect(page.locator('#search-capsule')).to_be_visible(timeout=5_000)
+            page.evaluate('window.scrollTo({top: 2000, behavior: "instant"})')
+            for _ in range(50):
+                if page.evaluate('window.scrollY') >= 1900:
+                    break
+                page.wait_for_timeout(20)
+            page.wait_for_function('''() => {
+              const dock = document.querySelector('.center-dock');
+              const capsule = document.querySelector('#search-capsule');
+              const style = getComputedStyle(capsule);
+              const transitioning = capsule.getAnimations().some(animation => animation.playState === 'running');
+              return dock.classList.contains('is-compact') && style.visibility === 'visible' && style.opacity === '1' && !transitioning;
+            }''', timeout=5_000)
             metrics = page.evaluate('''() => {
               const rect = element => {
                 const r = element.getBoundingClientRect();
@@ -273,17 +333,21 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const header = document.querySelector('.site-header');
               const dock = document.querySelector('.center-dock');
               const search = document.querySelector('#record-search');
+              const expanded = document.querySelector('#search-expanded');
+              const capsule = document.querySelector('#search-capsule');
               const filters = document.querySelector('#filter-controls');
               const dockRect = dock.getBoundingClientRect();
               const visibleRows = [...document.querySelectorAll('.record-row')].map(row => ({
                 row, rect:row.getBoundingClientRect()
               })).filter(item => item.rect.bottom > dockRect.bottom && item.rect.top < innerHeight);
               const fullyVisibleRows = visibleRows.filter(item => item.rect.top >= dockRect.bottom - 1 && item.rect.bottom <= innerHeight);
-              const searchRect = rect(search);
-              const hit = document.elementFromPoint(searchRect.left + searchRect.width / 2, searchRect.top + searchRect.height / 2);
+              const capsuleRect = rect(capsule);
+              const hit = document.elementFromPoint(capsuleRect.left + capsuleRect.width / 2, capsuleRect.top + capsuleRect.height / 2);
+              const capsuleStyle = getComputedStyle(capsule);
+              const reducedNodes = [dock, expanded, capsule];
               return {
                 scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
-                header:rect(header), dock:rect(dock), search:searchRect, filters:rect(filters),
+                header:rect(header), dock:rect(dock), capsule:capsuleRect, filters:rect(filters),
                 filterPosition:getComputedStyle(filters).position,
                 visibleRecordCount:visibleRows.length, fullyVisibleRecordCount:fullyVisibleRows.length,
                 firstFullyVisibleRecordId:fullyVisibleRows[0]?.row.dataset.cveId ?? null,
@@ -296,45 +360,145 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                 navHeight:Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')),
                 reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,
                 scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior,
-                searchReceivesHit:hit === search,
-                searchEnabled:!search.disabled, searchLabel:search.getAttribute('aria-label')
+                reducedTransitionsInstant:reducedNodes.every(node => getComputedStyle(node).transitionDuration.split(',').every(value => parseFloat(value.trim()) <= 0.01)),
+                compact:dock.classList.contains('is-compact'),
+                capsuleVisible:capsuleStyle.visibility === 'visible' && capsuleStyle.opacity === '1',
+                capsuleReceivesHit:capsule.contains(hit), capsuleAriaExpanded:capsule.getAttribute('aria-expanded'),
+                capsuleAriaControls:capsule.getAttribute('aria-controls'), capsuleBackground:capsuleStyle.backgroundColor,
+                capsuleBoxShadow:capsuleStyle.boxShadow, capsuleType:capsule.type,
+                capsuleLabel:capsule.getAttribute('aria-label'),
+                searchEnabled:!search.disabled, searchConnected:search.isConnected,
+                searchTabIndex:search.tabIndex, searchInert:expanded.inert, searchAriaHidden:expanded.getAttribute('aria-hidden'),
+                searchLabel:search.getAttribute('aria-label')
               };
             }''')
-            assert metrics['scrollY'] >= 1798, f'scroll did not reach the sticky state at {width}x{height}: {metrics}'
+            assert metrics['scrollY'] >= 1900, f'scroll did not reach the intended deep-feed state at {width}x{height}: {metrics}'
             assert metrics['headerPosition'] == 'sticky' and abs(metrics['header']['top']) <= 1, metrics
             assert metrics['headerStickyTop'] == 0, metrics
             assert metrics['dockPosition'] == 'sticky', metrics
-            assert metrics['dock']['height'] <= 96, f'search-only dock is taller than its compact viewport budget at {width}x{height}: {metrics}'
+            assert metrics['compact'] and metrics['dock']['height'] <= 72, f'search dock did not collapse into its compact height at {width}x{height}: {metrics}'
             expected_nav_height = 104 if width <= 720 else 76
             assert metrics['dockStickyTop'] == metrics['navHeight'] == expected_nav_height, metrics
             assert abs(metrics['dock']['top'] - (metrics['header']['bottom'] - 1)) <= 1.1, f'search dock overlaps the sticky header at {width}x{height}: {metrics}'
-            assert metrics['search']['top'] > metrics['header']['bottom'], f'search input is obscured by the header at {width}x{height}: {metrics}'
+            assert metrics['capsule']['top'] > metrics['header']['bottom'] and metrics['capsule']['height'] >= 44 and metrics['capsule']['height'] <= 50, f'capsule dimensions or header clearance are incorrect at {width}x{height}: {metrics}'
+            assert metrics['capsule']['width'] <= 216 and abs((metrics['capsule']['left'] + metrics['capsule']['right']) / 2 - width / 2) <= 1, f'capsule must remain tiny and centered at {width}x{height}: {metrics}'
             assert metrics['filterPosition'] != 'sticky' and metrics['filters']['bottom'] <= metrics['header']['bottom'] + 1, f'date/page controls remain pinned while scrolling at {width}x{height}: {metrics}'
             assert metrics['visibleRecordCount'] > 0 and metrics['fullyVisibleRecordCount'] > 0, f'no complete CVE card remains available below the compact dock at {width}x{height}: {metrics}'
             assert metrics['firstFullyVisibleRecordTop'] >= metrics['dock']['bottom'] - 1, metrics
             assert metrics['headerZ'] > metrics['dockZ'], metrics
             assert metrics['headerBackground'] == 'rgb(9, 13, 16)' and metrics['headerAlpha'] >= 0.999, f'Center header is not fully opaque at {width}x{height}: {metrics}'
             assert all(metrics[key] >= 0.999 for key in ('dockAlpha', 'filterAlpha')), f'CVE search surfaces let record text bleed through at {width}x{height}: {metrics}'
-            assert metrics['searchReceivesHit'] and metrics['searchEnabled'] and metrics['searchLabel'], f'sticky search is not accessible at {width}x{height}: {metrics}'
+            assert metrics['capsuleVisible'] and metrics['capsuleReceivesHit'] and metrics['capsuleAriaExpanded'] == 'false' and metrics['capsuleAriaControls'] == 'search-expanded', f'compact search trigger is not visible and accessible at {width}x{height}: {metrics}'
+            assert metrics['capsuleType'] == 'button' and metrics['capsuleLabel'] == 'Open CVE search', f'compact search trigger must be a named native button at {width}x{height}: {metrics}'
+            assert metrics['capsuleBackground'] in ('rgb(16, 23, 27)', 'rgb(20, 29, 33)') and metrics['capsuleBoxShadow'] == 'none', f'collapsed capsule should stay quiet without a glow at {width}x{height}: {metrics}'
+            assert metrics['searchEnabled'] and metrics['searchConnected'] and metrics['searchTabIndex'] == -1 and metrics['searchInert'] and metrics['searchAriaHidden'] == 'true' and metrics['searchLabel'], f'original search field must remain in the DOM and safely hidden from navigation while compact at {width}x{height}: {metrics}'
             assert metrics['documentWidth'] == metrics['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {metrics}'
-            assert metrics['reducedMotion'] and metrics['scrollBehavior'] == 'auto', f'reduced-motion scrolling changed at {width}x{height}: {metrics}'
+            assert metrics['reducedMotion'] and metrics['scrollBehavior'] == 'auto' and metrics['reducedTransitionsInstant'], f'reduced-motion state transition must be instant at {width}x{height}: {metrics}'
             metrics['opaqueHeaderScreenshotSamples'] = assert_header_background_pixels(
                 page, SCREENSHOTS / f'center-sticky-{width}x{height}.png', (9, 13, 16)
             )
             search_target = metrics['firstFullyVisibleRecordId']
             assert search_target, f'no verified record available to exercise pinned search at {width}x{height}'
+            scroll_before_open = page.evaluate('window.scrollY')
+            capsule = page.locator('#search-capsule')
+            if is_touch:
+                capsule.tap()
+            else:
+                capsule.click()
+            expect(page.locator('#record-search')).to_be_focused()
+            scroll_after_open = page.evaluate('window.scrollY')
+            assert abs(scroll_after_open - scroll_before_open) <= 60, f'opening the search capsule caused a focus-driven page jump at {width}x{height}: {scroll_before_open} -> {scroll_after_open}'
+            expect(capsule).to_have_attribute('aria-expanded', 'true')
+            page.locator('#record-search').fill('CVE-')
+            expect(page.locator('.record-row')).to_have_count(min(96, manifest['totals']['high']))
+            scroll_before_focused = page.evaluate('window.scrollY')
+            page.evaluate('window.scrollBy({top: 120, behavior: "instant"})')
+            for _ in range(50):
+                if page.evaluate('window.scrollY') >= scroll_before_focused + 100:
+                    break
+                page.wait_for_timeout(20)
+            assert page.evaluate('window.scrollY') >= scroll_before_focused + 100, f'natural page scrolling was blocked by the focused search at {width}x{height}'
+            assert page.locator('#record-search').evaluate('(input) => document.activeElement === input')
+            assert page.locator('#record-search').input_value() == 'CVE-'
+            assert not page.locator('.center-dock').evaluate("dock => dock.classList.contains('is-compact')"), f'focused search collapsed during scrolling at {width}x{height}'
+            broad_status = page.locator('#result-status').inner_text()
+            page.locator('#record-search').evaluate('(input) => input.blur()')
+            expect(capsule).to_be_visible(timeout=5_000)
+            assert page.locator('#record-search').input_value() == 'CVE-'
+            assert page.locator('#result-status').inner_text() == broad_status
+            expect(page.locator('.record-row')).to_have_count(min(96, manifest['totals']['high']))
+            assert page.locator('#page-size').input_value() == '96'
+            assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
+            assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
+            assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
+            capsule.focus()
+            expect(page.locator('#record-search')).to_be_focused()
+            assert page.locator('#record-search').input_value() == 'CVE-'
+            if not is_touch and width == 1440 and height == 900:
+                page.locator('#record-search').evaluate('(input) => input.blur()')
+                expect(capsule).to_be_visible(timeout=5_000)
+                page.locator('.severity-tab[data-severity="unrated"]').evaluate('(button) => button.focus({preventScroll: true})')
+                page.keyboard.press('Tab')
+                expect(page.locator('#record-search')).to_be_focused()
+                assert page.locator('#record-search').input_value() == 'CVE-'
             page.locator('#record-search').fill(search_target)
             expect(page.locator('.record-row')).to_have_count(1)
             expect(page.locator('.record-row').first).to_have_attribute('data-cve-id', search_target)
+            assert page.locator('#search-expanded').get_attribute('aria-hidden') is None
+            assert page.locator('#page-size').input_value() == '96'
+            assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
+            assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
+            assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
             search_result = page.evaluate('''() => {
               const row = document.querySelector('.record-row').getBoundingClientRect();
               const dock = document.querySelector('.center-dock').getBoundingClientRect();
               return {row:{top:row.top,bottom:row.bottom},dock:{top:dock.top,bottom:dock.bottom},scrollY};
             }''')
             assert search_result['row']['bottom'] > search_result['dock']['bottom'] and search_result['row']['top'] < height, f'search from a scrolled state hid its exact match at {width}x{height}: {search_result}'
+            result_status = page.locator('#result-status').inner_text()
+            page.locator('#record-search').evaluate('(input) => input.blur()')
+            settled_state = page.evaluate('''() => new Promise(resolve => {
+              let previous = '';
+              let stableFrames = 0;
+              const started = performance.now();
+              const sample = () => {
+                const input = document.querySelector('#record-search');
+                const dock = document.querySelector('.center-dock');
+                const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
+                const header = document.querySelector('.site-header').getBoundingClientRect();
+                const compact = dock.classList.contains('is-compact');
+                const threshold = header.bottom + (compact ? 48 : -48);
+                const expected = anchor.top < threshold && document.activeElement !== input;
+                const y = Math.round(window.scrollY);
+                const signature = `${compact}|${expected}|${y}`;
+                stableFrames = compact === expected && signature === previous ? stableFrames + 1 : compact === expected ? 1 : 0;
+                previous = signature;
+                const state = {stable:stableFrames >= 3,compact,expected,scrollY:y,anchorTop:anchor.top,headerBottom:header.bottom};
+                if (state.stable || performance.now() - started >= 2000) return resolve(state);
+                requestAnimationFrame(sample);
+              };
+              requestAnimationFrame(sample);
+            })''')
+            assert settled_state['stable'], f'search dock did not settle after blur at {width}x{height}: {settled_state}'
+            compact_after_blur = settled_state['compact']
+            if compact_after_blur:
+                expect(capsule).to_be_visible(timeout=5_000)
+            else:
+                expect(page.locator('#record-search')).to_be_visible(timeout=5_000)
+            assert page.locator('#record-search').input_value() == search_target
+            assert page.locator('#result-status').inner_text() == result_status
+            expect(page.locator('.record-row')).to_have_count(1)
+            assert page.locator('#page-size').input_value() == '96'
+            assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
+            assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
+            assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
+            if compact_after_blur:
+                capsule.click()
+            else:
+                page.locator('#record-search').click()
+            expect(page.locator('#record-search')).to_be_focused()
             page.locator('#record-search').fill('')
-            expect(page.locator('.record-row')).to_have_count(min(24, expected_count))
-            page.locator('#record-search').focus()
+            expect(page.locator('.record-row')).to_have_count(min(96, manifest['totals']['high']))
             page.keyboard.press('Tab')
             expect(page.locator('#date-summary')).to_be_focused()
             focus_layout = page.evaluate('''() => {
@@ -344,6 +508,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             }''')
             assert focus_layout['target']['top'] >= focus_layout['dock']['bottom'] - 1, f'keyboard focus moved behind the sticky search at {width}x{height}: {focus_layout}'
             results.append({'viewport': [width, height], 'touch': is_touch, **metrics})
+            page.evaluate('document.activeElement.blur()')
         page.close()
     return results
 
@@ -796,6 +961,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         dispatch_touch('touchEnd')
 
     def expect_active(name: str) -> None:
+        # Swipe previews are visible before the route is committed; wait for the semantic active state first.
+        expect(page.locator(f'#tab-{name}')).to_have_attribute('aria-selected', 'true')
         expect(page.locator(f'#page-{name}')).to_be_visible()
         for candidate in ('overview', 'center', 'community'):
             tab = page.locator(f'#tab-{candidate}')
@@ -1446,7 +1613,7 @@ def main() -> None:
                 for tab in ('overview', 'center', 'community'):
                     page.locator(f'#tab-{tab}').click()
                     width_metrics[width][tab] = width_audit(page, width)
-            sticky_metrics = center_sticky_surface_audit(browser, origin, issues, expected_count)
+            sticky_metrics = center_sticky_surface_audit(browser, origin, issues, expected_count, manifest)
             print('PASS: CVE search surfaces are opaque and accessible, aligned below sticky navigation, and scroll correctly at desktop, short-height, and touch widths.')
             print('Sticky surface metrics:', json.dumps(sticky_metrics, sort_keys=True))
             page.locator('#tab-community').click()

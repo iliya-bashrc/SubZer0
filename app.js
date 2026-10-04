@@ -25,6 +25,11 @@
   const tabs = $$('.nav-tab');
   const pages = new Map($$('.page').map((page) => [page.id.replace('page-', ''), page]));
   const searchInput = $('#record-search');
+  const searchExpanded = $('#search-expanded');
+  const searchCapsule = $('#search-capsule');
+  const searchAnchor = $('.center-search-anchor');
+  const siteHeader = $('.site-header');
+  const centerPage = $('#page-center');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
   const snapshotLoaderStatus = $('#snapshot-loader-status');
@@ -71,6 +76,7 @@
   let matchedRecords = [];
   let lastDetailFocus = null;
   let lastScrollY = 0;
+  let searchDockFrame = 0;
   let communityTypeTimer = 0;
   let communityRedirectTimer = 0;
   let communityCharacterIndex = 0;
@@ -1146,6 +1152,38 @@
     window.scrollTo({ top: lastScrollY, behavior: 'auto' });
     const restore = lastDetailFocus?.dataset?.cveId ? recordButtons.get(lastDetailFocus.dataset.cveId) : null;
     (restore || searchInput).focus({ preventScroll: true });
+    scheduleSearchDockSync();
+  }
+
+  function setSearchDockCompact(compact) {
+    const nextCompact = Boolean(compact && document.activeElement !== searchInput);
+    centerDock.classList.toggle('is-compact', nextCompact);
+    searchExpanded.toggleAttribute('inert', nextCompact);
+    if (nextCompact) searchExpanded.setAttribute('aria-hidden', 'true');
+    else searchExpanded.removeAttribute('aria-hidden');
+    searchInput.tabIndex = nextCompact ? -1 : 0;
+    searchCapsule.setAttribute('aria-expanded', String(!nextCompact));
+  }
+
+  function scheduleSearchDockSync() {
+    if (searchDockFrame) return;
+    searchDockFrame = window.requestAnimationFrame(() => {
+      searchDockFrame = 0;
+      const centerIsActive = activePage === 'center' && !centerPage.hidden && !centerDock.hidden;
+      const headerBottom = siteHeader.getBoundingClientRect().bottom;
+      const searchTop = searchAnchor.getBoundingClientRect().top;
+      const alreadyCompact = centerDock.classList.contains('is-compact');
+      // Keep native scroll anchoring from flapping the dock across its threshold.
+      const scrollHysteresis = 48;
+      const collapseThreshold = headerBottom + (alreadyCompact ? scrollHysteresis : -scrollHysteresis);
+      setSearchDockCompact(centerIsActive && searchTop < collapseThreshold);
+    });
+  }
+
+  function revealSearchFromCapsule() {
+    if (!centerDock.classList.contains('is-compact')) return;
+    setSearchDockCompact(false);
+    searchInput.focus({ preventScroll: true });
   }
 
   function switchPage(name, focusPage = false, options = {}) {
@@ -1176,6 +1214,7 @@
     if (!options.swipeTransition && !reducedMotion.matches) requestAnimationFrame(() => next.classList.add('page-enter'));
     if (focusPage) next.focus({ preventScroll: true });
     if (!options.deferScroll) window.scrollTo({ top: 0, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    scheduleSearchDockSync();
   }
 
   function bindSwipeNavigation() {
@@ -1479,6 +1518,11 @@
 
     function onPointerUp(event) {
       if (!gesture || event.pointerId !== gesture.pointerId) return;
+      // A selection can exist before its selectionchange callback is delivered.
+      if (hasTextSelection()) {
+        clearGesture(true);
+        return;
+      }
       const current = gesture;
       const deltaX = event.clientX - current.startX;
       const deltaY = event.clientY - current.startY;
@@ -1626,6 +1670,14 @@
   }
 
   function bind() {
+    window.addEventListener('scroll', scheduleSearchDockSync, { passive: true });
+    window.addEventListener('resize', scheduleSearchDockSync, { passive: true });
+    searchInput.addEventListener('focus', () => setSearchDockCompact(false));
+    searchInput.addEventListener('blur', scheduleSearchDockSync);
+    searchCapsule.addEventListener('focus', revealSearchFromCapsule);
+    searchCapsule.addEventListener('click', revealSearchFromCapsule);
+    scheduleSearchDockSync();
+
     tabs.forEach((tab, index) => {
       tab.addEventListener('click', () => switchPage(tab.dataset.page));
       tab.addEventListener('keydown', (event) => {

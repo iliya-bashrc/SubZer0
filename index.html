@@ -150,14 +150,21 @@
           <p class="severity-note">Unrated groups source values None and Unknown; each record keeps its original CVSS state.</p>
         </section>
 
+        <div class="center-search-anchor" aria-hidden="true"></div>
         <div class="center-dock">
           <div class="search-wrap">
-            <label class="search-label" for="record-search">Search records when useful</label>
-            <div class="search-field-wrap">
-              <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-              <input id="record-search" type="search" placeholder="CVE ID, product, or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, product names, summaries, and descriptions" aria-keyshortcuts="/">
-              <kbd aria-hidden="true">/</kbd>
+            <div class="search-expanded" id="search-expanded">
+              <label class="search-label" for="record-search">Search records when useful</label>
+              <div class="search-field-wrap">
+                <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
+                <input id="record-search" type="search" placeholder="CVE ID, product, or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, product names, summaries, and descriptions" aria-keyshortcuts="/">
+                <kbd aria-hidden="true">/</kbd>
+              </div>
             </div>
+            <button class="search-capsule" id="search-capsule" type="button" aria-label="Open CVE search" aria-controls="search-expanded" aria-expanded="true">
+              <svg class="search-capsule-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
+              <span>Search CVEs</span>
+            </button>
           </div>
         </div>
 
