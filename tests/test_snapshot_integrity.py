@@ -139,10 +139,13 @@ class SnapshotIntegrityTests(unittest.TestCase):
         self.assertEqual(validate_snapshot(legacy_root)["records"], 1)
 
     def test_real_checked_in_full_snapshot_validates(self):
-        report = validate_snapshot(ROOT / "snapshot")
-        self.assertEqual(report["records"], 14_903)
-        self.assertEqual(report["shards"], 31)
-        self.assertGreater(report["largest_shard_bytes"], 5_000_000)
+        snapshot_root = ROOT / "snapshot"
+        manifest = json.loads((snapshot_root / "manifest.json").read_text(encoding="utf-8"))
+        report = validate_snapshot(snapshot_root)
+        self.assertGreater(report["records"], 0)
+        self.assertEqual(report["records"], manifest["totals"]["cves"])
+        self.assertEqual(report["shards"], len(manifest["days"]))
+        self.assertEqual(report["largest_shard_bytes"], max(day["bytes"] for day in manifest["days"]))
 
     def test_tamper_without_recomputing_digest_is_rejected(self):
         manifest = self._manifest()

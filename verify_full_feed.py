@@ -1137,7 +1137,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # Swipe previews are visible before the route is committed; wait for the semantic active state first.
         expect(page.locator(f'#tab-{name}')).to_have_attribute('aria-selected', 'true')
         expect(page.locator(f'#page-{name}')).to_be_visible()
-        for candidate in ('overview', 'center', 'community'):
+        for candidate in ('overview', 'latest', 'center', 'archive', 'community'):
             tab = page.locator(f'#tab-{candidate}')
             selected = candidate == name
             actual = tab.get_attribute('aria-selected')
@@ -1150,10 +1150,57 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
             assert tab.evaluate('(element) => element.tabIndex') == (0 if selected else -1)
         page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
 
+    def safe_touch_corridor(direction: str = 'left', distance: int = 150) -> dict | None:
+        return page.evaluate('''({direction, distance}) => {
+          const active = document.querySelector('.page:not([hidden])');
+          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .center-dock, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .ui-stage';
+          const hasTextAtPoint = (x, y) => {
+            let node = null, offset = 0;
+            if (typeof document.caretRangeFromPoint === 'function') {
+              const range = document.caretRangeFromPoint(x, y);
+              node = range?.startContainer ?? null;
+              offset = range?.startOffset ?? 0;
+            } else if (typeof document.caretPositionFromPoint === 'function') {
+              const caret = document.caretPositionFromPoint(x, y);
+              node = caret?.offsetNode ?? null;
+              offset = caret?.offset ?? 0;
+            }
+            if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+            const text = node.textContent || '';
+            for (const index of [offset, offset - 1]) {
+              if (index < 0 || index >= text.length || /\\s/u.test(text[index])) continue;
+              const range = document.createRange();
+              range.setStart(node, index); range.setEnd(node, index + 1);
+              for (const rect of range.getClientRects()) if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true;
+            }
+            return false;
+          };
+          const sign = direction === 'left' ? -1 : 1;
+          const firstX = direction === 'left' ? innerWidth - 4 : 4;
+          const lastX = firstX + sign * distance;
+          for (let y = Math.max(110, document.querySelector('.site-header').getBoundingClientRect().bottom + 2); y < innerHeight - 24; y += 4) {
+            for (let x = firstX; direction === 'left' ? x >= lastX : x <= lastX; x += sign * 4) {
+              let safe = true;
+              for (let offset = 0; offset <= distance; offset += 4) {
+                const px = x + sign * offset;
+                const hit = document.elementFromPoint(px, y);
+                if (!(hit instanceof Element) || hit.closest('.page') !== active || hit.closest(blocked) || hasTextAtPoint(px, y)) { safe = false; break; }
+              }
+              if (safe) return {x, y, active: active?.id ?? null};
+            }
+          }
+          return null;
+        }''', {'direction': direction, 'distance': distance})
+
     def drag_from_edge(direction: str, distance: int = 150, *, y: int = 500, steps: int = 6, delay_ms: int = 12) -> None:
-        # Stay outside Chromium's mobile touch-target expansion around the search input at y=500.
-        edge_inset = 3
-        x = page.evaluate('window.innerWidth') - edge_inset if direction == 'left' else edge_inset
+        active_id = page.locator('.page:not([hidden])').get_attribute('id')
+        if active_id in {'page-latest', 'page-archive'}:
+            corridor = safe_touch_corridor(direction, distance)
+            assert corridor is not None, f'No safe touch swipe corridor on {active_id}: {direction} {distance}px'
+            x, y = corridor['x'], corridor['y']
+        else:
+            edge_inset = 3
+            x = page.evaluate('window.innerWidth') - edge_inset if direction == 'left' else edge_inset
         dx = -distance if direction == 'left' else distance
         swipe(x, y, dx, steps=steps, delay_ms=delay_ms)
 
@@ -1165,7 +1212,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
     def safe_drag_corridor(target_page, direction: str = 'left', distance: int = 190) -> dict:
         corridor = target_page.evaluate('''({direction, distance}) => {
           const active = document.querySelector('.page:not([hidden])');
-          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .center-dock, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .ui-stage, .snapshot-status-strip, .snapshot-rail, .latest-list, .snapshot-summary, article, .terminal-frame';
+          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .center-dock, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .ui-stage, .snapshot-status-strip, .snapshot-rail, .latest-list, .latest-page-list, .archive-day-list, .source-intelligence, .snapshot-summary, article, .terminal-frame';
           const hasTextAtPoint = (x, y) => {
             let node = null;
             let offset = 0;
@@ -1236,12 +1283,14 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # The first-page edge resists but never wraps; a short horizontal drag visibly follows the finger and returns.
         drag_from_edge('right', 220)
         expect_active('overview')
-        start_x, start_y = 382, 500
+        short_corridor = safe_touch_corridor('left', 24)
+        assert short_corridor is not None, 'Overview has no empty surface for short-swipe tracking.'
+        start_x, start_y = short_corridor['x'], short_corridor['y']
         dispatch_touch('touchStart', start_x, start_y)
         dispatch_touch('touchMove', start_x - 24, start_y)
         visual = page.evaluate('''() => {
           const current = document.querySelector('#page-overview');
-          const next = document.querySelector('#page-center');
+          const next = document.querySelector('#page-latest');
           return {
             currentTracking: current.classList.contains('is-swipe-tracking'),
             currentTransform: getComputedStyle(current).transform,
@@ -1257,19 +1306,25 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert page.locator('#page-overview').evaluate('element => getComputedStyle(element).transform') == 'none'
 
         # A short, fast deliberate gesture may pass the distance threshold through velocity.
+        fast_corridor = safe_touch_corridor('left', 48)
+        assert fast_corridor is not None, 'Overview has no empty surface for the fast-swipe test.'
         fast_swipe_start = time.time()
-        dispatch_touch('touchStart', 382, 500, timestamp=fast_swipe_start)
-        dispatch_touch('touchMove', 334, 500, timestamp=fast_swipe_start + 0.04)
+        dispatch_touch('touchStart', fast_corridor['x'], fast_corridor['y'], timestamp=fast_swipe_start)
+        dispatch_touch('touchMove', fast_corridor['x'] - 48, fast_corridor['y'], timestamp=fast_swipe_start + 0.04)
         dispatch_touch('touchEnd', timestamp=fast_swipe_start + 0.05)
-        expect_active('center')
-        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
-        expect_active('center')
+        expect_active('latest')
+        expect(page.locator('#latest-page-status')).to_contain_text('newest CVE records')
 
         # All four adjacent routes work; the state remains synchronized with the existing tabs.
         drag_from_edge('right')
         expect_active('overview')
         drag_from_edge('left')
+        expect_active('latest')
+        drag_from_edge('left')
         expect_active('center')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        drag_from_edge('left')
+        expect_active('archive')
         drag_from_edge('left')
         expect_active('community')
         expect(page).to_have_url(f'{origin}/?page=community')
@@ -1284,8 +1339,10 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         swipe(round(terminal['x'] + terminal['width'] - 5), panel_y, -180, steps=6, delay_ms=12)
         expect_active('community')
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('archive')
+        expect(page).to_have_url(f'{origin}/?page=archive')
+        page.locator('#tab-center').click()
         expect_active('center')
-        expect(page).to_have_url(f'{origin}/?page=center')
 
         # Search input and pagination controls keep their own horizontal/tap interaction.
         search_x, search_y = point('#record-search')
@@ -1310,8 +1367,12 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         }""")
         assert safe_start == {'page': 'page-center', 'blocked': False}, f'Post-pagination swipe did not start on a safe Center background: {safe_start}'
         drag_from_edge('left', y=150)
+        expect_active('archive')
+        drag_from_edge('left', y=150)
         expect_active('community')
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('archive')
+        page.locator('#tab-center').click()
         expect_active('center')
         expect(page.locator('#page-indicator')).to_contain_text('Page 2 of')
 
@@ -1346,6 +1407,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # Swiping from the safe page background preserves the detail, search, and URL state.
         page.evaluate('window.scrollTo(0, 0)')
         drag_from_edge('left')
+        expect_active('archive')
+        drag_from_edge('left')
         expect_active('community')
         route_state = page.evaluate('''() => {
           const params = new URLSearchParams(location.search);
@@ -1374,8 +1437,10 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert page.locator('#page-community').evaluate('element => !element.classList.contains("is-swipe-tracking")')
         page.evaluate('window.getSelection()?.removeAllRanges()')
 
-        # The terminal background supports Community → Center while existing detail/search state survives.
+        # The terminal background supports Community → Archive; the Explore tab restores retained detail/search state.
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('archive')
+        page.locator('#tab-center').click()
         expect_active('center')
         expect(page.locator('#detail-view')).to_be_visible()
         expect(page.locator('#record-search')).to_have_value(detail_id)
@@ -1402,13 +1467,16 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         }""")
         assert safe_start == {'page': 'page-center', 'blocked': False}, f'Reduced-motion swipe did not start on a safe Center background: {safe_start}'
         drag_from_edge('left', y=150)
+        expect_active('archive')
+        assert not page.locator('#page-archive').evaluate('element => element.classList.contains("page-enter")')
+        page.locator('#tab-community').click()
         expect_active('community')
         assert not page.locator('#page-community').evaluate('element => element.classList.contains("page-enter")')
         terminal = page.locator('.terminal-screen').bounding_box()
         assert terminal is not None
         swipe(round(terminal['x'] + 5), round(terminal['y'] + 4), 160, steps=6, delay_ms=12)
-        expect_active('center')
-        assert not page.locator('#page-center').evaluate('element => element.classList.contains("page-enter")')
+        expect_active('archive')
+        assert not page.locator('#page-archive').evaluate('element => element.classList.contains("page-enter")')
         context.close()
 
         # Desktop drags only navigate from empty, text-free safe areas; text, controls, and click state stay native.
@@ -1454,7 +1522,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         desktop_page.mouse.move(safe['x'] - 36, safe['y'], steps=3)
         live_pair = desktop_page.evaluate('''() => {
           const current = document.querySelector('#page-overview');
-          const next = document.querySelector('#page-center');
+          const next = document.querySelector('#page-latest');
           return {
             currentTracking: current.classList.contains('is-swipe-tracking'),
             currentTransform: getComputedStyle(current).transform,
@@ -1466,12 +1534,12 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert live_pair['nextTracking'] and live_pair['nextTransform'] != 'none', f'Mouse drag did not move the adjacent page during tracking: {live_pair}'
         desktop_page.mouse.move(safe['x'] - 190, safe['y'], steps=10)
         desktop_page.mouse.up()
-        expect(desktop_page.locator('#page-center')).to_be_visible()
+        expect(desktop_page.locator('#page-latest')).to_be_visible()
         desktop_page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
-        assert desktop_page.locator('#tab-center').get_attribute('aria-selected') == 'true'
-        assert desktop_page.locator('#tab-center').evaluate('element => element.tabIndex') == 0
+        assert desktop_page.locator('#tab-latest').get_attribute('aria-selected') == 'true'
+        assert desktop_page.locator('#tab-latest').evaluate('element => element.tabIndex') == 0
         assert desktop_page.locator('#tab-overview').evaluate('element => element.tabIndex') == -1
-        expect(desktop_page).to_have_url(f'{origin}/?page=center')
+        expect(desktop_page).to_have_url(f'{origin}/?page=latest')
 
         # A successful drag's generated click is contained; the next deliberate navigation-button click still works.
         desktop_page.locator('#tab-overview').click()
@@ -1493,8 +1561,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         pen.send('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': safe['x'] - 190, 'y': safe['y'], 'buttons': 1, 'pointerType': 'pen'})
         pen.send('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': safe['x'] - 190, 'y': safe['y'], 'button': 'left', 'buttons': 0, 'pointerType': 'pen'})
         assert desktop_page.evaluate('window.__observedPenDown'), 'Chromium did not deliver the expected primary pen Pointer Event.'
-        expect(desktop_page.locator('#page-center')).to_be_visible()
-        assert desktop_page.locator('#tab-center').get_attribute('aria-selected') == 'true'
+        expect(desktop_page.locator('#page-latest')).to_be_visible()
+        assert desktop_page.locator('#tab-latest').get_attribute('aria-selected') == 'true'
 
         # A manual tab change immediately after a swipe wins over the pending page animation cleanup.
         desktop_page.locator('#tab-overview').click()
@@ -1520,16 +1588,16 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         desktop_page.mouse.down()
         desktop_page.mouse.move(safe['x'] - 190, safe['y'], steps=8)
         desktop_page.mouse.up()
-        expect(desktop_page.locator('#page-center')).to_be_visible()
-        assert not desktop_page.locator('#page-center').evaluate('element => element.classList.contains("page-enter")')
+        expect(desktop_page.locator('#page-latest')).to_be_visible()
+        assert not desktop_page.locator('#page-latest').evaluate('element => element.classList.contains("page-enter")')
 
         desktop_page.locator('#tab-overview').focus()
         desktop_page.keyboard.press('ArrowRight')
-        expect_active_name = desktop_page.locator('#tab-center').get_attribute('aria-selected')
-        assert expect_active_name == 'true' and desktop_page.evaluate('document.activeElement.id') == 'tab-center'
+        expect_active_name = desktop_page.locator('#tab-latest').get_attribute('aria-selected')
+        assert expect_active_name == 'true' and desktop_page.evaluate('document.activeElement.id') == 'tab-latest'
         desktop_page.keyboard.press('Home')
         assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
-        for page_name in ('overview', 'center', 'community'):
+        for page_name in ('overview', 'latest', 'center', 'archive', 'community'):
             desktop_page.locator(f'#tab-{page_name}').click()
             desktop_page.locator(f'#tab-{page_name}').focus()
             desktop_page.keyboard.press('Shift+Tab')
@@ -1561,6 +1629,115 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         'reduced_motion_and_keyboard_navigation': True,
         'desktop_mouse_pen_safe_area_drag_and_click_selection_protection': True,
         'paired_page_live_transforms': True,
+        'external_requests': 0,
+    }
+
+
+def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview: dict) -> dict:
+    """Verify new static discovery views and a user-triggered, fail-closed retry."""
+    navigation_issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
+    page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    browser_issue_track(page, navigation_issues, origin)
+    expected_latest = [record['id'] for record in overview['records']]
+    try:
+        page.goto(f'{origin}/?page=overview', wait_until='load')
+        expect(page.locator('#overview-status')).to_contain_text('CVE records', timeout=30_000)
+        expect(page.locator('#source-check-age')).to_contain_text('Approximate snapshot age at page load')
+        assert page.locator('#source-check-list .source-check-row').count() == len(manifest['source_status'])
+        for index, source in enumerate(manifest['source_status']):
+            row = page.locator('#source-check-list .source-check-row').nth(index)
+            expect(row.locator('.source-check-row__identity strong')).to_have_text(source['name'])
+            expect(row.locator('.source-check-row__result')).to_have_attribute(
+                'data-outcome', 'success' if source['ok'] else 'unavailable'
+            )
+            assert row.locator('.source-check-row__result time').count() == int(bool(source.get('checked_at')))
+
+        page.goto(f'{origin}/?page=latest', wait_until='load')
+        expect(page.locator('#latest-page-status')).to_contain_text('newest CVE records', timeout=30_000)
+        assert page.locator('.latest-page-item__id').all_text_contents() == expected_latest
+        assert page.locator('#latest-record-count').inner_text() == nfmt(len(expected_latest))
+        assert page.locator('.latest-page-item__id').evaluate_all('links => links.map(link => link.getAttribute("href"))') == [
+            f'?page=center&cve={cve_id}' for cve_id in expected_latest
+        ]
+        assert page.locator('#latest-generated-at').get_attribute('datetime') == manifest['generated_at']
+        page.screenshot(path=str(SCREENSHOTS / '05-latest-desktop.png'))
+
+        page.goto(f'{origin}/?page=archive', wait_until='load')
+        expect(page.locator('#archive-status')).to_contain_text('The validated manifest lists', timeout=30_000)
+        assert page.locator('#archive-day-list > li').count() == len(manifest['days'])
+        start, end = page.locator('#archive-window-start').get_attribute('datetime'), page.locator('#archive-window-end').get_attribute('datetime')
+        assert start == manifest['window']['start'][:10] and end == manifest['window']['end'][:10], (start, end)
+        target_day = next(day for day in reversed(manifest['days']) if day['count'])
+        target_url = f'?page=center&from={target_day["date"]}&to={target_day["date"]}'
+        target_link = page.locator(f'#archive-day-list a[href="{target_url}"]')
+        assert target_link.count() == 1, f'Archive date does not link to its exact Explore filter: {target_url}'
+        target_link.click()
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(page.locator('#date-from')).to_have_value(target_day['date'])
+        expect(page.locator('#date-to')).to_have_value(target_day['date'])
+        expect(page).to_have_url(f'{origin}/{target_url}')
+        page.go_back(wait_until='load')
+        expect(page.locator('#archive-day-list > li')).to_have_count(len(manifest['days']))
+        page.locator('#tab-latest').click()
+        expect(page.locator('#page-latest')).to_be_visible()
+        expect(page).to_have_url(f'{origin}/?page=latest')
+        page.go_back(wait_until='load')
+        expect(page.locator('#page-archive')).to_be_visible()
+        page.screenshot(path=str(SCREENSHOTS / '06-archive-desktop.png'))
+    finally:
+        page.close()
+
+    retry_issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
+    retry_page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    browser_issue_track(retry_page, retry_issues, origin)
+    attempts = {'count': 0}
+
+    def abort_first_overview(route) -> None:
+        attempts['count'] += 1
+        if attempts['count'] == 1:
+            route.abort()
+        else:
+            route.continue_()
+
+    retry_page.route('**/snapshot/data/overview.json', abort_first_overview)
+    try:
+        retry_page.goto(f'{origin}/?page=archive', wait_until='load')
+        expect(retry_page.locator('#page-overview [data-snapshot-state]')).to_contain_text('Overview index verification failed', timeout=30_000)
+        expect(retry_page.locator('#archive-page-retry')).to_be_visible()
+        expect(retry_page.locator('#source-check-list .source-check-row')).to_have_count(len(manifest['source_status']))
+        expect(retry_page.locator('#archive-day-list .archive-day-item')).to_have_count(len(manifest['days']))
+        expect(retry_page.locator('#archive-status')).to_contain_text('The validated manifest lists')
+        expect(retry_page.locator('#archive-status')).to_contain_text('Overview index could not be verified')
+        expect(retry_page.locator('#latest-page-list .latest-page-item')).to_have_count(0)
+        expect(retry_page.locator('.ui-stage [data-overview-card]:visible')).to_have_count(0)
+        retry_page.locator('#archive-page-retry').click()
+        expect(retry_page.locator('#archive-status')).to_contain_text('The validated manifest lists', timeout=30_000)
+        expect(retry_page.locator('#archive-day-list > li')).to_have_count(len(manifest['days']))
+        assert attempts['count'] == 2, f'Try again did not issue exactly one fresh Overview sidecar request: {attempts}'
+        assert retry_page.evaluate('document.activeElement.id') == 'archive-status', 'Successful retry did not announce completion to the focused user.'
+        expect(retry_page.locator('#archive-page-retry')).to_be_hidden()
+        assert len(retry_issues['request_failures']) == 1 and retry_issues['request_failures'][0].endswith('/snapshot/data/overview.json'), retry_issues['request_failures']
+        retry_issues['request_failures'].clear()  # The one captured failure was the intentional first-attempt abort.
+        assert not retry_issues['page_errors'], retry_issues['page_errors']
+        expected_abort_console = [message for message in retry_issues['console_errors'] if 'net::ERR_FAILED' in message]
+        assert len(expected_abort_console) == 1 and len(retry_issues['console_errors']) == 1, retry_issues['console_errors']
+        retry_issues['console_errors'].clear()  # Chromium reports the intentional abort once as a resource-load diagnostic.
+        assert not retry_issues['request_failures'], retry_issues['request_failures']
+        assert not retry_issues['external_requests'], retry_issues['external_requests']
+    finally:
+        retry_page.close()
+
+    assert not navigation_issues['page_errors'], navigation_issues['page_errors']
+    assert not navigation_issues['console_errors'], navigation_issues['console_errors']
+    assert not navigation_issues['request_failures'], navigation_issues['request_failures']
+    assert not navigation_issues['external_requests'], navigation_issues['external_requests']
+    return {
+        'latest_ids_match_verified_overview_sidecar': expected_latest,
+        'archive_days_match_validated_rolling_manifest': len(manifest['days']),
+        'archive_links_restore_exact_utc_date_filters': True,
+        'retry_attempts': attempts['count'],
+        'failed_retry_state_has_no_partial_records': True,
+        'successful_retry_restores_archive_and_focus': True,
         'external_requests': 0,
     }
 
@@ -1795,7 +1972,7 @@ def main() -> None:
             width_metrics = {}
             for width in (320, 360, 375, 390, 414, 768, 1024, 1280, 1440):
                 width_metrics[width] = {}
-                for tab in ('overview', 'center', 'community'):
+                for tab in ('overview', 'latest', 'center', 'archive', 'community'):
                     page.locator(f'#tab-{tab}').click()
                     width_metrics[width][tab] = width_audit(page, width)
             search_release_metrics = center_search_release_audit(browser, origin, issues, expected_count, manifest)
@@ -1813,7 +1990,11 @@ def main() -> None:
             for link_id in ('join-bugcod3', 'join-rootaccessclub'):
                 expect(page.locator(f'#{link_id}')).to_be_enabled()
             page.screenshot(path=str(SCREENSHOTS / '04-community-desktop.png'))
-            print('PASS: all three pages fit 320–1440 CSS px; Community is reachable, accessible, and uses safe external links.')
+            print('PASS: all five pages fit 320–1440 CSS px; Community is reachable, accessible, and uses safe external links.')
+
+            discovery_metrics = run_discovery_and_retry_tests(browser, origin, manifest, overview)
+            print('PASS: captured source status, Latest links, rolling Archive filters, and fail-closed explicit retry.')
+            print('Discovery QA details:', json.dumps(discovery_metrics, sort_keys=True))
 
             swipe_results = run_swipe_navigation_tests(browser, origin, manifest)
             print('PASS: touch swipe navigation, touch-safe controls, reduced motion, gesture cancellation, and state preservation.')

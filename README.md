@@ -8,25 +8,29 @@ SubZer0 is a static CVE-intelligence browser served by [GitHub Pages](https://il
 
 *SubZer0 is independent and is not affiliated with Telegram.*
 
-## Explore
+## Views
 
-- **Overview** — see counts and the three newest records in the validated snapshot, with links to their CVE details.
-- **CVE Center** — search CVE IDs, products and descriptions; filter by CVSS severity or activity date; browse pages and inspect source-linked evidence.
+- **Overview** — see counts, the three newest records, approximate snapshot age, and source checks exactly as recorded in the validated manifest. These are captured-run details, not current upstream or GitHub Actions health checks.
+- **Latest** — review those three actual newest records from the hash-verified Overview sidecar, then open any record in Explore for its full shard-verified evidence.
+- **Explore** (formerly CVE Center) — search CVE IDs, products and descriptions; filter by CVSS severity or activity date; browse pages and inspect source-linked evidence.
+- **Archive** — browse UTC-day counts inside the current rolling snapshot and open that day's date filter in Explore. It is not a permanent archive and does not compare separate snapshots.
 - **Community** — view a terminal-style introduction and optionally open either Telegram destination. The displayed `xdg-open` command is a visual simulation; no shell command is executed.
 
-CVSS, FIRST EPSS and CISA KEV are separate signals. The CVE Center supports CISA KEV-only and explicit vendor filters; vendor relationships come only from the supplied affected-vendor or KEV vendor fields. A GitHub repository search is only a lead, not evidence that a proof of concept works. The application does not calculate a combined SubZer0 priority score.
+CVSS, FIRST EPSS and CISA KEV are separate signals. Explore supports CISA KEV-only and explicit vendor filters; vendor relationships come only from the supplied affected-vendor or KEV vendor fields. A GitHub repository search is only a lead, not evidence that a proof of concept works. The application does not calculate a combined SubZer0 priority score.
 
 ## Static snapshot and refresh
 
 GitHub Actions gathers records from the NVD CVE API, GitHub Security Advisory Database and CISA Known Exploited Vulnerabilities catalog, plus FIRST EPSS scores. A scheduled workflow runs every six hours (UTC) and can also be started manually from the `main` branch. It validates a complete new dataset and exercises the browser against it before committing only `snapshot/` to the GitHub Pages source branch. A core-source failure, incomplete pagination, invalid data, failed test or failed snapshot validation stops publication and retains the previous complete snapshot. EPSS is optional: if its feed is unavailable, retained scores remain explicitly marked stale or unavailable rather than being shown as current.
 
-The browser itself remains offline from those upstream APIs. It fetches the same-origin static manifest and shards on demand, validates their schema and SHA-256 digests, applies byte/record limits, and shows an error rather than an empty or partially verified feed when a request fails. Hashes detect a shard that disagrees with its manifest; they are **not a digital signature**, because both are served from the same origin.
+The browser itself remains offline from those upstream APIs. It fetches the same-origin static manifest and shards on demand, validates their schema and SHA-256 digests, applies byte/record limits, and shows an error rather than an empty or partially verified feed when a request fails. Hashes detect a file that disagrees with its manifest; they are **not a digital signature**, because both are served from the same origin.
+
+The Overview shows source success flags, source counts where provided, and source check timestamps from that captured manifest only. Snapshot age is approximate and uses the viewing device's clock. A user-activated link opens GitHub Actions run history; the page does not poll GitHub, report present upstream health, or refresh in the background. `Latest` reads only the verified three-record sidecar; `Archive` covers only dates listed in the one validated rolling manifest. No cross-snapshot history or retained long-term archive is available.
 
 The snapshot currently in this source tree was generated at **2026-10-04 17:08:24 UTC** and contains **14,903 CVE records** across 31 UTC-day shards, including **40 CISA KEV listings** in the window. The validated manifest reports **14,749 EPSS scores** dated **2026-10-04**; missing scores remain unscored, not zero. Treat these records as a dated snapshot, not a real-time feed. Static hosting provides no accounts, server-side search, push alerts or guarantee of source freshness; an upstream outage leaves the last complete snapshot in place.
 
-### Shareable CVE Center state
+### Shareable Explore state
 
-The Center keeps its active page and filters in the URL. Supported parameters include `page=center`, `search=…`, `severity=critical|high|medium|low|unrated`, `kev=true`, `vendor=…`, inclusive `from=YYYY-MM-DD` and `to=YYYY-MM-DD`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` for a record detail. Search covers IDs, titles, descriptions, source labels, explicit affected vendor/product/version/CPE values, KEV vendor/product values, advisory identifiers/URLs, and reference labels/sources/URLs. A vendor filter matches only explicit affected-vendor and KEV-vendor fields; it does not infer product ownership.
+The selected view is shareable through `page=overview|latest|center|archive|community`; `center` remains the stable URL name for Explore. Archive day links open Explore with matching inclusive `from=YYYY-MM-DD` and `to=YYYY-MM-DD` filters. Explore keeps search and filters in the URL. Supported parameters also include `search=…`, `severity=critical|high|medium|low|unrated`, `kev=true`, `vendor=…`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` for a record detail. Search covers IDs, titles, descriptions, source labels, explicit affected vendor/product/version/CPE values, KEV vendor/product values, advisory identifiers/URLs, and reference labels/sources/URLs. A vendor filter matches only explicit affected-vendor and KEV-vendor fields; it does not infer product ownership.
 
 See the [snapshot manifest](snapshot/manifest.json), [validation record](snapshot/VALIDATION.json), [source and trust notes](SOURCE-NOTES.md), [security audit](AUDIT.md), and [2026-10-04 review report](AUDIT-REPORT-2026-10-04.md).
 
@@ -38,7 +42,7 @@ From the repository root, serve the files over HTTP so the browser can load the 
 python3 -m http.server 8766 --bind 127.0.0.1
 ```
 
-Open [Overview](http://127.0.0.1:8766/) or the [CVE Center](http://127.0.0.1:8766/?page=center). Stop the server with `Ctrl+C`.
+Open [Overview](http://127.0.0.1:8766/), [Latest](http://127.0.0.1:8766/?page=latest), [Explore](http://127.0.0.1:8766/?page=center), or [Archive](http://127.0.0.1:8766/?page=archive). Stop the server with `Ctrl+C`.
 
 ## Validate changes
 

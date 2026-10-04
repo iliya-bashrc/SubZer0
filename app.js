@@ -45,6 +45,11 @@
   const siteHeader = $('.site-header');
   const centerPage = $('#page-center');
   const headerSearchReturn = $('#header-search-return');
+  const overviewStatusLine = $('#overview-status');
+  const overviewSourceList = $('#source-check-list');
+  const latestPageList = $('#latest-page-list');
+  const archiveDayList = $('#archive-day-list');
+  const overviewRetryButtons = $$('.overview-retry');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
   const snapshotLoaderStatus = $('#snapshot-loader-status');
@@ -443,7 +448,7 @@
     });
 
     const pageParam = params.get('page');
-    const nextPage = pageParam === 'center' || pageParam === 'community'
+    const nextPage = pages.has(pageParam)
       ? pageParam
       : pageParam === null && requestedCveId ? 'center' : 'overview';
     switchPage(nextPage, false, { updateUrl: false, deferScroll: true, swipeTransition: true });
@@ -641,9 +646,9 @@
     if (actual.toLowerCase() !== config.sha256.toLowerCase()) throw new SnapshotIntegrityError('Snapshot integrity verification failed.');
   }
 
-  async function fetchVerifiedJson(config, maximum) {
+  async function fetchVerifiedJson(config, maximum, cache = FETCH_CACHE.data) {
     const path = `${SNAPSHOT_BASE}${config.path}`;
-    let bytes = await fetchBytes(path, maximum, FETCH_CACHE.data);
+    let bytes = await fetchBytes(path, maximum, cache);
     try {
       await verifyBlob(bytes, config);
     } catch (error) {
@@ -707,6 +712,156 @@
     return payload;
   }
 
+  function approximateSnapshotAge(timestamp) {
+    const elapsed = Date.now() - Date.parse(timestamp);
+    if (!Number.isFinite(elapsed)) return 'Unavailable';
+    if (elapsed < 0) return 'Snapshot timestamp is ahead of this device clock';
+    const minutes = Math.floor(elapsed / 60_000);
+    if (minutes < 1) return 'Less than 1 minute';
+    const days = Math.floor(minutes / 1_440);
+    const hours = Math.floor((minutes % 1_440) / 60);
+    const remainder = minutes % 60;
+    if (days) return `${days}d ${hours}h`;
+    if (hours) return `${hours}h ${remainder}m`;
+    return `${minutes}m`;
+  }
+
+  function sourceCoverageText(source) {
+    switch (source.name) {
+      case 'NVD CVE API 2.0':
+        return `${nf.format(source.records)} records reported across ${nf.format(source.pages)} pages`;
+      case 'GitHub Security Advisory Database':
+        return `${nf.format(source.advisories)} advisories reported across ${nf.format(source.pages)} pages`;
+      case 'CISA KEV':
+        return `${nf.format(source.catalog_records)} entries in the upstream catalog at capture`;
+      case 'FIRST EPSS':
+        return `${nf.format(source.scores)} of ${nf.format(source.records)} CVEs scored · score date ${source.score_date ? formatDate(source.score_date) : 'not recorded'}`;
+      default:
+        return 'No source-specific coverage count is recorded';
+    }
+  }
+
+  function renderSourceChecks(candidate) {
+    overviewSourceList.replaceChildren();
+    candidate.source_status.forEach((source) => {
+      const item = document.createElement('li');
+      item.className = 'source-check-row';
+      const identity = document.createElement('div');
+      identity.className = 'source-check-row__identity';
+      const name = document.createElement('strong');
+      name.textContent = source.name;
+      const coverage = document.createElement('span');
+      coverage.textContent = sourceCoverageText(source);
+      identity.append(name, coverage);
+
+      const result = document.createElement('div');
+      result.className = 'source-check-row__result';
+      result.dataset.outcome = source.ok ? 'success' : 'unavailable';
+      const outcome = document.createElement('strong');
+      outcome.textContent = source.ok ? 'Succeeded in capture' : 'Not successful in capture';
+      result.append(outcome);
+      if (isCanonicalTimestamp(source.checked_at)) {
+        const checkedAt = document.createElement('time');
+        checkedAt.dateTime = source.checked_at;
+        checkedAt.textContent = formatTimestamp(source.checked_at, 'Check time not recorded');
+        result.append(checkedAt);
+      } else {
+        const checkedAt = document.createElement('span');
+        checkedAt.textContent = 'Check time not recorded';
+        result.append(checkedAt);
+      }
+      item.append(identity, result);
+      overviewSourceList.append(item);
+    });
+    overviewSourceList.setAttribute('aria-busy', 'false');
+    $('#source-check-age').textContent = `Approximate snapshot age at page load: ${approximateSnapshotAge(candidate.generated_at)} · uses this device's clock.`;
+  }
+
+  function renderLatestPage(payload, candidate) {
+    latestPageList.replaceChildren();
+    payload.records.forEach((record) => {
+      const item = document.createElement('li');
+      item.className = 'latest-page-item';
+      const header = document.createElement('div');
+      header.className = 'latest-page-item__header';
+      const link = document.createElement('a');
+      link.className = 'latest-page-item__id';
+      link.href = `?page=center&cve=${encodeURIComponent(record.id)}`;
+      link.setAttribute('aria-label', `Open ${record.id} in Explore`);
+      link.textContent = record.id;
+      const severity = ['critical', 'high', 'medium', 'low'].includes(record.sev) ? record.sev : 'unrated';
+      const tag = document.createElement('span');
+      tag.className = `severity-tag ${severity}`;
+      tag.textContent = severityName(severity);
+      header.append(link, tag);
+
+      const title = document.createElement('p');
+      title.className = 'latest-page-item__title';
+      title.textContent = record.title;
+      const facts = document.createElement('p');
+      facts.className = 'latest-page-item__facts';
+      facts.textContent = `${record.score === null ? 'CVSS unscored' : `CVSS ${record.score.toFixed(1)}`} · ${record.sources.join(' · ')}`;
+      const activity = document.createElement('time');
+      activity.className = 'latest-page-item__activity';
+      activity.dateTime = record.activity_at;
+      activity.textContent = `Activity ${formatTimestamp(record.activity_at, 'date unavailable')}`;
+      item.append(header, title, facts, activity);
+      latestPageList.append(item);
+    });
+
+    const generated = $('#latest-generated-at');
+    generated.dateTime = candidate.generated_at;
+    generated.textContent = formatTimestamp(candidate.generated_at, 'Date unavailable');
+    const newestActivity = $('#latest-activity-at');
+    if (payload.records[0]) {
+      newestActivity.dateTime = payload.records[0].activity_at;
+      newestActivity.textContent = formatTimestamp(payload.records[0].activity_at, 'Date unavailable');
+    } else {
+      newestActivity.removeAttribute('datetime');
+      newestActivity.textContent = 'No record in this snapshot';
+    }
+    $('#latest-record-count').textContent = nf.format(payload.records.length);
+    latestPageList.setAttribute('aria-busy', 'false');
+    $('#latest-page-status').textContent = `${nf.format(payload.records.length)} newest CVE records loaded from the hash-verified Overview sidecar. Explore verifies full record shards before showing detailed evidence.`;
+  }
+
+  function renderArchivePage(candidate) {
+    const start = candidate.window.start.slice(0, 10);
+    const end = candidate.window.end.slice(0, 10);
+    const startTime = $('#archive-window-start');
+    const endTime = $('#archive-window-end');
+    startTime.dateTime = start;
+    endTime.dateTime = end;
+    startTime.textContent = formatDate(start);
+    endTime.textContent = formatDate(end);
+
+    archiveDayList.replaceChildren();
+    [...candidate.days].reverse().forEach((day) => {
+      const item = document.createElement('li');
+      item.className = 'archive-day-item';
+      const details = document.createElement('div');
+      details.className = 'archive-day-item__details';
+      const date = document.createElement('time');
+      date.dateTime = day.date;
+      date.textContent = formatDate(day.date);
+      const count = document.createElement('strong');
+      count.textContent = `${nf.format(day.count)} CVEs`;
+      const signals = document.createElement('span');
+      signals.textContent = `Critical ${nf.format(day.critical)} · High ${nf.format(day.high)} · KEV ${nf.format(day.exploited)}`;
+      details.append(date, count, signals);
+
+      const link = document.createElement('a');
+      link.className = 'archive-day-item__link';
+      link.href = `?page=center&from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}`;
+      link.setAttribute('aria-label', `Browse ${formatDate(day.date)} in Explore`);
+      link.textContent = 'Browse in Explore';
+      item.append(details, link);
+      archiveDayList.append(item);
+    });
+    archiveDayList.setAttribute('aria-busy', 'false');
+    $('#archive-status').textContent = `The validated manifest lists ${nf.format(candidate.days.length)} UTC days and ${nf.format(candidate.totals.cves)} CVEs in this ${formatDate(start)} to ${formatDate(end)} window. Explore verifies shard files before displaying records.`;
+  }
+
   function renderOverview(payload, candidate) {
     const recordsForCards = payload.records;
     const cards = $$('.ui-stage [data-overview-card]');
@@ -739,6 +894,8 @@
     });
     cards.slice(recordsForCards.length).forEach((card) => { card.hidden = true; });
 
+    renderLatestPage(payload, candidate);
+
     const latest = $('#latest-list');
     latest.replaceChildren();
     recordsForCards.forEach((record) => {
@@ -762,36 +919,84 @@
     time.dateTime = candidate.generated_at;
     time.textContent = formatTimestamp(candidate.generated_at, 'Date unavailable');
     generatedTime.replaceChildren(time);
-    $('#overview-status').textContent = `${nf.format(candidate.totals.cves)} CVE records · snapshot updated ${formatTimestamp(candidate.generated_at, 'recently')}.`;
-    $('#overview-status').classList.remove('is-error');
-    $('#overview-status').setAttribute('aria-busy', 'false');
-    setSnapshotStatus('Overview preview verified. Full shard integrity is checked when CVE Center opens; this is a static snapshot, not a live feed.', 'preview', candidate, null, 'overview');
+    overviewStatusLine.textContent = `${nf.format(candidate.totals.cves)} CVE records · snapshot generated ${formatTimestamp(candidate.generated_at, 'recently')}.`;
+    overviewStatusLine.classList.remove('is-error');
+    overviewStatusLine.setAttribute('aria-busy', 'false');
+    setSnapshotStatus('Overview sidecar verified. Full shard hashes are checked when Explore opens; this is a static snapshot, not a live feed.', 'preview', candidate, null, 'overview');
     $('.ui-stage').setAttribute('aria-busy', 'false');
     $('#latest-list').setAttribute('aria-busy', 'false');
+    overviewRetryButtons.forEach((button) => { button.hidden = true; button.disabled = false; });
   }
 
-  async function loadOverview() {
-    const statusLine = $('#overview-status');
+  async function loadOverview({ retry = false } = {}) {
+    const statusLine = overviewStatusLine;
+    const retryHadFocus = overviewRetryButtons.includes(document.activeElement);
+    if (retry) manifestPromise = null;
+    overviewRetryButtons.forEach((button) => {
+      button.hidden = !(retry && button === document.activeElement);
+      button.disabled = true;
+    });
     let candidate = null;
+    statusLine.textContent = retry ? 'Retrying the snapshot manifest and Overview index…' : 'Verifying the latest static snapshot…';
+    statusLine.classList.remove('is-error');
     setSnapshotStatus('Loading snapshot manifest…', 'loading', null, null, 'overview');
     statusLine.setAttribute('aria-busy', 'true');
+    $('#latest-page-status').textContent = 'Verifying the snapshot index…';
+    $('#archive-status').textContent = 'Waiting for the validated manifest…';
+    overviewSourceList.setAttribute('aria-busy', 'true');
+    latestPageList.setAttribute('aria-busy', 'true');
+    archiveDayList.setAttribute('aria-busy', 'true');
     try {
       candidate = await getManifest();
       setSnapshotStatus('Manifest verified. Checking the Overview preview integrity…', 'verifying', candidate, null, 'overview');
-      const payload = validateOverview(await fetchVerifiedJson(candidate.overview, LIMITS.overviewBytes), candidate);
+      renderSourceChecks(candidate);
+      renderArchivePage(candidate);
+      const payload = validateOverview(await fetchVerifiedJson(candidate.overview, LIMITS.overviewBytes, retry ? FETCH_CACHE.retry : FETCH_CACHE.data), candidate);
       manifest = candidate;
       renderOverview(payload, candidate);
+      if (retryHadFocus) {
+        const statusTarget = activePage === 'latest' ? $('#latest-page-status') : activePage === 'archive' ? $('#archive-status') : statusLine;
+        statusTarget.focus({ preventScroll: true });
+      }
     } catch {
-      setSnapshotStatus('Snapshot verification failed. No verified Overview records are shown; reload to try again.', 'error', candidate, null, 'overview');
-      statusLine.textContent = 'Recent CVE data could not be verified. Reload the page to try again.';
+      const failureState = candidate
+        ? 'Overview index verification failed. No unverified Overview or Latest records are shown; verified manifest source details and Archive remain. Use Try again to re-request the static data.'
+        : 'Snapshot manifest verification failed. No unverified source, record, or Archive content is shown. Use Try again to re-request the static data.';
+      setSnapshotStatus(failureState, 'error', candidate, null, 'overview');
+      statusLine.textContent = candidate
+        ? 'Recent CVE records could not be verified. Try again to re-request the manifest and Overview index.'
+        : 'Snapshot data could not be verified. Try again to re-request the manifest and Overview index.';
       statusLine.classList.add('is-error');
+      if (!candidate) {
+        $('#source-check-age').textContent = 'Snapshot age unavailable because the manifest could not be verified.';
+        overviewSourceList.replaceChildren();
+        $('#archive-status').textContent = 'Archive summaries are unavailable because the manifest could not be verified. Choose Try again to request it again.';
+        archiveDayList.replaceChildren();
+        $('#archive-window-start').textContent = 'Unavailable';
+        $('#archive-window-end').textContent = 'Unavailable';
+      } else {
+        const archiveStatus = $('#archive-status');
+        archiveStatus.textContent = `${archiveStatus.textContent} The Overview index could not be verified; record previews remain hidden. Choose Try again to re-request that index.`;
+      }
+      overviewSourceList.setAttribute('aria-busy', 'false');
       $('.ui-stage').setAttribute('aria-busy', 'false');
       $$('.ui-stage [data-overview-card]').forEach((card) => { card.hidden = true; });
       $('#latest-list').replaceChildren();
       $('#latest-list').setAttribute('aria-busy', 'false');
       $('#overview-generated-at').textContent = 'Unavailable';
+      latestPageList.replaceChildren();
+      latestPageList.setAttribute('aria-busy', 'false');
+      $('#latest-page-status').textContent = 'The latest-record index could not be verified. Choose Try again to re-request it.';
+      $('#latest-record-count').textContent = 'Unavailable';
+      $('#latest-generated-at').textContent = 'Unavailable';
+      $('#latest-activity-at').textContent = 'Unavailable';
+      archiveDayList.setAttribute('aria-busy', 'false');
+      overviewRetryButtons.forEach((button) => { button.hidden = false; button.disabled = false; });
     } finally {
       statusLine.setAttribute('aria-busy', 'false');
+      latestPageList.setAttribute('aria-busy', 'false');
+      archiveDayList.setAttribute('aria-busy', 'false');
+      overviewSourceList.setAttribute('aria-busy', 'false');
     }
   }
 
@@ -1391,7 +1596,7 @@
     const main = $('#main-content');
     if (!main || typeof window.PointerEvent !== 'function') return;
 
-    const pageOrder = ['overview', 'center', 'community'];
+    const pageOrder = ['overview', 'latest', 'center', 'archive', 'community'];
     const blockedSelector = [
       'a[href]', 'button', 'input', 'select', 'textarea', 'option', 'summary', 'details',
       '[role="button"]', '[role="link"]', '[role="combobox"]', '[role="textbox"]',
@@ -1399,7 +1604,7 @@
       '.record-list', '.record-row', '.center-dock', '.filter-controls', '.severity-distribution',
       '.pagination', '.detail-view', '.snapshot-loader', '.ui-stage',
     ].join(',');
-    const desktopCardSelector = '.snapshot-status-strip, .snapshot-rail, .latest-list, .snapshot-summary, article, .terminal-frame';
+    const desktopCardSelector = '.snapshot-status-strip, .snapshot-rail, .latest-list, .latest-page-list, .archive-day-list, .source-intelligence, .snapshot-summary, article, .terminal-frame';
     const horizontalIntentRatio = 1.2;
     let gesture = null;
     let settlement = null;
@@ -1862,6 +2067,7 @@
       });
     });
     $('#explore-cves').addEventListener('click', () => switchPage('center'));
+    overviewRetryButtons.forEach((button) => button.addEventListener('click', () => loadOverview({ retry: true })));
     $('.wordmark').addEventListener('click', (event) => {
       event.preventDefault();
       switchPage('overview');
@@ -2003,8 +2209,8 @@
     }
 
     const initialPage = initialUrlParams.get('page');
-    if (initialPage === 'center' || (!initialPage && requestedCveId)) switchPage('center', false, { updateUrl: false });
-    else if (initialPage === 'community') switchPage('community', false, { updateUrl: false });
+    if (initialPage && pages.has(initialPage)) switchPage(initialPage, false, { updateUrl: false });
+    else if (!initialPage && requestedCveId) switchPage('center', false, { updateUrl: false });
   }
 
   bind();
