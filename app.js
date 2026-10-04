@@ -27,6 +27,7 @@
   const searchInput = $('#record-search');
   const searchExpanded = $('#search-expanded');
   const searchCapsule = $('#search-capsule');
+  const searchCapsuleLabel = $('#search-capsule-label');
   const searchAnchor = $('.center-search-anchor');
   const siteHeader = $('.site-header');
   const centerPage = $('#page-center');
@@ -54,11 +55,6 @@
   const pageIndicator = $('#page-indicator');
   const pagePrevious = $('#page-prev');
   const pageNext = $('#page-next');
-  const feedObserver = 'IntersectionObserver' in window
-    ? new IntersectionObserver((entries) => {
-      entries.forEach((entry) => entry.target.classList.toggle('effect-visible', entry.isIntersecting));
-    }, { root: null, rootMargin: '0px', threshold: 0.12 })
-    : null;
 
   let manifest = null;
   let manifestPromise = null;
@@ -225,8 +221,8 @@
         windowStart.removeAttribute('datetime');
         windowEnd.textContent = unavailable;
         windowEnd.removeAttribute('datetime');
-        recordsValue.textContent = unavailable;
-        kevValue.textContent = unavailable;
+        if (recordsValue) recordsValue.textContent = unavailable;
+        if (kevValue) kevValue.textContent = unavailable;
         epssDate.textContent = unavailable;
         epssDate.removeAttribute('datetime');
         return;
@@ -238,12 +234,16 @@
       windowStart.textContent = formatTimestamp(candidate.window.start, 'Unavailable');
       windowEnd.dateTime = candidate.window.end;
       windowEnd.textContent = formatTimestamp(candidate.window.end, 'Unavailable');
-      recordsValue.textContent = verifiedTotals
-        ? `${nf.format(verifiedTotals.records)} verified`
-        : `${nf.format(candidate.totals.cves)} in manifest`;
-      kevValue.textContent = verifiedTotals
-        ? `${nf.format(verifiedTotals.kev)} verified`
-        : `${nf.format(candidate.totals.known_exploited)} in manifest`;
+      if (recordsValue) {
+        recordsValue.textContent = verifiedTotals
+          ? `${nf.format(verifiedTotals.records)} verified`
+          : `${nf.format(candidate.totals.cves)} in manifest`;
+      }
+      if (kevValue) {
+        kevValue.textContent = verifiedTotals
+          ? `${nf.format(verifiedTotals.kev)} verified`
+          : `${nf.format(candidate.totals.known_exploited)} in manifest`;
+      }
 
       const scoreDate = safeString(candidate.epss?.score_date);
       const freshness = epssFreshness(candidate);
@@ -346,11 +346,11 @@
 
     const scoreDate = safeString(manifest.epss?.score_date, 'not supplied');
     const epssMessage = epssMarkedStale()
-      ? `FIRST EPSS scores are dated ${formatDate(scoreDate)} and marked stale by the captured manifest. Missing scores remain unscored—not 0%.`
-      : `FIRST EPSS score set date: ${formatDate(scoreDate)}. A missing score is not 0%.`;
+      ? `Stale · ${formatDate(scoreDate)}. Missing: unscored, not 0%.`
+      : `Score set date: ${formatDate(scoreDate)}. Missing scores are not 0%.`;
     const epssWarning = $('#epss-warning');
     if (epssWarning) {
-      epssWarning.textContent = epssMessage;
+      $('#epss-warning-copy').textContent = epssMessage;
       epssWarning.classList.toggle('is-stale', epssMarkedStale());
       epssWarning.hidden = false;
     }
@@ -361,7 +361,7 @@
   }
 
   function updateDateSummary(from, to) {
-    dateSummary.textContent = `Activity date · ${formatDate(from).replace(',', '')} — ${formatDate(to).replace(',', '')}`;
+    dateSummary.textContent = `Activity · ${formatDate(from).replace(',', '')} — ${formatDate(to).replace(',', '')}`;
   }
 
   function isCount(value, maximum = LIMITS.records) {
@@ -821,7 +821,7 @@
       acceptSnapshotSidecar();
 
       setSnapshotStats();
-      setSnapshotStatus('Snapshot verified. This is a dated static capture, not a live feed.', 'verified', manifest, {
+      setSnapshotStatus('Snapshot verified · dated static capture · not live.', 'verified', manifest, {
         records: records.length,
         kev: records.filter((record) => record.kev !== null).length
       }, 'center');
@@ -887,15 +887,6 @@
     open.dataset.cveId = record.id;
     open.setAttribute('aria-label', `${record.id}, ${severityName(category)} severity. Open record details.`);
 
-    const effects = document.createElement('span');
-    effects.className = 'record-effects';
-    effects.setAttribute('aria-hidden', 'true');
-    ['fleck-a', 'fleck-b', 'fleck-c'].forEach((name) => {
-      const fleck = document.createElement('span');
-      fleck.className = `record-fleck ${name}`;
-      effects.append(fleck);
-    });
-
     const id = addText(open, 'span', 'record-id', record.id);
     id.setAttribute('aria-hidden', 'true');
 
@@ -934,12 +925,11 @@
       addText(signals, 'span', 'record-signal-chip github-chip', 'GitHub advisory');
     }
 
-    open.append(effects, body, signals);
+    open.append(body, signals);
     open.addEventListener('click', () => openDetails(record, open));
     row.append(open);
     recordList.append(row);
     recordButtons.set(record.id, open);
-    if (feedObserver) feedObserver.observe(row);
   }
 
   function updateResultStatus(start, end, total) {
@@ -952,10 +942,6 @@
 
   function renderRecords() {
     if (!manifest || !records.length) return;
-    recordButtons.forEach((button) => {
-      const row = button.closest('.record-row');
-      if (row && feedObserver) feedObserver.unobserve(row);
-    });
     recordButtons = new Map();
     matchedRecords = filteredRecords();
     const pageCount = Math.max(1, Math.ceil(matchedRecords.length / pageSize));
@@ -998,6 +984,7 @@
     dateTo.value = appliedTo;
     dateFilter.open = false;
     searchInput.value = '';
+    syncSearchCapsule();
     pageIndex = 0;
     updateDateSummary(appliedFrom, appliedTo);
     $$('.severity-tab').forEach((button) => {
@@ -1020,7 +1007,6 @@
     if (!record || !record.id) return;
     lastDetailFocus = opener || document.activeElement;
     lastScrollY = window.scrollY;
-    if (feedObserver) $$('.record-row.effect-visible').forEach((row) => row.classList.remove('effect-visible'));
     severityDistribution.hidden = true;
     centerDock.hidden = true;
     feedView.hidden = true;
@@ -1153,6 +1139,15 @@
     const restore = lastDetailFocus?.dataset?.cveId ? recordButtons.get(lastDetailFocus.dataset.cveId) : null;
     (restore || searchInput).focus({ preventScroll: true });
     scheduleSearchDockSync();
+  }
+
+  function syncSearchCapsule() {
+    const query = searchInput.value.trim();
+    searchCapsuleLabel.textContent = query || 'Search CVEs';
+    searchCapsule.setAttribute('aria-label', query
+      ? `Edit CVE search. Current query: ${query}`
+      : 'Open CVE search');
+    searchCapsule.title = query ? `Current query: ${query}` : 'Open CVE search';
   }
 
   function setSearchDockCompact(compact) {
@@ -1694,6 +1689,7 @@
     bindSwipeNavigation();
 
     searchInput.addEventListener('input', () => {
+      syncSearchCapsule();
       pageIndex = 0;
       renderRecords();
     });
@@ -1783,6 +1779,7 @@
 
     const initialPage = new URLSearchParams(window.location.search).get('page');
     if (requestedCveId) searchInput.value = requestedCveId;
+    syncSearchCapsule();
     if (initialPage === 'center' || requestedCveId) switchPage('center');
     else if (initialPage === 'community') switchPage('community');
   }

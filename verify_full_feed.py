@@ -236,9 +236,9 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             easing: expanded.transitionTimingFunction
           };
         }''')
-        assert max(standard_motion['expandedDurations']) == 280 and max(standard_motion['capsuleDurations']) == 280, standard_motion
-        assert max(standard_motion['wrapDurations']) == 280 and max(standard_motion['shellDurations']) == 280, standard_motion
-        assert '0.4, 0, 0.2, 1' in standard_motion['easing'], f'search morph easing must remain smooth and non-overshooting: {standard_motion}'
+        assert max(standard_motion['expandedDurations']) == 320 and max(standard_motion['capsuleDurations']) == 320, standard_motion
+        assert max(standard_motion['wrapDurations']) == 320 and max(standard_motion['shellDurations']) == 320, standard_motion
+        assert '0.22, 0.68, 0.2, 1' in standard_motion['easing'], f'search morph easing must remain smooth and non-overshooting: {standard_motion}'
         page.emulate_media(reduced_motion='reduce')
         page.locator('#page-size').select_option('96')
         page.locator('.severity-tab[data-severity="high"]').click()
@@ -286,6 +286,9 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert top_layout['documentWidth'] == top_layout['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {top_layout}'
             assert top_layout['filters']['top'] >= top_layout['dock']['bottom'] - 1, f'filter controls are not in normal flow below search at {width}x{height}: {top_layout}'
             assert top_layout['filterPosition'] != 'sticky' and top_layout['filterZ'] < top_layout['dockZ'], f'secondary controls could cover the sticky search at {width}x{height}: {top_layout}'
+            page.locator('#record-search').fill('CVE-')
+            expect(page.locator('#result-status')).to_contain_text(f'of {nfmt(manifest["totals"]["high"])} matching records')
+            page.locator('#record-search').evaluate('(input) => input.blur()')
             page.evaluate('''() => {
               const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
               const header = document.querySelector('.site-header').getBoundingClientRect();
@@ -332,10 +335,10 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                   const target = animation.effect?.target;
                   return animation.playState === 'running' && target && dock.contains(target);
                 });
-                transitions.forEach(animation => { animation.pause(); animation.currentTime = 70; });
+                transitions.forEach(animation => { animation.pause(); animation.currentTime = 160; });
                 requestAnimationFrame(() => {
                   const rect = wrap.getBoundingClientRect();
-                  resolve({compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), animationCount:transitions.length});
+                  resolve({compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), capsuleText:document.querySelector('#search-capsule-label').textContent, capsuleLabel:capsule.getAttribute('aria-label'), animationCount:transitions.length});
                 });
               };
               window.scrollBy({top:52,behavior:'instant'});
@@ -346,7 +349,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert morph_mid['animationCount'] > 0, f'no live CSS transitions were available for the midpoint sample at {width}x{height}: {morph_mid}'
             assert morph_mid['compact'] and compact_width < morph_mid['width'] < morph_start['width'], f'search shell did not interpolate continuously while collapsing at {width}x{height}: start={morph_start}, mid={morph_mid}'
             assert 44 < morph_mid['height'] < morph_start['height'], f'search shell height did not morph between dock and capsule at {width}x{height}: start={morph_start}, mid={morph_mid}'
-            assert 0 < morph_mid['expandedOpacity'] < 1 and 0 < morph_mid['capsuleOpacity'] < 1, f'search contents must crossfade during the shared-shell morph at {width}x{height}: start={morph_start}, mid={morph_mid}'
+            assert morph_mid['expandedOpacity'] <= 0.15 and morph_mid['capsuleOpacity'] >= 0.85 and morph_mid['capsuleText'] == 'CVE-' and morph_mid['capsuleLabel'] == 'Edit CVE search. Current query: CVE-', f'the retained query must hand off legibly inside the shared-shell morph at {width}x{height}: start={morph_start}, mid={morph_mid}'
 
             morph_reversed = page.evaluate('''() => new Promise(resolve => {
               const dock = document.querySelector('.center-dock');
@@ -413,6 +416,8 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const capsule = document.querySelector('#search-capsule');
               const searchShell = getComputedStyle(document.querySelector('.search-wrap'), '::before');
               const filters = document.querySelector('#filter-controls');
+              const centerWrap = document.querySelector('.center-wrap');
+              const contentRight = centerWrap.getBoundingClientRect().right - parseFloat(getComputedStyle(centerWrap).paddingRight);
               const dockRect = dock.getBoundingClientRect();
               const visibleRows = [...document.querySelectorAll('.record-row')].map(row => ({
                 row, rect:row.getBoundingClientRect()
@@ -424,7 +429,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const reducedNodes = [dock, document.querySelector('.search-wrap'), expanded, capsule];
               return {
                 scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
-                header:rect(header), dock:rect(dock), capsule:capsuleRect, filters:rect(filters),
+                header:rect(header), dock:rect(dock), capsule:capsuleRect, filters:rect(filters), contentRight,
                 filterPosition:getComputedStyle(filters).position,
                 visibleRecordCount:visibleRows.length, fullyVisibleRecordCount:fullyVisibleRows.length,
                 firstFullyVisibleRecordId:fullyVisibleRows[0]?.row.dataset.cveId ?? null,
@@ -446,6 +451,8 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                 capsuleBoxShadow:capsuleStyle.boxShadow, searchShellBackground:searchShell.backgroundColor,
                 searchShellBoxShadow:searchShell.boxShadow, capsuleType:capsule.type,
                 capsuleLabel:capsule.getAttribute('aria-label'),
+                capsuleText:document.querySelector('#search-capsule-label').textContent,
+                ambientRecordEffects:document.querySelectorAll('.record-effects, .record-fleck').length,
                 searchEnabled:!search.disabled, searchConnected:search.isConnected,
                 searchTabIndex:search.tabIndex, searchInert:expanded.inert, searchAriaHidden:expanded.getAttribute('aria-hidden'),
                 searchLabel:search.getAttribute('aria-label')
@@ -460,7 +467,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert metrics['dockStickyTop'] == metrics['navHeight'] == expected_nav_height, metrics
             assert abs(metrics['dock']['top'] - (metrics['header']['bottom'] - 1)) <= 1.1, f'search dock overlaps the sticky header at {width}x{height}: {metrics}'
             assert metrics['capsule']['top'] > metrics['header']['bottom'] and metrics['capsule']['height'] >= 44 and metrics['capsule']['height'] <= 50, f'capsule dimensions or header clearance are incorrect at {width}x{height}: {metrics}'
-            assert metrics['capsule']['width'] <= 216 and abs((metrics['capsule']['left'] + metrics['capsule']['right']) / 2 - width / 2) <= 1, f'capsule must remain tiny and centered at {width}x{height}: {metrics}'
+            assert metrics['capsule']['width'] <= 216 and abs(metrics['capsule']['right'] - metrics['contentRight']) <= 1, f'capsule must remain tiny and align to the archive rail at {width}x{height}: {metrics}'
             assert metrics['filterPosition'] != 'sticky' and metrics['filters']['bottom'] <= metrics['header']['bottom'] + 1, f'date/page controls remain pinned while scrolling at {width}x{height}: {metrics}'
             assert metrics['visibleRecordCount'] > 0 and metrics['fullyVisibleRecordCount'] > 0, f'no complete CVE card remains available below the compact dock at {width}x{height}: {metrics}'
             assert metrics['firstFullyVisibleRecordTop'] >= metrics['dock']['bottom'] - 1, metrics
@@ -468,8 +475,9 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert metrics['headerBackground'] == 'rgb(9, 13, 16)' and metrics['headerAlpha'] >= 0.999, f'Center header is not fully opaque at {width}x{height}: {metrics}'
             assert all(metrics[key] >= 0.999 for key in ('dockAlpha', 'filterAlpha')), f'CVE search surfaces let record text bleed through at {width}x{height}: {metrics}'
             assert metrics['capsuleVisible'] and metrics['capsuleReceivesHit'] and metrics['capsuleAriaExpanded'] == 'false' and metrics['capsuleAriaControls'] == 'search-expanded', f'compact search trigger is not visible and accessible at {width}x{height}: {metrics}'
-            assert metrics['capsuleType'] == 'button' and metrics['capsuleLabel'] == 'Open CVE search', f'compact search trigger must be a named native button at {width}x{height}: {metrics}'
+            assert metrics['capsuleType'] == 'button' and metrics['capsuleLabel'] == 'Edit CVE search. Current query: CVE-' and metrics['capsuleText'] == 'CVE-', f'compact search trigger must retain and announce its current query at {width}x{height}: {metrics}'
             assert metrics['searchShellBackground'] == 'rgb(16, 23, 27)' and metrics['searchShellBoxShadow'] == 'none' and metrics['capsuleBoxShadow'] == 'none', f'collapsed shell should stay quiet without a glow at {width}x{height}: {metrics}'
+            assert metrics['ambientRecordEffects'] == 0, f'CVEs should not receive floating ambient particles at {width}x{height}: {metrics}'
             assert metrics['searchEnabled'] and metrics['searchConnected'] and metrics['searchTabIndex'] == -1 and metrics['searchInert'] and metrics['searchAriaHidden'] == 'true' and metrics['searchLabel'], f'original search field must remain in the DOM and safely hidden from navigation while compact at {width}x{height}: {metrics}'
             assert metrics['documentWidth'] == metrics['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {metrics}'
             assert metrics['reducedMotion'] and metrics['scrollBehavior'] == 'auto' and metrics['reducedTransitionsInstant'], f'reduced-motion state transition must be instant at {width}x{height}: {metrics}'
@@ -504,6 +512,8 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             page.locator('#record-search').evaluate('(input) => input.blur()')
             expect(capsule).to_be_visible(timeout=5_000)
             assert page.locator('#record-search').input_value() == 'CVE-'
+            assert page.locator('#search-capsule-label').inner_text() == 'CVE-'
+            assert capsule.get_attribute('aria-label') == 'Edit CVE search. Current query: CVE-'
             assert page.locator('#result-status').inner_text() == broad_status
             expect(page.locator('.record-row')).to_have_count(min(96, manifest['totals']['high']))
             page.wait_for_selector('.center-dock.is-compact', timeout=5_000)
@@ -1070,7 +1080,9 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         page.wait_for_function("() => !document.querySelector('.page.is-swipe-settling')", timeout=2_000)
 
     def drag_from_edge(direction: str, distance: int = 150, *, y: int = 500, steps: int = 6, delay_ms: int = 12) -> None:
-        x = 382 if direction == 'left' else 8
+        # Stay outside Chromium's mobile touch-target expansion around the search input at y=500.
+        edge_inset = 3
+        x = page.evaluate('window.innerWidth') - edge_inset if direction == 'left' else edge_inset
         dx = -distance if direction == 'left' else distance
         swipe(x, y, dx, steps=steps, delay_ms=delay_ms)
 
@@ -1555,7 +1567,7 @@ def main() -> None:
             assert page.locator('#record-list').get_attribute('aria-busy') == 'false'
             if source_epss_stale(manifest):
                 expect(page.locator('#epss-warning')).to_be_visible()
-                expect(page.locator('#epss-warning')).to_contain_text('marked stale')
+                expect(page.locator('#epss-warning')).to_contain_text('Stale')
                 expect(page.locator('#epss-warning')).to_contain_text('not 0%')
             else:
                 expect(page.locator('#epss-warning')).to_be_hidden()

@@ -116,8 +116,8 @@
         <header class="center-heading">
           <div>
             <p class="section-context">A dated local archive · Not live</p>
-            <h1>CVE center</h1>
-            <p class="center-intro">Browse the captured 30-day feed newest first. Records are already here; search and filters are optional ways to narrow them.</p>
+            <h1>CVE Center</h1>
+            <p class="center-intro">A verified 30-day CVE archive, ordered newest first.</p>
           </div>
           <div class="snapshot-summary" aria-label="Snapshot totals">
             <p><strong id="snapshot-total">—</strong><span>records in snapshot</span></p>
@@ -130,13 +130,16 @@
           <dl class="snapshot-status-strip__facts">
             <div><dt>Generated</dt><dd><time data-snapshot-generated>Not verified</time></dd></div>
             <div class="snapshot-status-strip__window"><dt>30-day UTC window</dt><dd><time data-snapshot-window-start>Not verified</time><span aria-hidden="true"> → </span><time data-snapshot-window-end>Not verified</time></dd></div>
-            <div><dt>CVE records</dt><dd data-snapshot-records>Not verified</dd></div>
-            <div><dt>CISA KEV</dt><dd data-snapshot-kev>Not verified</dd></div>
-            <div><dt>FIRST EPSS</dt><dd><time data-snapshot-epss-date>Not verified</time></dd></div>
+            <div class="snapshot-status-strip__headline-duplicate"><dt>CVE records</dt><dd data-snapshot-records>Not verified</dd></div>
+            <div class="snapshot-status-strip__headline-duplicate"><dt>CISA KEV</dt><dd data-snapshot-kev>Not verified</dd></div>
+            <div class="snapshot-status-strip__epss"><dt>FIRST EPSS</dt><dd><time data-snapshot-epss-date>Not verified</time></dd></div>
           </dl>
         </section>
 
-        <p class="epss-warning" id="epss-warning" role="note" hidden></p>
+        <p class="epss-warning" id="epss-warning" role="note" hidden>
+          <span class="epss-warning__label">FIRST EPSS</span>
+          <span class="epss-warning__copy" id="epss-warning-copy"></span>
+        </p>
 
         <section class="severity-distribution" aria-label="Filter by CVSS severity">
           <div class="severity-tabs" id="severity-tabs" role="group" aria-label="Filter records by CVSS severity">
@@ -147,14 +150,13 @@
             <button class="severity-tab" type="button" aria-pressed="false" data-severity="low"><span><i class="severity-dot low-dot" aria-hidden="true"></i>Low</span><strong data-count="low">—</strong></button>
             <button class="severity-tab" type="button" aria-pressed="false" data-severity="unrated"><span><i class="severity-dot unrated-dot" aria-hidden="true"></i>Unrated</span><strong data-count="unrated">—</strong></button>
           </div>
-          <p class="severity-note">Unrated groups source values None and Unknown; each record keeps its original CVSS state.</p>
+          <p class="severity-note">Unrated groups source None/Unknown; original CVSS stays unchanged.</p>
         </section>
 
         <div class="center-search-anchor" aria-hidden="true"></div>
         <div class="center-dock">
           <div class="search-wrap">
             <div class="search-expanded" id="search-expanded">
-              <label class="search-label" for="record-search">Search records when useful</label>
               <div class="search-field-wrap">
                 <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
                 <input id="record-search" type="search" placeholder="CVE ID, product, or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, product names, summaries, and descriptions" aria-keyshortcuts="/">
@@ -163,7 +165,7 @@
             </div>
             <button class="search-capsule" id="search-capsule" type="button" aria-label="Open CVE search" aria-controls="search-expanded" aria-expanded="true">
               <svg class="search-capsule-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-              <span>Search CVEs</span>
+              <span id="search-capsule-label">Search CVEs</span>
             </button>
           </div>
         </div>
