@@ -306,7 +306,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert full_state['searchTabIndex'] == 0 and not full_state['expandedInert'] and full_state['expandedHidden'] is None, full_state
             assert full_state['capsuleVisibility'] == 'hidden' and full_state['capsuleExpanded'] == 'true' and full_state['searchLabel'], full_state
             page.screenshot(path=str(SCREENSHOTS / f'center-search-full-{width}x{height}.png'), animations='disabled')
-            page.evaluate('window.scrollBy({top: 4, behavior: "instant"})')
+            page.evaluate('window.scrollBy({top: 52, behavior: "instant"})')
             expect(page.locator('#search-capsule')).to_be_visible(timeout=5_000)
             page.evaluate('window.scrollTo({top: 2000, behavior: "instant"})')
             for _ in range(50):
@@ -450,17 +450,35 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             }''')
             assert search_result['row']['bottom'] > search_result['dock']['bottom'] and search_result['row']['top'] < height, f'search from a scrolled state hid its exact match at {width}x{height}: {search_result}'
             result_status = page.locator('#result-status').inner_text()
-            still_scrolled = page.evaluate('''() => {
-              const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
-              const header = document.querySelector('.site-header').getBoundingClientRect();
-              return anchor.top < header.bottom - 1;
-            }''')
             page.locator('#record-search').evaluate('(input) => input.blur()')
-            if still_scrolled:
+            settled_state = page.evaluate('''() => new Promise(resolve => {
+              let previous = '';
+              let stableFrames = 0;
+              const started = performance.now();
+              const sample = () => {
+                const input = document.querySelector('#record-search');
+                const dock = document.querySelector('.center-dock');
+                const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
+                const header = document.querySelector('.site-header').getBoundingClientRect();
+                const compact = dock.classList.contains('is-compact');
+                const threshold = header.bottom + (compact ? 48 : -48);
+                const expected = anchor.top < threshold && document.activeElement !== input;
+                const y = Math.round(window.scrollY);
+                const signature = `${compact}|${expected}|${y}`;
+                stableFrames = compact === expected && signature === previous ? stableFrames + 1 : compact === expected ? 1 : 0;
+                previous = signature;
+                const state = {stable:stableFrames >= 3,compact,expected,scrollY:y,anchorTop:anchor.top,headerBottom:header.bottom};
+                if (state.stable || performance.now() - started >= 2000) return resolve(state);
+                requestAnimationFrame(sample);
+              };
+              requestAnimationFrame(sample);
+            })''')
+            assert settled_state['stable'], f'search dock did not settle after blur at {width}x{height}: {settled_state}'
+            compact_after_blur = settled_state['compact']
+            if compact_after_blur:
                 expect(capsule).to_be_visible(timeout=5_000)
             else:
                 expect(page.locator('#record-search')).to_be_visible(timeout=5_000)
-                assert not page.locator('.center-dock').evaluate("dock => dock.classList.contains('is-compact')"), f'search should remain open when exact filtering returns the page to its top region at {width}x{height}'
             assert page.locator('#record-search').input_value() == search_target
             assert page.locator('#result-status').inner_text() == result_status
             expect(page.locator('.record-row')).to_have_count(1)
@@ -468,10 +486,13 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
             assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
             assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
-            page.locator('#record-search').focus()
+            if compact_after_blur:
+                capsule.click()
+            else:
+                page.locator('#record-search').click()
+            expect(page.locator('#record-search')).to_be_focused()
             page.locator('#record-search').fill('')
             expect(page.locator('.record-row')).to_have_count(min(96, manifest['totals']['high']))
-            page.locator('#record-search').focus()
             page.keyboard.press('Tab')
             expect(page.locator('#date-summary')).to_be_focused()
             focus_layout = page.evaluate('''() => {

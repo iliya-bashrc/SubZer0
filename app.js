@@ -1172,7 +1172,11 @@
       const centerIsActive = activePage === 'center' && !centerPage.hidden && !centerDock.hidden;
       const headerBottom = siteHeader.getBoundingClientRect().bottom;
       const searchTop = searchAnchor.getBoundingClientRect().top;
-      setSearchDockCompact(centerIsActive && searchTop < headerBottom - 1);
+      const alreadyCompact = centerDock.classList.contains('is-compact');
+      // Keep native scroll anchoring from flapping the dock across its threshold.
+      const scrollHysteresis = 48;
+      const collapseThreshold = headerBottom + (alreadyCompact ? scrollHysteresis : -scrollHysteresis);
+      setSearchDockCompact(centerIsActive && searchTop < collapseThreshold);
     });
   }
 
