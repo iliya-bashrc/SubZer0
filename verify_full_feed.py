@@ -236,9 +236,9 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             easing: expanded.transitionTimingFunction
           };
         }''')
-        assert max(standard_motion['expandedDurations']) == 320 and max(standard_motion['capsuleDurations']) == 320, standard_motion
-        assert max(standard_motion['wrapDurations']) == 320 and max(standard_motion['shellDurations']) == 320, standard_motion
-        assert '0.22, 0.68, 0.2, 1' in standard_motion['easing'], f'search morph easing must remain smooth and non-overshooting: {standard_motion}'
+        assert max(standard_motion['expandedDurations']) == 420 and max(standard_motion['capsuleDurations']) == 420, standard_motion
+        assert max(standard_motion['wrapDurations']) == 420 and max(standard_motion['shellDurations']) == 420, standard_motion
+        assert '0.33, 0, 0.67, 1' in standard_motion['easing'], f'search morph easing must remain symmetric, smooth, and non-overshooting: {standard_motion}'
         page.emulate_media(reduced_motion='reduce')
         page.locator('#page-size').select_option('96')
         page.locator('.severity-tab[data-severity="high"]').click()
@@ -335,15 +335,17 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                   const target = animation.effect?.target;
                   return animation.playState === 'running' && target && dock.contains(target);
                 });
-                transitions.forEach(animation => { animation.pause(); animation.currentTime = 160; });
-                requestAnimationFrame(() => {
-                  const rect = wrap.getBoundingClientRect();
-                  resolve({compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), capsuleText:document.querySelector('#search-capsule-label').textContent, capsuleLabel:capsule.getAttribute('aria-label'), animationCount:transitions.length});
+                  transitions.forEach(animation => { animation.pause(); animation.currentTime = 210; });
+                  requestAnimationFrame(() => {
+                    const rect = wrap.getBoundingClientRect();
+                    resolve({compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), capsuleText:document.querySelector('#search-capsule-label').textContent, capsuleLabel:capsule.getAttribute('aria-label'), animationCount:transitions.length});
                 });
               };
               window.scrollBy({top:52,behavior:'instant'});
               requestAnimationFrame(sample);
             })''')
+            if (width, height) in {(1440, 900), (390, 844)}:
+                page.screenshot(path=str(SCREENSHOTS / f'center-search-motion-mid-{width}x{height}.png'))
             compact_width = min(216, width - 26)
             assert not morph_start['compact'] and morph_start['width'] > compact_width, f'expanded shell did not start at full width at {width}x{height}: {morph_start}'
             assert morph_mid['animationCount'] > 0, f'no live CSS transitions were available for the midpoint sample at {width}x{height}: {morph_mid}'
@@ -417,7 +419,11 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const searchShell = getComputedStyle(document.querySelector('.search-wrap'), '::before');
               const filters = document.querySelector('#filter-controls');
               const centerWrap = document.querySelector('.center-wrap');
-              const contentRight = centerWrap.getBoundingClientRect().right - parseFloat(getComputedStyle(centerWrap).paddingRight);
+              const centerWrapRect = centerWrap.getBoundingClientRect();
+              const centerWrapStyle = getComputedStyle(centerWrap);
+              const contentLeft = centerWrapRect.left + parseFloat(centerWrapStyle.paddingLeft);
+              const contentRight = centerWrapRect.right - parseFloat(centerWrapStyle.paddingRight);
+              const contentCenter = (contentLeft + contentRight) / 2;
               const dockRect = dock.getBoundingClientRect();
               const visibleRows = [...document.querySelectorAll('.record-row')].map(row => ({
                 row, rect:row.getBoundingClientRect()
@@ -429,7 +435,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const reducedNodes = [dock, document.querySelector('.search-wrap'), expanded, capsule];
               return {
                 scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
-                header:rect(header), dock:rect(dock), capsule:capsuleRect, filters:rect(filters), contentRight,
+                header:rect(header), dock:rect(dock), capsule:capsuleRect, filters:rect(filters), contentRight, contentCenter,
                 filterPosition:getComputedStyle(filters).position,
                 visibleRecordCount:visibleRows.length, fullyVisibleRecordCount:fullyVisibleRows.length,
                 firstFullyVisibleRecordId:fullyVisibleRows[0]?.row.dataset.cveId ?? null,
@@ -467,7 +473,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert metrics['dockStickyTop'] == metrics['navHeight'] == expected_nav_height, metrics
             assert abs(metrics['dock']['top'] - (metrics['header']['bottom'] - 1)) <= 1.1, f'search dock overlaps the sticky header at {width}x{height}: {metrics}'
             assert metrics['capsule']['top'] > metrics['header']['bottom'] and metrics['capsule']['height'] >= 44 and metrics['capsule']['height'] <= 50, f'capsule dimensions or header clearance are incorrect at {width}x{height}: {metrics}'
-            assert metrics['capsule']['width'] <= 216 and abs(metrics['capsule']['right'] - metrics['contentRight']) <= 1, f'capsule must remain tiny and align to the archive rail at {width}x{height}: {metrics}'
+            assert metrics['capsule']['width'] <= 216 and abs((metrics['capsule']['left'] + metrics['capsule']['width'] / 2) - metrics['contentCenter']) <= 1, f'capsule must remain compact and centered on the archive rail at {width}x{height}: {metrics}'
             assert metrics['filterPosition'] != 'sticky' and metrics['filters']['bottom'] <= metrics['header']['bottom'] + 1, f'date/page controls remain pinned while scrolling at {width}x{height}: {metrics}'
             assert metrics['visibleRecordCount'] > 0 and metrics['fullyVisibleRecordCount'] > 0, f'no complete CVE card remains available below the compact dock at {width}x{height}: {metrics}'
             assert metrics['firstFullyVisibleRecordTop'] >= metrics['dock']['bottom'] - 1, metrics
@@ -1570,7 +1576,9 @@ def main() -> None:
                 expect(page.locator('#epss-warning')).to_contain_text('Stale')
                 expect(page.locator('#epss-warning')).to_contain_text('not 0%')
             else:
-                expect(page.locator('#epss-warning')).to_be_hidden()
+                expect(page.locator('#epss-warning')).to_be_visible()
+                expect(page.locator('#epss-warning')).to_contain_text('Score set date:')
+                expect(page.locator('#epss-warning')).to_contain_text('Missing scores are not 0%.')
             page.screenshot(path=str(SCREENSHOTS / '02-cve-center-desktop.png'))
 
             # Pagination and severity totals are calculated from the signed-off manifest contract.

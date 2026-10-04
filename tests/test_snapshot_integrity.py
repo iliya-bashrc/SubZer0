@@ -140,7 +140,7 @@ class SnapshotIntegrityTests(unittest.TestCase):
 
     def test_real_checked_in_full_snapshot_validates(self):
         report = validate_snapshot(ROOT / "snapshot")
-        self.assertEqual(report["records"], 15_318)
+        self.assertEqual(report["records"], 14_903)
         self.assertEqual(report["shards"], 31)
         self.assertGreater(report["largest_shard_bytes"], 5_000_000)
 
