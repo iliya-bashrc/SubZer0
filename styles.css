@@ -37,7 +37,7 @@ a { color: inherit; }
 [hidden] { display: none !important; }
 
 body[data-skin="metal"] { color-scheme: dark; background-color: var(--obsidian); --nav-bg: #0a0f12f5; --nav-line: #29353b; --nav-muted: #aab7bc; }
-body[data-skin="center"] { color-scheme: dark; background-color: #090d10; --nav-bg: #090d10f5; --nav-line: #27343a; --nav-muted: #aab7bc; }
+body[data-skin="center"] { color-scheme: dark; background-color: #090d10; --nav-bg: #090d10; --nav-line: #27343a; --nav-muted: #aab7bc; }
 body[data-skin="glass"] { color-scheme: dark; background-color: #090e12; --nav-bg: #090e12f5; --nav-line: #293940; --nav-muted: #aab7bc; }
 
 :focus-visible { outline: 3px solid var(--ice-strong); outline-offset: 3px; border-radius: 4px; }

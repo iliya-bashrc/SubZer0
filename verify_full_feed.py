@@ -2,6 +2,7 @@
 """Portable browser QA for SubZer0's manifest-verified static snapshot."""
 from __future__ import annotations
 
+import base64
 import functools
 import hashlib
 import http.server
@@ -165,6 +166,40 @@ def width_audit(page, width: int, height: int = 900) -> dict:
     return metrics
 
 
+def assert_header_background_pixels(page, screenshot_path: Path, expected_rgb: tuple[int, int, int]) -> int:
+    screenshot = page.screenshot(path=str(screenshot_path), animations='disabled')
+    sample = page.evaluate('''async ({screenshotBase64}) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${screenshotBase64}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d', {willReadFrequently: true});
+      context.drawImage(image, 0, 0);
+      const header = document.querySelector('.site-header');
+      const bounds = header.getBoundingClientRect();
+      const content = [...header.querySelectorAll('.wordmark, .page-nav, .preview-mark')]
+        .map(element => element.getBoundingClientRect());
+      const scaleX = image.naturalWidth / innerWidth;
+      const scaleY = image.naturalHeight / innerHeight;
+      const points = [];
+      for (let y = Math.ceil(bounds.top + 6); y < Math.floor(bounds.bottom - 6); y += 3) {
+        for (let x = 6; x < innerWidth - 6; x += 4) {
+          const overContent = content.some(rect => x >= rect.left - 5 && x <= rect.right + 5 && y >= rect.top - 5 && y <= rect.bottom + 5);
+          if (!overContent) points.push([x, y]);
+        }
+      }
+      const pixels = points.map(([x, y]) => Array.from(context.getImageData(Math.floor(x * scaleX), Math.floor(y * scaleY), 1, 1).data));
+      return {pixels, width: image.naturalWidth, height: image.naturalHeight};
+    }''', {'screenshotBase64': base64.b64encode(screenshot).decode('ascii')})
+    expected = [*expected_rgb, 255]
+    mismatches = [pixel for pixel in sample['pixels'] if pixel != expected]
+    assert len(sample['pixels']) >= 8, f'not enough clean header background pixels to audit {screenshot_path.name}: {sample}'
+    assert not mismatches, f'Center sticky header screenshot contains non-palette pixels/ghosting: {mismatches[:8]} at {screenshot_path.name}'
+    return len(sample['pixels'])
+
+
 def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_count: int) -> list[dict]:
     results = []
     scenarios = (
@@ -184,12 +219,35 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
         page.goto(f'{origin}/?page=center', wait_until='load')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
         expect(page.locator('#record-list')).to_have_attribute('aria-busy', 'false')
+        theme_headers = page.evaluate('''() => {
+          const rules = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules]);
+          const skins = ['metal', 'center', 'glass'];
+          const navBackgrounds = Object.fromEntries(skins.map(skin => {
+            const rule = rules.find(item => item.selectorText === `body[data-skin="${skin}"]`);
+            return [skin, rule?.style.getPropertyValue('--nav-bg').trim() ?? null];
+          }));
+          return {
+            activeSkin: document.body.dataset.skin,
+            headerBackground: getComputedStyle(document.querySelector('.site-header')).backgroundColor,
+            navBackgrounds
+          };
+        }''')
+        assert theme_headers == {
+            'activeSkin': 'center',
+            'headerBackground': 'rgb(9, 13, 16)',
+            'navBackgrounds': {'metal': '#0a0f12f5', 'center': '#090d10', 'glass': '#090e12f5'},
+        }, f'header palettes changed unexpectedly: {theme_headers}'
         for width, height in viewports:
             page.set_viewport_size({'width': width, 'height': height})
             page.evaluate('window.scrollTo(0, 0)')
             page.wait_for_timeout(30)
             page.evaluate('window.scrollTo(0, 1800)')
-            page.wait_for_function('Math.abs(scrollY - Math.min(1800, document.documentElement.scrollHeight - innerHeight)) < 2')
+            page.wait_for_function('''() => {
+              const header = document.querySelector('.site-header').getBoundingClientRect();
+              const dock = document.querySelector('.center-dock').getBoundingClientRect();
+              return Math.abs(scrollY - Math.min(1800, document.documentElement.scrollHeight - innerHeight)) < 2 &&
+                Math.abs(dock.top - (header.bottom - 1)) <= 1.1;
+            }''')
             page.wait_for_timeout(40)
             metrics = page.evaluate('''() => {
               const rect = element => {
@@ -210,22 +268,40 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               return {
                 scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
                 header:rect(header), dock:rect(dock), search:searchRect, filters:rect(filters),
+                headerBackground:getComputedStyle(header).backgroundColor, headerAlpha:alpha(header),
+                headerPosition:getComputedStyle(header).position, headerStickyTop:Number.parseFloat(getComputedStyle(header).top),
                 dockAlpha:alpha(dock), filterAlpha:alpha(filters),
                 headerZ:Number(getComputedStyle(header).zIndex), dockZ:Number(getComputedStyle(dock).zIndex),
-                dockPosition:getComputedStyle(dock).position, searchReceivesHit:hit === search,
+                dockPosition:getComputedStyle(dock).position, dockStickyTop:Number.parseFloat(getComputedStyle(dock).top),
+                navHeight:Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')),
+                searchReceivesHit:hit === search,
                 searchEnabled:!search.disabled, searchLabel:search.getAttribute('aria-label')
               };
             }''')
             assert metrics['scrollY'] >= 1798, f'scroll did not reach the sticky state at {width}x{height}: {metrics}'
+            assert metrics['headerPosition'] == 'sticky' and abs(metrics['header']['top']) <= 1, metrics
+            assert metrics['headerStickyTop'] == 0, metrics
             assert metrics['dockPosition'] == 'sticky', metrics
+            expected_nav_height = 104 if width <= 720 else 76
+            assert metrics['dockStickyTop'] == metrics['navHeight'] == expected_nav_height, metrics
             assert abs(metrics['dock']['top'] - (metrics['header']['bottom'] - 1)) <= 1.1, f'search dock overlaps the sticky header at {width}x{height}: {metrics}'
             assert metrics['search']['top'] > metrics['header']['bottom'], f'search input is obscured by the header at {width}x{height}: {metrics}'
             assert metrics['filters']['bottom'] <= metrics['dock']['bottom'] + 1, metrics
             assert metrics['headerZ'] > metrics['dockZ'], metrics
+            assert metrics['headerBackground'] == 'rgb(9, 13, 16)' and metrics['headerAlpha'] >= 0.999, f'Center header is not fully opaque at {width}x{height}: {metrics}'
             assert all(metrics[key] >= 0.999 for key in ('dockAlpha', 'filterAlpha')), f'CVE search surfaces let record text bleed through at {width}x{height}: {metrics}'
             assert metrics['searchReceivesHit'] and metrics['searchEnabled'] and metrics['searchLabel'], f'sticky search is not accessible at {width}x{height}: {metrics}'
             assert metrics['documentWidth'] == metrics['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {metrics}'
-            page.screenshot(path=str(SCREENSHOTS / f'center-sticky-{width}x{height}.png'), animations='disabled')
+            metrics['opaqueHeaderScreenshotSamples'] = assert_header_background_pixels(
+                page, SCREENSHOTS / f'center-sticky-{width}x{height}.png', (9, 13, 16)
+            )
+            search_target = page.locator('.record-row').first.get_attribute('data-cve-id')
+            assert search_target, f'no verified record available to exercise pinned search at {width}x{height}'
+            page.locator('#record-search').fill(search_target)
+            expect(page.locator('.record-row')).to_have_count(1)
+            expect(page.locator('.record-row').first).to_have_attribute('data-cve-id', search_target)
+            page.locator('#record-search').fill('')
+            expect(page.locator('.record-row')).to_have_count(min(24, expected_count))
             results.append({'viewport': [width, height], 'touch': is_touch, **metrics})
         page.close()
     return results
