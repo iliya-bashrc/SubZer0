@@ -203,8 +203,8 @@ def assert_header_background_pixels(page, screenshot_path: Path, expected_rgb: t
 def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_count: int) -> list[dict]:
     results = []
     scenarios = (
-        (False, ((1440, 900), (1440, 624))),
-        (True, ((390, 844), (320, 740))),
+        (False, ((1440, 900), (1440, 624), (1024, 624), (768, 800))),
+        (True, ((390, 844), (360, 800), (320, 740), (320, 640))),
     )
     for is_touch, viewports in scenarios:
         first_width, first_height = viewports[0]
@@ -241,14 +241,25 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             page.set_viewport_size({'width': width, 'height': height})
             page.evaluate('window.scrollTo(0, 0)')
             page.wait_for_timeout(30)
-            page.evaluate('window.scrollTo(0, 1800)')
-            page.wait_for_function('''() => {
-              const header = document.querySelector('.site-header').getBoundingClientRect();
-              const dock = document.querySelector('.center-dock').getBoundingClientRect();
-              return Math.abs(scrollY - Math.min(1800, document.documentElement.scrollHeight - innerHeight)) < 2 &&
-                Math.abs(dock.top - (header.bottom - 1)) <= 1.1;
+            top_layout = page.evaluate('''() => {
+              const rect = element => {
+                const r = element.getBoundingClientRect();
+                return {top:r.top,bottom:r.bottom,height:r.height};
+              };
+              const dock = document.querySelector('.center-dock');
+              const filters = document.querySelector('#filter-controls');
+              return {
+                viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
+                dock:rect(dock), filters:rect(filters),
+                filterPosition:getComputedStyle(filters).position,
+                dockZ:Number(getComputedStyle(dock).zIndex), filterZ:Number(getComputedStyle(filters).zIndex)
+              };
             }''')
-            page.wait_for_timeout(40)
+            assert top_layout['documentWidth'] == top_layout['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {top_layout}'
+            assert top_layout['filters']['top'] >= top_layout['dock']['bottom'] - 1, f'filter controls are not in normal flow below search at {width}x{height}: {top_layout}'
+            assert top_layout['filterPosition'] != 'sticky' and top_layout['filterZ'] < top_layout['dockZ'], f'secondary controls could cover the sticky search at {width}x{height}: {top_layout}'
+            page.evaluate('window.scrollTo(0, 1800)')
+            page.wait_for_timeout(60)
             metrics = page.evaluate('''() => {
               const rect = element => {
                 const r = element.getBoundingClientRect();
@@ -263,17 +274,28 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const dock = document.querySelector('.center-dock');
               const search = document.querySelector('#record-search');
               const filters = document.querySelector('#filter-controls');
+              const dockRect = dock.getBoundingClientRect();
+              const visibleRows = [...document.querySelectorAll('.record-row')].map(row => ({
+                row, rect:row.getBoundingClientRect()
+              })).filter(item => item.rect.bottom > dockRect.bottom && item.rect.top < innerHeight);
+              const fullyVisibleRows = visibleRows.filter(item => item.rect.top >= dockRect.bottom - 1 && item.rect.bottom <= innerHeight);
               const searchRect = rect(search);
               const hit = document.elementFromPoint(searchRect.left + searchRect.width / 2, searchRect.top + searchRect.height / 2);
               return {
                 scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
                 header:rect(header), dock:rect(dock), search:searchRect, filters:rect(filters),
+                filterPosition:getComputedStyle(filters).position,
+                visibleRecordCount:visibleRows.length, fullyVisibleRecordCount:fullyVisibleRows.length,
+                firstFullyVisibleRecordId:fullyVisibleRows[0]?.row.dataset.cveId ?? null,
+                firstFullyVisibleRecordTop:fullyVisibleRows[0]?.rect.top ?? null,
                 headerBackground:getComputedStyle(header).backgroundColor, headerAlpha:alpha(header),
                 headerPosition:getComputedStyle(header).position, headerStickyTop:Number.parseFloat(getComputedStyle(header).top),
                 dockAlpha:alpha(dock), filterAlpha:alpha(filters),
                 headerZ:Number(getComputedStyle(header).zIndex), dockZ:Number(getComputedStyle(dock).zIndex),
                 dockPosition:getComputedStyle(dock).position, dockStickyTop:Number.parseFloat(getComputedStyle(dock).top),
                 navHeight:Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')),
+                reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,
+                scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior,
                 searchReceivesHit:hit === search,
                 searchEnabled:!search.disabled, searchLabel:search.getAttribute('aria-label')
               };
@@ -282,26 +304,45 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert metrics['headerPosition'] == 'sticky' and abs(metrics['header']['top']) <= 1, metrics
             assert metrics['headerStickyTop'] == 0, metrics
             assert metrics['dockPosition'] == 'sticky', metrics
+            assert metrics['dock']['height'] <= 96, f'search-only dock is taller than its compact viewport budget at {width}x{height}: {metrics}'
             expected_nav_height = 104 if width <= 720 else 76
             assert metrics['dockStickyTop'] == metrics['navHeight'] == expected_nav_height, metrics
             assert abs(metrics['dock']['top'] - (metrics['header']['bottom'] - 1)) <= 1.1, f'search dock overlaps the sticky header at {width}x{height}: {metrics}'
             assert metrics['search']['top'] > metrics['header']['bottom'], f'search input is obscured by the header at {width}x{height}: {metrics}'
-            assert metrics['filters']['bottom'] <= metrics['dock']['bottom'] + 1, metrics
+            assert metrics['filterPosition'] != 'sticky' and metrics['filters']['bottom'] <= metrics['header']['bottom'] + 1, f'date/page controls remain pinned while scrolling at {width}x{height}: {metrics}'
+            assert metrics['visibleRecordCount'] > 0 and metrics['fullyVisibleRecordCount'] > 0, f'no complete CVE card remains available below the compact dock at {width}x{height}: {metrics}'
+            assert metrics['firstFullyVisibleRecordTop'] >= metrics['dock']['bottom'] - 1, metrics
             assert metrics['headerZ'] > metrics['dockZ'], metrics
             assert metrics['headerBackground'] == 'rgb(9, 13, 16)' and metrics['headerAlpha'] >= 0.999, f'Center header is not fully opaque at {width}x{height}: {metrics}'
             assert all(metrics[key] >= 0.999 for key in ('dockAlpha', 'filterAlpha')), f'CVE search surfaces let record text bleed through at {width}x{height}: {metrics}'
             assert metrics['searchReceivesHit'] and metrics['searchEnabled'] and metrics['searchLabel'], f'sticky search is not accessible at {width}x{height}: {metrics}'
             assert metrics['documentWidth'] == metrics['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {metrics}'
+            assert metrics['reducedMotion'] and metrics['scrollBehavior'] == 'auto', f'reduced-motion scrolling changed at {width}x{height}: {metrics}'
             metrics['opaqueHeaderScreenshotSamples'] = assert_header_background_pixels(
                 page, SCREENSHOTS / f'center-sticky-{width}x{height}.png', (9, 13, 16)
             )
-            search_target = page.locator('.record-row').first.get_attribute('data-cve-id')
+            search_target = metrics['firstFullyVisibleRecordId']
             assert search_target, f'no verified record available to exercise pinned search at {width}x{height}'
             page.locator('#record-search').fill(search_target)
             expect(page.locator('.record-row')).to_have_count(1)
             expect(page.locator('.record-row').first).to_have_attribute('data-cve-id', search_target)
+            search_result = page.evaluate('''() => {
+              const row = document.querySelector('.record-row').getBoundingClientRect();
+              const dock = document.querySelector('.center-dock').getBoundingClientRect();
+              return {row:{top:row.top,bottom:row.bottom},dock:{top:dock.top,bottom:dock.bottom},scrollY};
+            }''')
+            assert search_result['row']['bottom'] > search_result['dock']['bottom'] and search_result['row']['top'] < height, f'search from a scrolled state hid its exact match at {width}x{height}: {search_result}'
             page.locator('#record-search').fill('')
             expect(page.locator('.record-row')).to_have_count(min(24, expected_count))
+            page.locator('#record-search').focus()
+            page.keyboard.press('Tab')
+            expect(page.locator('#date-summary')).to_be_focused()
+            focus_layout = page.evaluate('''() => {
+              const target = document.querySelector('#date-summary').getBoundingClientRect();
+              const dock = document.querySelector('.center-dock').getBoundingClientRect();
+              return {target:{top:target.top,bottom:target.bottom},dock:{top:dock.top,bottom:dock.bottom},scrollY};
+            }''')
+            assert focus_layout['target']['top'] >= focus_layout['dock']['bottom'] - 1, f'keyboard focus moved behind the sticky search at {width}x{height}: {focus_layout}'
             results.append({'viewport': [width, height], 'touch': is_touch, **metrics})
         page.close()
     return results
@@ -1228,6 +1269,10 @@ def main() -> None:
             expect(overview_page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
             expect(overview_page.locator('#detail-heading')).to_have_text(expected_latest[0])
             expect(overview_page).to_have_url(f'{origin}/?page=center&cve={expected_latest[0]}')
+            overview_page.go_back(wait_until='load')
+            expect(overview_page.locator('#page-overview')).to_be_visible()
+            overview_page.go_forward(wait_until='load')
+            expect(overview_page.locator('#detail-heading')).to_have_text(expected_latest[0])
             overview_page.keyboard.press('Escape')
             expect(overview_page.locator('#detail-view')).to_be_hidden()
             assert overview_page.evaluate('document.activeElement.dataset.cveId') == expected_latest[0]
@@ -1285,9 +1330,11 @@ def main() -> None:
 
             # A one-day date filter and exact CVE search preserve complete-snapshot totals.
             page.locator('#date-filter summary').click()
+            assert page.locator('#date-filter').get_attribute('open') is not None
             page.locator('#date-from').fill(sample_day)
             page.locator('#date-to').fill(sample_day)
             page.locator('#date-form button[type="submit"]').click()
+            assert page.locator('#date-filter').get_attribute('open') is None
             expect(page.locator('#result-status')).to_contain_text(f'of {nfmt(sample_day_count)} matching records')
             expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count))
             page.locator('#record-search').fill(sample_id)
