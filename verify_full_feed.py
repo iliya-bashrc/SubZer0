@@ -313,7 +313,13 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                 if page.evaluate('window.scrollY') >= 1900:
                     break
                 page.wait_for_timeout(20)
-            page.wait_for_timeout(40)
+            page.wait_for_function('''() => {
+              const dock = document.querySelector('.center-dock');
+              const capsule = document.querySelector('#search-capsule');
+              const style = getComputedStyle(capsule);
+              const transitioning = capsule.getAnimations().some(animation => animation.playState === 'running');
+              return dock.classList.contains('is-compact') && style.visibility === 'visible' && style.opacity === '1' && !transitioning;
+            }''', timeout=5_000)
             metrics = page.evaluate('''() => {
               const rect = element => {
                 const r = element.getBoundingClientRect();
@@ -955,6 +961,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         dispatch_touch('touchEnd')
 
     def expect_active(name: str) -> None:
+        # Swipe previews are visible before the route is committed; wait for the semantic active state first.
+        expect(page.locator(f'#tab-{name}')).to_have_attribute('aria-selected', 'true')
         expect(page.locator(f'#page-{name}')).to_be_visible()
         for candidate in ('overview', 'center', 'community'):
             tab = page.locator(f'#tab-{candidate}')
