@@ -427,7 +427,8 @@ def test_leave_and_return(browser: Browser, base_url: str) -> dict[str, Any]:
     assert page.locator('#action-status').inner_text() == 'Typing command...'
     page.locator('#tab-overview').click()
     page.wait_for_timeout(2400)
-    assert page.url == f'{base_url}/?page=community', 'Navigation continued after leaving the Community page.'
+    assert page.url == f'{base_url}/', 'Navigating to Overview did not update the route URL.'
+    assert page.locator('#page-overview').is_visible(), 'Overview did not become the active route.'
     assert not attempted, f'Unexpected external destination after leaving page: {attempted}'
     page.locator('#tab-community').click()
     wait_idle(page)

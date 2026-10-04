@@ -93,6 +93,11 @@
   border-bottom: 1px solid #334147;
 }
 .filter-controls :is(summary, input, button, select) { scroll-margin-block-start: calc(var(--nav-height) + 96px); }
+.filter-extra-controls { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.vendor-filter { display: inline-flex; min-width: 0; min-height: 42px; align-items: center; gap: 8px; color: #aebbc0; font-size: 12px; white-space: nowrap; }
+.vendor-filter input { width: min(220px, 21vw); min-width: 120px; min-height: 38px; padding: 5px 9px; border: 1px solid #46565d; border-radius: 4px; background: #11191d; color: #edf2f3; font-size: 12px; }
+.kev-filter { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; color: #c0cbd0; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.kev-filter input { width: 16px; height: 16px; margin: 0; accent-color: #9cb6c0; }
 .date-filter { flex: none; }
 .date-filter summary {
   min-height: 42px;
@@ -297,6 +302,10 @@
   .date-apply { grid-column: 1 / -1; min-height: 44px; }
   .page-size-control { min-height: 44px; gap: 6px; font-size: 10px; }
   .page-size-control select { min-height: 40px; }
+  .filter-extra-controls { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; }
+  .vendor-filter { grid-column: 1 / -1; width: 100%; min-height: 40px; gap: 7px; font-size: 10px; }
+  .vendor-filter input { flex: 1; width: auto; min-width: 0; max-width: none; min-height: 40px; font-size: 12px; }
+  .kev-filter { grid-column: 1; min-height: 40px; gap: 5px; font-size: 10px; }
   .feed-meta { align-items: start; gap: 6px; }
   .result-status { margin: 11px 0 7px; font-size: 11px; line-height: 1.45; }
   .sort-note { padding-top: 10px; font-size: 10px; }

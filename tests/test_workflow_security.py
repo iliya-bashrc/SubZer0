@@ -26,6 +26,7 @@ class WorkflowSecurityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.update = (ROOT / ".github/workflows/update.yml").read_text(encoding="utf-8")
         cls.checks = (ROOT / ".github/workflows/checks.yml").read_text(encoding="utf-8")
+        cls.requirements = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
 
     def test_candidate_validation_job_is_read_only_and_checkout_does_not_persist_credentials(self):
         self.assertIn("permissions:\n  contents: read", self.update)
@@ -77,6 +78,34 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertIn("permissions:\n  contents: read", self.checks)
         self.assertIn("persist-credentials: false", self.checks)
         self.assertNotIn("contents: write", self.checks)
+
+    def test_development_dependencies_are_exact_sha256_locked_in_both_workflows(self):
+        package_matches = list(re.finditer(r"(?m)^([A-Za-z0-9_.-]+)==([^\s\\]+)", self.requirements))
+        self.assertEqual({match.group(1).lower() for match in package_matches}, {
+            "greenlet", "playwright", "pyee", "typing-extensions",
+        })
+        self.assertEqual(len(package_matches), 4)
+        for index, package in enumerate(package_matches):
+            end = package_matches[index + 1].start() if index + 1 < len(package_matches) else len(self.requirements)
+            block = self.requirements[package.start():end]
+            hashes = re.findall(r"(?m)^\s+--hash=sha256:([0-9a-f]{64})\b", block)
+            self.assertTrue(hashes, f"{package.group(1)} has no SHA-256 allowlist")
+        for workflow in (self.update, self.checks):
+            self.assertIn("pip install --require-hashes", workflow)
+            self.assertIn("--index-url https://pypi.org/simple", workflow)
+
+    def test_snapshot_refresh_is_main_only_and_hands_off_only_validated_snapshot(self):
+        self.assertIn("on:\n  schedule:", self.update)
+        self.assertIn('cron: "17 */6 * * *"', self.update)
+        self.assertIn("workflow_dispatch:", self.update)
+        self.assertNotIn("pull_request:", self.update)
+        self.assertEqual(self.update.count("if: github.ref == 'refs/heads/main'"), 3)
+        self.assertIn("name: validated-snapshot-${{ github.run_id }}-${{ github.run_attempt }}", self.update)
+        self.assertIn("if-no-files-found: error", self.update)
+        self.assertIn("retention-days: 1", self.update)
+        self.assertIn("git add -- snapshot/", self.update)
+        self.assertIn("Only snapshot/ files may be published.", self.update)
+        self.assertEqual(self.update.count("contents: write"), 1)
 
 
 if __name__ == "__main__":

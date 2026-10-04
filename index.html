@@ -183,6 +183,16 @@
               <button class="date-apply" type="submit">Apply dates</button>
             </form>
           </details>
+          <div class="filter-extra-controls" role="group" aria-label="Additional CVE filters">
+            <label class="vendor-filter" for="vendor-filter">
+              <span>Vendor</span>
+              <input id="vendor-filter" type="search" maxlength="200" placeholder="Affected vendor" autocomplete="off" spellcheck="false" aria-label="Filter by explicitly supplied affected or CISA KEV vendor">
+            </label>
+            <label class="kev-filter" for="kev-only">
+              <input id="kev-only" type="checkbox">
+              <span>CISA KEV only</span>
+            </label>
+          </div>
           <label class="page-size-control" for="page-size">Rows per page
             <select id="page-size">
               <option value="24" selected>24</option>
@@ -303,7 +313,6 @@
           </div>
         </section>
         </div>
-      </div>
     </section>
   </main>
 

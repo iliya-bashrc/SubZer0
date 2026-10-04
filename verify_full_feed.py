@@ -10,7 +10,7 @@ import json
 import shutil
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -886,6 +886,211 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
     return results
 
 
+def run_shareable_search_state_tests(browser, origin: str, issues: dict, manifest: dict) -> dict:
+    """Exercise query-backed filters and real advisory/KEV metadata in Chromium."""
+    all_records: list[dict] = []
+    for day in manifest['days']:
+        all_records.extend(json.loads((ROOT / 'snapshot' / day['path']).read_text(encoding='utf-8')))
+
+    advisory_target = None
+    advisory_term = ''
+    for record in all_records:
+        base = ' '.join(str(value) for value in (
+            record.get('id', ''), record.get('title', ''), record.get('desc', ''),
+            record.get('date_basis', ''), *record.get('sources', []),
+            *(part for item in record.get('affected', []) for part in (item.get('vendor', ''), item.get('product', ''), item.get('versions', ''), item.get('cpe', ''))),
+        )).casefold()
+        for advisory in record.get('advisories', []):
+            candidate = urlsplit(str(advisory.get('url') or '')).path.rstrip('/').rsplit('/', 1)[-1]
+            if candidate.upper().startswith('GHSA-') and candidate.casefold() not in base:
+                advisory_target, advisory_term = record, candidate
+                break
+        if advisory_target:
+            break
+    assert advisory_target is not None, 'No advisory identifier outside the former title/product search fields was found.'
+
+    kev_target = next((record for record in all_records
+                       if isinstance(record.get('kev'), dict)
+                       and str(record['kev'].get('vendor') or '').strip()
+                       and str(record['kev'].get('product') or '').strip()
+                       and len(str(record['kev'].get('vendor') or '')) <= 200
+                       and len(str(record['kev'].get('product') or '')) <= 200), None)
+    assert kev_target is not None, 'No usable real KEV vendor/product record was found in the validated snapshot.'
+    kev = kev_target['kev']
+    raw_severity = kev_target.get('sev')
+    severity = raw_severity if raw_severity in {'critical', 'high', 'medium', 'low'} else 'unrated'
+    day = str(kev_target['window_date'])
+    query_state = urlencode({
+        'page': 'center', 'search': kev['product'], 'severity': severity,
+        'kev': 'true', 'vendor': kev['vendor'], 'from': day, 'to': day,
+        'size': '96', 'pageIndex': '1',
+    })
+
+    page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    browser_issue_track(page, issues, origin)
+    try:
+        page.goto(f'{origin}/?{urlencode({"page": "center", "search": advisory_term})}', wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(page.locator('#record-search')).to_have_value(advisory_term)
+        advisory_row = page.locator(f'.record-row[data-cve-id="{advisory_target["id"]}"]')
+        assert advisory_row.count() > 0, f'Search for {advisory_term} did not find advisory record {advisory_target["id"]}.'
+        expect(page).to_have_url(f'{origin}/?page=center&search={advisory_term}')
+
+        page.goto(f'{origin}/?{query_state}', wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        expect(page.locator('#vendor-filter')).to_have_value(kev['vendor'])
+        expect(page.locator('#kev-only')).to_be_checked()
+        expect(page.locator(f'.severity-tab[data-severity="{severity}"]')).to_have_attribute('aria-pressed', 'true')
+        expect(page.locator('#page-size')).to_have_value('96')
+        expect(page.locator('#date-from')).to_have_value(day)
+        expect(page.locator('#date-to')).to_have_value(day)
+        target_row = page.locator(f'.record-row[data-cve-id="{kev_target["id"]}"]')
+        assert target_row.count() > 0, f'Combined URL filters did not retain real KEV record {kev_target["id"]}.'
+
+        page.locator('#record-search').fill('')
+        assert page.evaluate('new URLSearchParams(location.search).get("search")') is None
+        page.locator('#record-search').fill(kev['product'])
+        assert page.evaluate('new URLSearchParams(location.search).get("search")') == kev['product']
+        page.locator('#vendor-filter').fill('')
+        assert page.evaluate('new URLSearchParams(location.search).get("vendor")') is None
+        page.locator('#vendor-filter').fill(kev['vendor'])
+        assert page.evaluate('new URLSearchParams(location.search).get("vendor")') == kev['vendor']
+        page.locator('#kev-only').uncheck()
+        assert page.evaluate('new URLSearchParams(location.search).get("kev")') is None
+        page.locator('#kev-only').check()
+        assert page.evaluate('new URLSearchParams(location.search).get("kev")') == 'true'
+        page.locator('.severity-tab[data-severity="all"]').click()
+        assert page.evaluate('new URLSearchParams(location.search).get("severity")') is None
+        page.locator(f'.severity-tab[data-severity="{severity}"]').click()
+        assert page.evaluate('new URLSearchParams(location.search).get("severity")') == severity
+        page.locator('#page-size').select_option('24')
+        assert page.evaluate('new URLSearchParams(location.search).get("size")') is None
+        page.locator('#page-size').select_option('96')
+        assert page.evaluate('new URLSearchParams(location.search).get("size")') == '96'
+        page.locator('#date-filter summary').click()
+        page.locator('#date-form button[type="submit"]').click()
+        assert page.evaluate('''() => {
+          const params = new URLSearchParams(location.search);
+          return params.get('from') === params.get('to') && params.get('from') !== null;
+        }''')
+
+        target_row.locator('.record-open').click()
+        expect(page.locator('#detail-heading')).to_have_text(kev_target['id'])
+        state = page.evaluate('''() => Object.fromEntries(new URLSearchParams(location.search))''')
+        assert state.get('cve') == kev_target['id'] and state.get('search') == kev['product'], state
+        page.locator('#tab-community').click()
+        expect(page.locator('#page-community')).to_be_visible()
+        state = page.evaluate('''() => Object.fromEntries(new URLSearchParams(location.search))''')
+        assert state.get('page') == 'community' and state.get('cve') == kev_target['id'], state
+        page.locator('#tab-center').click()
+        expect(page.locator('#detail-view')).to_be_visible()
+        state = page.evaluate('''() => Object.fromEntries(new URLSearchParams(location.search))''')
+        assert state.get('page') == 'center' and state.get('cve') == kev_target['id'], state
+        page.locator('.wordmark').click()
+        expect(page.locator('#page-overview')).to_be_visible()
+        state = page.evaluate('''() => Object.fromEntries(new URLSearchParams(location.search))''')
+        assert state.get('page') == 'overview' and state.get('cve') == kev_target['id'], state
+        page.reload(wait_until='load')
+        expect(page.locator('#page-overview')).to_be_visible()
+        page.locator('#tab-center').click()
+        expect(page.locator('#detail-view')).to_be_visible()
+        page.locator('#back-to-results').click()
+        expect(page.locator('#detail-view')).to_be_hidden()
+        assert page.evaluate('new URLSearchParams(location.search).get("cve")') is None
+
+        page.locator('#date-filter summary').click()
+        page.keyboard.press('Escape')
+        assert not page.locator('#date-filter').evaluate('(element) => element.open')
+        assert page.evaluate('document.activeElement.id') == 'date-summary'
+
+        page.locator('.wordmark').click()
+        expect(page.locator('#page-overview')).to_be_visible()
+        assert page.evaluate('new URLSearchParams(location.search).get("page")') is None
+        page.locator('#tab-center').click()
+        expect(page.locator('#page-center')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        expect(page.locator('#vendor-filter')).to_have_value(kev['vendor'])
+        expect(page.locator('#kev-only')).to_be_checked()
+        page.reload(wait_until='load')
+        expect(page.locator('#page-center')).to_be_visible()
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        expect(page.locator('#vendor-filter')).to_have_value(kev['vendor'])
+        expect(page.locator('#kev-only')).to_be_checked()
+        expect(page.locator('#page-size')).to_have_value('96')
+        row_count = page.locator(f'.record-row[data-cve-id="{kev_target["id"]}"]').count()
+        assert row_count > 0, page.evaluate('''(id) => ({
+          url: location.href,
+          filters: {
+            search: document.querySelector('#record-search').value,
+            vendor: document.querySelector('#vendor-filter').value,
+            kev: document.querySelector('#kev-only').checked,
+            severity: document.querySelector('.severity-tab[aria-pressed="true"]')?.dataset.severity,
+            from: document.querySelector('#date-from').value,
+            to: document.querySelector('#date-to').value,
+            size: document.querySelector('#page-size').value,
+          },
+          target: id,
+          resultStatus: document.querySelector('#result-status').textContent,
+          visibleIds: [...document.querySelectorAll('.record-row')].map((row) => row.dataset.cveId),
+        })''', kev_target['id'])
+
+        deep_link = f'{origin}/?page=center&cve={kev_target["id"].lower()}'
+        page.goto(deep_link, wait_until='load')
+        expect(page.locator('#detail-heading')).to_have_text(kev_target['id'], timeout=120_000)
+        expect(page).to_have_url(f'{origin}/?page=center&cve={kev_target["id"]}')
+
+        history_url = f'{origin}/?{urlencode({"page": "center", "search": advisory_term})}'
+        page.goto(history_url, wait_until='load')
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(page.locator('#record-search')).to_have_value(advisory_term)
+        history_length = page.evaluate('history.length')
+        page.locator('#tab-community').click()
+        expect(page.locator('#page-community')).to_be_visible()
+        page.locator('#tab-center').click()
+        expect(page.locator('#record-search')).to_have_value(advisory_term)
+        page.locator('#record-search').fill(kev['product'])
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        assert page.evaluate('history.length') == history_length + 2, 'Search edits added a history entry or page changes failed to do so.'
+        page.locator('#tab-community').click()
+        assert page.evaluate('history.length') == history_length + 3
+        page.go_back()
+        expect(page.locator('#page-center')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        page.go_back()
+        expect(page.locator('#page-community')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(advisory_term)
+        page.go_back()
+        expect(page.locator('#page-center')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(advisory_term)
+        page.go_forward()
+        expect(page.locator('#page-community')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(advisory_term)
+        page.go_forward()
+        expect(page.locator('#page-center')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        page.go_forward()
+        expect(page.locator('#page-community')).to_be_visible()
+        expect(page.locator('#record-search')).to_have_value(kev['product'])
+        return {
+            'advisory_search': advisory_term,
+            'kev_filter': True,
+            'explicit_vendor_filter': kev['vendor'],
+            'shareable_search_and_severity': True,
+            'date_and_page_size_restore': True,
+            'cve_detail_deep_link_case_normalization': True,
+            'cross_page_detail_preservation': True,
+            'overview_route_with_latent_detail_reloads_correctly': True,
+            'browser_back_forward_restores_routes_and_filters': True,
+            'filter_edits_replace_history_entry': True,
+            'escape_closes_date_filter_and_restores_focus': True,
+            'wordmark_returns_to_overview': True,
+        }
+    finally:
+        page.close()
+
+
 def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
     """Exercise the touch-only page gesture with real Chromium touch input."""
     issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
@@ -1067,7 +1272,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         expect_active('center')
         drag_from_edge('left')
         expect_active('community')
-        assert page.url == url, f'Swipe changed the established page URL/history model: {page.url}'
+        expect(page).to_have_url(f'{origin}/?page=community')
 
         # The last-page edge cannot wrap. The terminal's blank panel padding remains a valid swipe surface.
         page.wait_for_function("() => !document.querySelector('#terminal-info').hidden", timeout=15_000)
@@ -1080,7 +1285,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         expect_active('community')
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
         expect_active('center')
-        assert page.url == url, 'Community-to-Center swipe added or rewrote browser history.'
+        expect(page).to_have_url(f'{origin}/?page=center')
 
         # Search input and pagination controls keep their own horizontal/tap interaction.
         search_x, search_y = point('#record-search')
@@ -1142,7 +1347,11 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         page.evaluate('window.scrollTo(0, 0)')
         drag_from_edge('left')
         expect_active('community')
-        assert page.url == url
+        route_state = page.evaluate('''() => {
+          const params = new URLSearchParams(location.search);
+          return {page: params.get('page'), cve: params.get('cve'), size: params.get('size')};
+        }''')
+        assert route_state == {'page': 'community', 'cve': detail_id, 'size': '48'}, route_state
         page.wait_for_function("() => !document.querySelector('#terminal-info').hidden", timeout=15_000)
         terminal = page.locator('.terminal-screen').bounding_box()
         assert terminal is not None
@@ -1170,7 +1379,11 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         expect_active('center')
         expect(page.locator('#detail-view')).to_be_visible()
         expect(page.locator('#record-search')).to_have_value(detail_id)
-        assert page.url == url
+        route_state = page.evaluate('''() => {
+          const params = new URLSearchParams(location.search);
+          return {page: params.get('page'), cve: params.get('cve'), size: params.get('size')};
+        }''')
+        assert route_state == {'page': 'center', 'cve': detail_id, 'size': '48'}, route_state
         page.locator('#back-to-results').click()
         expect(page.locator('#record-search')).to_have_value(detail_id)
         expect(page.locator('.record-row')).to_have_count(1)
@@ -1258,7 +1471,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert desktop_page.locator('#tab-center').get_attribute('aria-selected') == 'true'
         assert desktop_page.locator('#tab-center').evaluate('element => element.tabIndex') == 0
         assert desktop_page.locator('#tab-overview').evaluate('element => element.tabIndex') == -1
-        assert desktop_page.url == url, 'A desktop drag changed the established URL/history model.'
+        expect(desktop_page).to_have_url(f'{origin}/?page=center')
 
         # A successful drag's generated click is contained; the next deliberate navigation-button click still works.
         desktop_page.locator('#tab-overview').click()
@@ -1588,6 +1801,9 @@ def main() -> None:
             search_release_metrics = center_search_release_audit(browser, origin, issues, expected_count, manifest)
             print('PASS: the notched CVE search rail shrinks, releases before feed content, and returns to the retained input without obscuring records.')
             print('Search release metrics:', json.dumps(search_release_metrics, sort_keys=True))
+            url_state_metrics = run_shareable_search_state_tests(browser, origin, issues, manifest)
+            print('PASS: shareable search/filter state, advisory lookup, explicit KEV/vendor filtering, route/deep-link restoration, wordmark navigation, and Escape focus behavior.')
+            print('URL state QA details:', json.dumps(url_state_metrics, sort_keys=True))
             page.locator('#tab-community').click()
             expect(page.locator('#page-community')).to_be_visible()
             page.locator('#idle-prompt:not([hidden])').wait_for(timeout=10_000)

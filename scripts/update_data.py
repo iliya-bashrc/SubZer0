@@ -1345,9 +1345,15 @@ def _commit_snapshot(staged_root: Path, output_dir: Path) -> None:
         os.replace(output_dir, backup)
     try:
         os.replace(staged_root, output_dir)
-    except BaseException:
+    except BaseException as swap_error:
         if had_previous and backup.exists() and not output_dir.exists():
-            os.replace(backup, output_dir)
+            try:
+                os.replace(backup, output_dir)
+            except Exception as restore_error:
+                raise FeedError(
+                    f"Snapshot swap failed ({swap_error!r}) and rollback failed ({restore_error!r}); "
+                    f"the previous snapshot is preserved at {backup} for recovery"
+                ) from restore_error
         raise
     if had_previous:
         shutil.rmtree(backup, ignore_errors=True)
