@@ -1163,6 +1163,7 @@
     else searchExpanded.removeAttribute('aria-hidden');
     searchInput.tabIndex = nextCompact ? -1 : 0;
     searchCapsule.setAttribute('aria-expanded', String(!nextCompact));
+    searchCapsule.tabIndex = nextCompact ? 0 : -1;
   }
 
   function scheduleSearchDockSync() {

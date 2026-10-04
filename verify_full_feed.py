@@ -222,6 +222,8 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
         standard_motion = page.evaluate('''() => {
           const expanded = getComputedStyle(document.querySelector('#search-expanded'));
           const capsule = getComputedStyle(document.querySelector('#search-capsule'));
+          const wrap = getComputedStyle(document.querySelector('.search-wrap'));
+          const shell = getComputedStyle(document.querySelector('.search-wrap'), '::before');
           const milliseconds = value => {
             const duration = parseFloat(value.trim());
             return value.trim().endsWith('ms') ? duration : duration * 1000;
@@ -229,11 +231,14 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
           return {
             expandedDurations: expanded.transitionDuration.split(',').map(milliseconds),
             capsuleDurations: capsule.transitionDuration.split(',').map(milliseconds),
+            wrapDurations: wrap.transitionDuration.split(',').map(milliseconds),
+            shellDurations: shell.transitionDuration.split(',').map(milliseconds),
             easing: expanded.transitionTimingFunction
           };
         }''')
-        assert max(standard_motion['expandedDurations']) == 200 and max(standard_motion['capsuleDurations']) == 200, standard_motion
-        assert '0.24, 1' in standard_motion['easing'], f'search collapse easing must settle without overshoot: {standard_motion}'
+        assert max(standard_motion['expandedDurations']) == 280 and max(standard_motion['capsuleDurations']) == 280, standard_motion
+        assert max(standard_motion['wrapDurations']) == 280 and max(standard_motion['shellDurations']) == 280, standard_motion
+        assert '0.4, 0, 0.2, 1' in standard_motion['easing'], f'search morph easing must remain smooth and non-overshooting: {standard_motion}'
         page.emulate_media(reduced_motion='reduce')
         page.locator('#page-size').select_option('96')
         page.locator('.severity-tab[data-severity="high"]').click()
@@ -299,13 +304,84 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                 searchLabel: input.getAttribute('aria-label'), searchTabIndex: input.tabIndex,
                 expandedHidden: expanded.getAttribute('aria-hidden'), expandedInert: expanded.inert,
                 capsuleVisibility: getComputedStyle(capsule).visibility,
-                capsuleExpanded: capsule.getAttribute('aria-expanded')
+                capsuleExpanded: capsule.getAttribute('aria-expanded'), capsuleTabIndex: capsule.tabIndex
               };
             }''')
             assert not full_state['compact'] and full_state['anchorTop'] >= full_state['headerBottom'] - 1, f'full search collapsed before its actual sticky threshold at {width}x{height}: {full_state}'
             assert full_state['searchTabIndex'] == 0 and not full_state['expandedInert'] and full_state['expandedHidden'] is None, full_state
-            assert full_state['capsuleVisibility'] == 'hidden' and full_state['capsuleExpanded'] == 'true' and full_state['searchLabel'], full_state
+            assert full_state['capsuleVisibility'] == 'hidden' and full_state['capsuleExpanded'] == 'true' and full_state['capsuleTabIndex'] == -1 and full_state['searchLabel'], full_state
             page.screenshot(path=str(SCREENSHOTS / f'center-search-full-{width}x{height}.png'), animations='disabled')
+
+            page.emulate_media(reduced_motion='no-preference')
+            morph_start = page.evaluate('''() => {
+              const wrap = document.querySelector('.search-wrap').getBoundingClientRect();
+              const expanded = document.querySelector('#search-expanded');
+              const capsule = document.querySelector('#search-capsule');
+              return {compact:document.querySelector('.center-dock').classList.contains('is-compact'), width:wrap.width, height:wrap.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity)};
+            }''')
+            # Pin CSS transition timelines at a fixed point instead of trusting elapsed wall time on a busy CI runner.
+            morph_mid = page.evaluate('''() => new Promise(resolve => {
+              const dock = document.querySelector('.center-dock');
+              const sample = () => {
+                if (!dock.classList.contains('is-compact')) { requestAnimationFrame(sample); return; }
+                const wrap = document.querySelector('.search-wrap');
+                const expanded = document.querySelector('#search-expanded');
+                const capsule = document.querySelector('#search-capsule');
+                wrap.getBoundingClientRect();
+                const transitions = document.getAnimations({subtree:true}).filter(animation => {
+                  const target = animation.effect?.target;
+                  return animation.playState === 'running' && target && dock.contains(target);
+                });
+                transitions.forEach(animation => { animation.pause(); animation.currentTime = 70; });
+                requestAnimationFrame(() => {
+                  const rect = wrap.getBoundingClientRect();
+                  resolve({compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), animationCount:transitions.length});
+                });
+              };
+              window.scrollBy({top:52,behavior:'instant'});
+              requestAnimationFrame(sample);
+            })''')
+            compact_width = min(216, width - 26)
+            assert not morph_start['compact'] and morph_start['width'] > compact_width, f'expanded shell did not start at full width at {width}x{height}: {morph_start}'
+            assert morph_mid['animationCount'] > 0, f'no live CSS transitions were available for the midpoint sample at {width}x{height}: {morph_mid}'
+            assert morph_mid['compact'] and compact_width < morph_mid['width'] < morph_start['width'], f'search shell did not interpolate continuously while collapsing at {width}x{height}: start={morph_start}, mid={morph_mid}'
+            assert 44 < morph_mid['height'] < morph_start['height'], f'search shell height did not morph between dock and capsule at {width}x{height}: start={morph_start}, mid={morph_mid}'
+            assert 0 < morph_mid['expandedOpacity'] < 1 and 0 < morph_mid['capsuleOpacity'] < 1, f'search contents must crossfade during the shared-shell morph at {width}x{height}: start={morph_start}, mid={morph_mid}'
+
+            morph_reversed = page.evaluate('''() => new Promise(resolve => {
+              const dock = document.querySelector('.center-dock');
+              const sample = () => {
+                if (dock.classList.contains('is-compact')) { requestAnimationFrame(sample); return; }
+                const wrap = document.querySelector('.search-wrap');
+                const expanded = document.querySelector('#search-expanded');
+                const capsule = document.querySelector('#search-capsule');
+                wrap.getBoundingClientRect();
+                const transitions = document.getAnimations({subtree:true}).filter(animation => {
+                  const target = animation.effect?.target;
+                  return animation.playState === 'running' && target && dock.contains(target);
+                });
+                transitions.forEach(animation => { animation.pause(); animation.currentTime = 16; });
+                requestAnimationFrame(() => {
+                  const rect = wrap.getBoundingClientRect();
+                  const result = {compact:dock.classList.contains('is-compact'), width:rect.width, height:rect.height, expandedOpacity:Number(getComputedStyle(expanded).opacity), capsuleOpacity:Number(getComputedStyle(capsule).opacity), animationCount:transitions.length};
+                  transitions.forEach(animation => animation.play());
+                  resolve(result);
+                });
+              };
+              window.scrollBy({top:-110,behavior:'instant'});
+              requestAnimationFrame(sample);
+            })''')
+            assert morph_reversed['animationCount'] > 0 and not morph_reversed['compact'] and morph_reversed['width'] > morph_mid['width'] and morph_reversed['width'] < morph_start['width'] and morph_reversed['height'] > morph_mid['height'] and morph_reversed['height'] < morph_start['height'] and morph_reversed['expandedOpacity'] > morph_mid['expandedOpacity'] and morph_reversed['capsuleOpacity'] < morph_mid['capsuleOpacity'], f'search shell did not reverse continuously when scrolling up mid-transition at {width}x{height}: mid={morph_mid}, reverse={morph_reversed}'
+            page.wait_for_timeout(300)
+            page.evaluate('''() => {
+              const anchor = document.querySelector('.center-search-anchor').getBoundingClientRect();
+              const header = document.querySelector('.site-header').getBoundingClientRect();
+              window.scrollTo({top: Math.max(0, window.scrollY + anchor.top - header.bottom - 2), behavior: 'instant'});
+            }''')
+            page.wait_for_timeout(35)
+            page.emulate_media(reduced_motion='reduce')
+            transition_probe = {'expanded': morph_start, 'collapsing': morph_mid, 'reversing': morph_reversed}
+
             page.evaluate('window.scrollBy({top: 52, behavior: "instant"})')
             expect(page.locator('#search-capsule')).to_be_visible(timeout=5_000)
             page.evaluate('window.scrollTo({top: 2000, behavior: "instant"})')
@@ -335,6 +411,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const search = document.querySelector('#record-search');
               const expanded = document.querySelector('#search-expanded');
               const capsule = document.querySelector('#search-capsule');
+              const searchShell = getComputedStyle(document.querySelector('.search-wrap'), '::before');
               const filters = document.querySelector('#filter-controls');
               const dockRect = dock.getBoundingClientRect();
               const visibleRows = [...document.querySelectorAll('.record-row')].map(row => ({
@@ -344,7 +421,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               const capsuleRect = rect(capsule);
               const hit = document.elementFromPoint(capsuleRect.left + capsuleRect.width / 2, capsuleRect.top + capsuleRect.height / 2);
               const capsuleStyle = getComputedStyle(capsule);
-              const reducedNodes = [dock, expanded, capsule];
+              const reducedNodes = [dock, document.querySelector('.search-wrap'), expanded, capsule];
               return {
                 scrollY, viewportWidth:innerWidth, documentWidth:document.documentElement.scrollWidth,
                 header:rect(header), dock:rect(dock), capsule:capsuleRect, filters:rect(filters),
@@ -360,12 +437,14 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
                 navHeight:Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')),
                 reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,
                 scrollBehavior:getComputedStyle(document.documentElement).scrollBehavior,
-                reducedTransitionsInstant:reducedNodes.every(node => getComputedStyle(node).transitionDuration.split(',').every(value => parseFloat(value.trim()) <= 0.01)),
+                reducedTransitionsInstant:reducedNodes.every(node => getComputedStyle(node).transitionDuration.split(',').every(value => parseFloat(value.trim()) <= 0.01) && getComputedStyle(node).transitionDelay.split(',').every(value => parseFloat(value.trim()) <= 0.01)) && searchShell.transitionDuration.split(',').every(value => parseFloat(value.trim()) <= 0.01) && searchShell.transitionDelay.split(',').every(value => parseFloat(value.trim()) <= 0.01),
                 compact:dock.classList.contains('is-compact'),
                 capsuleVisible:capsuleStyle.visibility === 'visible' && capsuleStyle.opacity === '1',
                 capsuleReceivesHit:capsule.contains(hit), capsuleAriaExpanded:capsule.getAttribute('aria-expanded'),
                 capsuleAriaControls:capsule.getAttribute('aria-controls'), capsuleBackground:capsuleStyle.backgroundColor,
-                capsuleBoxShadow:capsuleStyle.boxShadow, capsuleType:capsule.type,
+                capsuleTabIndex:capsule.tabIndex,
+                capsuleBoxShadow:capsuleStyle.boxShadow, searchShellBackground:searchShell.backgroundColor,
+                searchShellBoxShadow:searchShell.boxShadow, capsuleType:capsule.type,
                 capsuleLabel:capsule.getAttribute('aria-label'),
                 searchEnabled:!search.disabled, searchConnected:search.isConnected,
                 searchTabIndex:search.tabIndex, searchInert:expanded.inert, searchAriaHidden:expanded.getAttribute('aria-hidden'),
@@ -390,7 +469,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert all(metrics[key] >= 0.999 for key in ('dockAlpha', 'filterAlpha')), f'CVE search surfaces let record text bleed through at {width}x{height}: {metrics}'
             assert metrics['capsuleVisible'] and metrics['capsuleReceivesHit'] and metrics['capsuleAriaExpanded'] == 'false' and metrics['capsuleAriaControls'] == 'search-expanded', f'compact search trigger is not visible and accessible at {width}x{height}: {metrics}'
             assert metrics['capsuleType'] == 'button' and metrics['capsuleLabel'] == 'Open CVE search', f'compact search trigger must be a named native button at {width}x{height}: {metrics}'
-            assert metrics['capsuleBackground'] in ('rgb(16, 23, 27)', 'rgb(20, 29, 33)') and metrics['capsuleBoxShadow'] == 'none', f'collapsed capsule should stay quiet without a glow at {width}x{height}: {metrics}'
+            assert metrics['searchShellBackground'] == 'rgb(16, 23, 27)' and metrics['searchShellBoxShadow'] == 'none' and metrics['capsuleBoxShadow'] == 'none', f'collapsed shell should stay quiet without a glow at {width}x{height}: {metrics}'
             assert metrics['searchEnabled'] and metrics['searchConnected'] and metrics['searchTabIndex'] == -1 and metrics['searchInert'] and metrics['searchAriaHidden'] == 'true' and metrics['searchLabel'], f'original search field must remain in the DOM and safely hidden from navigation while compact at {width}x{height}: {metrics}'
             assert metrics['documentWidth'] == metrics['viewportWidth'] == width, f'horizontal overflow at {width}x{height}: {metrics}'
             assert metrics['reducedMotion'] and metrics['scrollBehavior'] == 'auto' and metrics['reducedTransitionsInstant'], f'reduced-motion state transition must be instant at {width}x{height}: {metrics}'
@@ -427,15 +506,21 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             assert page.locator('#record-search').input_value() == 'CVE-'
             assert page.locator('#result-status').inner_text() == broad_status
             expect(page.locator('.record-row')).to_have_count(min(96, manifest['totals']['high']))
+            page.wait_for_selector('.center-dock.is-compact', timeout=5_000)
             assert page.locator('#page-size').input_value() == '96'
             assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
             assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
             assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
-            capsule.focus()
+            assert metrics['capsuleTabIndex'] == 0, f'compact search trigger must stay keyboard-focusable at {width}x{height}: {metrics}'
+            if is_touch:
+                capsule.tap()
+            else:
+                capsule.click()
             expect(page.locator('#record-search')).to_be_focused()
             assert page.locator('#record-search').input_value() == 'CVE-'
             if not is_touch and width == 1440 and height == 900:
                 page.locator('#record-search').evaluate('(input) => input.blur()')
+                page.wait_for_selector('.center-dock.is-compact', timeout=5_000)
                 expect(capsule).to_be_visible(timeout=5_000)
                 page.locator('.severity-tab[data-severity="unrated"]').evaluate('(button) => button.focus({preventScroll: true})')
                 page.keyboard.press('Tab')
@@ -445,6 +530,13 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
             expect(page.locator('.record-row')).to_have_count(1)
             expect(page.locator('.record-row').first).to_have_attribute('data-cve-id', search_target)
             assert page.locator('#search-expanded').get_attribute('aria-hidden') is None
+            if not is_touch and width == 1440 and height == 900:
+                page.locator('#tab-overview').click()
+                expect(page.locator('#page-overview')).to_be_visible()
+                page.locator('#tab-center').click()
+                expect(page.locator('#page-center')).to_be_visible()
+                expect(page.locator('#record-search')).to_have_value(search_target)
+                expect(page.locator('.record-row')).to_have_count(1)
             assert page.locator('#page-size').input_value() == '96'
             assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
             assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
@@ -507,7 +599,7 @@ def center_sticky_surface_audit(browser, origin: str, issues: dict, expected_cou
               return {target:{top:target.top,bottom:target.bottom},dock:{top:dock.top,bottom:dock.bottom},scrollY};
             }''')
             assert focus_layout['target']['top'] >= focus_layout['dock']['bottom'] - 1, f'keyboard focus moved behind the sticky search at {width}x{height}: {focus_layout}'
-            results.append({'viewport': [width, height], 'touch': is_touch, **metrics})
+            results.append({'viewport': [width, height], 'touch': is_touch, 'transitionProbe': transition_probe, **metrics})
             page.evaluate('document.activeElement.blur()')
         page.close()
     return results
