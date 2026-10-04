@@ -25,12 +25,10 @@
   const tabs = $$('.nav-tab');
   const pages = new Map($$('.page').map((page) => [page.id.replace('page-', ''), page]));
   const searchInput = $('#record-search');
-  const searchExpanded = $('#search-expanded');
-  const searchCapsule = $('#search-capsule');
-  const searchCapsuleLabel = $('#search-capsule-label');
   const searchAnchor = $('.center-search-anchor');
   const siteHeader = $('.site-header');
   const centerPage = $('#page-center');
+  const headerSearchReturn = $('#header-search-return');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
   const snapshotLoaderStatus = $('#snapshot-loader-status');
@@ -984,7 +982,6 @@
     dateTo.value = appliedTo;
     dateFilter.open = false;
     searchInput.value = '';
-    syncSearchCapsule();
     pageIndex = 0;
     updateDateSummary(appliedFrom, appliedTo);
     $$('.severity-tab').forEach((button) => {
@@ -1009,6 +1006,8 @@
     lastScrollY = window.scrollY;
     severityDistribution.hidden = true;
     centerDock.hidden = true;
+    centerDock.classList.remove('is-released');
+    headerSearchReturn.hidden = true;
     feedView.hidden = true;
     detailView.hidden = false;
     detailContent.replaceChildren();
@@ -1141,24 +1140,21 @@
     scheduleSearchDockSync();
   }
 
-  function syncSearchCapsule() {
-    const query = searchInput.value.trim();
-    searchCapsuleLabel.textContent = query || 'Search CVEs';
-    searchCapsule.setAttribute('aria-label', query
-      ? `Edit CVE search. Current query: ${query}`
-      : 'Open CVE search');
-    searchCapsule.title = query ? `Current query: ${query}` : 'Open CVE search';
-  }
-
   function setSearchDockCompact(compact) {
     const nextCompact = Boolean(compact && document.activeElement !== searchInput);
     centerDock.classList.toggle('is-compact', nextCompact);
-    searchExpanded.toggleAttribute('inert', nextCompact);
-    if (nextCompact) searchExpanded.setAttribute('aria-hidden', 'true');
-    else searchExpanded.removeAttribute('aria-hidden');
-    searchInput.tabIndex = nextCompact ? -1 : 0;
-    searchCapsule.setAttribute('aria-expanded', String(!nextCompact));
-    searchCapsule.tabIndex = nextCompact ? 0 : -1;
+  }
+
+  function returnToSearch() {
+    if (activePage !== 'center' || centerPage.hidden || !detailView.hidden) return;
+    centerDock.classList.remove('is-released');
+    headerSearchReturn.hidden = true;
+    const headerBottom = siteHeader.getBoundingClientRect().bottom;
+    const anchorTop = searchAnchor.getBoundingClientRect().top;
+    const top = Math.max(0, window.scrollY + anchorTop - headerBottom - 8);
+    window.scrollTo({ top, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    searchInput.focus({ preventScroll: true });
+    scheduleSearchDockSync();
   }
 
   function scheduleSearchDockSync() {
@@ -1166,20 +1162,32 @@
     searchDockFrame = window.requestAnimationFrame(() => {
       searchDockFrame = 0;
       const centerIsActive = activePage === 'center' && !centerPage.hidden && !centerDock.hidden;
+      if (!centerIsActive) {
+        centerDock.classList.remove('is-released');
+        headerSearchReturn.hidden = true;
+        setSearchDockCompact(false);
+        return;
+      }
       const headerBottom = siteHeader.getBoundingClientRect().bottom;
       const searchTop = searchAnchor.getBoundingClientRect().top;
       const alreadyCompact = centerDock.classList.contains('is-compact');
       // Keep native scroll anchoring from flapping the dock across its threshold.
       const scrollHysteresis = 48;
       const collapseThreshold = headerBottom + (alreadyCompact ? scrollHysteresis : -scrollHysteresis);
-      setSearchDockCompact(centerIsActive && searchTop < collapseThreshold);
+      const shouldCompact = searchTop < collapseThreshold && document.activeElement !== searchInput;
+      const compactDockHeight = Number.parseFloat(getComputedStyle(centerDock).getPropertyValue('--center-dock-compact-height'))
+        || centerDock.getBoundingClientRect().height;
+      const releaseBoundary = headerBottom + compactDockHeight;
+      const feedTop = feedView.getBoundingClientRect().top;
+      const alreadyReleased = centerDock.classList.contains('is-released');
+      const searchReentryBoundary = headerBottom + 4;
+      const shouldRelease = alreadyReleased
+        ? searchTop < searchReentryBoundary
+        : feedTop <= releaseBoundary;
+      centerDock.classList.toggle('is-released', shouldRelease);
+      headerSearchReturn.hidden = !shouldRelease;
+      setSearchDockCompact(shouldCompact);
     });
-  }
-
-  function revealSearchFromCapsule() {
-    if (!centerDock.classList.contains('is-compact')) return;
-    setSearchDockCompact(false);
-    searchInput.focus({ preventScroll: true });
   }
 
   function switchPage(name, focusPage = false, options = {}) {
@@ -1668,10 +1676,14 @@
   function bind() {
     window.addEventListener('scroll', scheduleSearchDockSync, { passive: true });
     window.addEventListener('resize', scheduleSearchDockSync, { passive: true });
-    searchInput.addEventListener('focus', () => setSearchDockCompact(false));
+    searchInput.addEventListener('focus', () => {
+      if (centerDock.classList.contains('is-released')) {
+        centerDock.classList.remove('is-released');
+        headerSearchReturn.hidden = true;
+      }
+      setSearchDockCompact(false);
+    });
     searchInput.addEventListener('blur', scheduleSearchDockSync);
-    searchCapsule.addEventListener('focus', revealSearchFromCapsule);
-    searchCapsule.addEventListener('click', revealSearchFromCapsule);
     scheduleSearchDockSync();
 
     tabs.forEach((tab, index) => {
@@ -1684,14 +1696,19 @@
       });
     });
     $('#explore-cves').addEventListener('click', () => switchPage('center'));
+    headerSearchReturn.addEventListener('click', returnToSearch);
     $('#back-to-results').addEventListener('click', backToResults);
     $('#telegram-cta').addEventListener('click', handleTelegramClick);
     bindSwipeNavigation();
 
     searchInput.addEventListener('input', () => {
-      syncSearchCapsule();
       pageIndex = 0;
       renderRecords();
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      searchInput.blur();
     });
 
     $$('.severity-tab').forEach((button) => {
@@ -1750,7 +1767,7 @@
       const typing = target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
       if (event.key === '/' && !typing && activePage === 'center' && detailView.hidden) {
         event.preventDefault();
-        searchInput.focus();
+        returnToSearch();
       }
       if (event.key === 'Escape' && !detailView.hidden) backToResults();
     });
@@ -1779,7 +1796,6 @@
 
     const initialPage = new URLSearchParams(window.location.search).get('page');
     if (requestedCveId) searchInput.value = requestedCveId;
-    syncSearchCapsule();
     if (initialPage === 'center' || requestedCveId) switchPage('center');
     else if (initialPage === 'community') switchPage('community');
   }

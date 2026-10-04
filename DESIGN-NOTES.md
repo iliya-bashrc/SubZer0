@@ -1,8 +1,8 @@
 # CVE center design and implementation notes
 
-The established SubZer0 black-metal surface remains the base. The CVE center in this independent copy adds a compact first-arrival archive: the full snapshot and KEV totals, a manifest-driven stale-EPSS notice, severity-count tabs, an optional search field, optional activity-date filtering, a user-sized page, and bounded pagination. The first result page is already populated.
+The established SubZer0 black-metal surface remains the base. The CVE center in this independent copy adds a compact first-arrival archive: the full snapshot and KEV totals, a manifest-driven stale-EPSS notice, severity-count tabs, a live CVE search field, optional activity-date filtering, a user-sized page, and bounded pagination. The first result page is already populated.
 
-`feed.css` is loaded after the inherited `styles.css` and `severity-effects.css`; its layout rules are scoped to the center/page record components. The captured shards are fetched only after the user opens CVE center, avoiding the full local parse cost on the unchanged Overview and Community. The old shared stylesheets, Overview section, page navigation and Community markup were not changed. The regression script compares the preserved sections and styles to the approved preview.
+`feed.css` is loaded after the inherited `styles.css` and `severity-effects.css`; its layout rules are scoped to the center/page record components. The captured shards are fetched only after the user opens CVE center, avoiding the full local parse cost on the unchanged Overview and Community. Overview content and Community markup/behavior remain unchanged. The tab controls keep their existing roles and behavior; their wrapper now also hosts the compact Search return action, with only the necessary responsive header styling added to `styles.css`. The regression script continues to compare the preserved sections and styles to the approved preview.
 
 ## Record browsing
 
@@ -18,8 +18,8 @@ The black-metal palette maps **Critical → red, High → orange, Medium → gol
 
 ## Accessibility and mobile
 
-- Search has an accessible name, `/` shortcut and a visible focus indication.
-- Native search, date, severity, select and button controls remain usable by keyboard and touch. Tab navigation retains arrow/Home/End movement; `Escape` closes details, and Back returns focus to the opening record.
+- Search has an accessible name, `/` shortcut, a visible focus indication, and a header return action while the field is offscreen.
+- Native search, date, severity, select and button controls remain usable by keyboard and touch. Tab navigation retains arrow/Home/End movement; `Escape` blurs Search without clearing its query or closes details, and Back returns focus to the opening record.
 - Detail state uses headings, definitions and lists; each score/catalog/advisory source is attributed separately.
 - Empty results announce a result status and offer Clear filters. Date-form validation is inline and preserves an explicit From/To ordering.
 - Main interaction targets are at least 44 CSS pixels on the Android-like viewports used for QA. Long descriptions and labels wrap rather than creating horizontal overflow.
