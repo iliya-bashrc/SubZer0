@@ -79,33 +79,62 @@
   padding: 8px 0;
   border-bottom-color: #334147;
   background: #0c1216;
-  transition: padding 200ms cubic-bezier(.2,.68,.24,1);
+  transition: padding 280ms cubic-bezier(.4,0,.2,1);
 }
 .search-label { margin-bottom: 5px; }
-.search-field-wrap input { height: 46px; }
+.search-wrap {
+  position: relative;
+  width: 100%;
+  height: 70px;
+  margin-inline: auto;
+  transition: width 280ms cubic-bezier(.4,0,.2,1), height 280ms cubic-bezier(.4,0,.2,1);
+}
+.search-wrap::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 21px;
+  right: 0;
+  left: 0;
+  height: 46px;
+  border: 1px solid #46565d;
+  border-radius: 4px;
+  background: #10181c;
+  pointer-events: none;
+  transition: top 280ms cubic-bezier(.4,0,.2,1), height 280ms cubic-bezier(.4,0,.2,1), border-radius 280ms cubic-bezier(.4,0,.2,1), border-color 180ms ease, background-color 280ms ease;
+}
+.search-wrap:focus-within::before { border-color: #85bfd2; box-shadow: 0 0 0 3px #4b97b31f; }
+.search-field-wrap { position: relative; z-index: 1; }
+.search-field-wrap input { height: 46px; border: 1px solid transparent; background: transparent; }
+.search-field-wrap input:focus { border-color: transparent; box-shadow: none; }
 .center-search-anchor { height: 0; }
 .search-expanded {
+  position: relative;
+  z-index: 1;
   max-height: 76px;
   overflow: hidden;
   opacity: 1;
   transform: translateY(0);
-  transition: max-height 200ms cubic-bezier(.2,.68,.24,1), opacity 180ms ease, transform 200ms cubic-bezier(.2,.68,.24,1);
+  transition: max-height 280ms cubic-bezier(.4,0,.2,1), opacity 200ms cubic-bezier(.4,0,.2,1), transform 280ms cubic-bezier(.4,0,.2,1);
 }
 .search-capsule {
   position: absolute;
   top: 0;
-  left: 50%;
-  width: min(216px, 100%);
-  min-height: 44px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 0 15px;
-  transform: translate(-50%, -2px);
-  border: 1px solid #415159;
-  border-radius: 12px / 50%;
-  background: #10171b;
+  transform: translateY(2px) scale(.99);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
   color: #aebbc0;
   font-size: 11px;
   font-weight: 580;
@@ -114,21 +143,21 @@
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 180ms ease, transform 200ms cubic-bezier(.2,.68,.24,1), border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+  transition: opacity 200ms cubic-bezier(.4,0,.2,1), transform 280ms cubic-bezier(.4,0,.2,1), color 160ms ease, visibility 0s linear 200ms;
 }
-.search-capsule:hover { border-color: #5a6a70; background: #141d21; color: #d8e2e5; }
+.search-capsule:hover { color: #d8e2e5; }
+.search-capsule:focus-visible { outline: 2px solid #85bfd2; outline-offset: 2px; }
 .search-capsule-icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .center-dock.is-compact { min-height: 53px; padding-block: 4px; }
-.center-dock.is-compact .search-wrap { position: static; }
-.center-dock.is-compact .search-expanded { max-height: 0; opacity: 0; transform: translateY(-2px); pointer-events: none; }
+.center-dock.is-compact .search-wrap { width: min(216px, calc(100vw - 26px)); height: 44px; }
+.center-dock.is-compact .search-wrap::before { top: 0; height: 44px; border-radius: 14px / 50%; border-color: #415159; background: #10171b; }
+.center-dock.is-compact .search-expanded { max-height: 0; opacity: 0; transform: translateY(-3px); pointer-events: none; }
 .center-dock.is-compact .search-capsule {
-  position: absolute;
-  top: 4px;
-  left: 50%;
-  transform: translateX(-50%);
   visibility: visible;
   opacity: 1;
+  transform: translateY(0) scale(1);
   pointer-events: auto;
+  transition-delay: 0s;
 }
 .filter-controls {
   display: flex;
@@ -442,7 +471,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .center-dock, .search-expanded, .search-capsule { transition-duration: .01ms !important; }
+  .center-dock, .search-wrap, .search-wrap::before, .search-expanded, .search-capsule { transition-duration: .01ms !important; transition-delay: 0s !important; }
   .snapshot-loader__status::before { animation: none; }
   .snapshot-loader__progress::-webkit-progress-value { transition: none; }
   .record-fleck, .record-row.effect-visible .record-fleck {
