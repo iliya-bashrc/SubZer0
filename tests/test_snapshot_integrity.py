@@ -138,6 +138,42 @@ class SnapshotIntegrityTests(unittest.TestCase):
         self.assertEqual(report["records"], 1)
         self.assertEqual(validate_snapshot(legacy_root)["records"], 1)
 
+    def test_overview_v1_migrates_to_v2_without_refreshing_records_or_epss(self):
+        legacy_root = Path(self.temporary.name) / "overview-v1"
+        shutil.copytree(self.root, legacy_root)
+        manifest_path = legacy_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        original_generated_at = manifest["generated_at"]
+        original_epss = (legacy_root / "data" / "epss.json").read_bytes()
+        original_shards = {
+            item["path"]: (legacy_root / item["path"]).read_bytes()
+            for item in manifest["days"]
+        }
+
+        overview_path = legacy_root / "data" / "overview.json"
+        overview = json.loads(overview_path.read_text(encoding="utf-8"))
+        old_fields = {"id", "title", "sev", "score", "window_date", "activity_at", "date_basis", "sources"}
+        overview["schema_version"] = 1
+        overview["records"] = [{key: value for key, value in record.items() if key in old_fields} for record in overview["records"]]
+        old_bytes = feed._json_bytes(overview)
+        overview_path.write_bytes(old_bytes)
+        manifest["overview"].pop("schema_version", None)
+        manifest["overview"]["bytes"] = len(old_bytes)
+        manifest["overview"]["sha256"] = hashlib.sha256(old_bytes).hexdigest()
+        manifest_path.write_bytes(feed._json_bytes(manifest))
+
+        report = migrate_snapshot(legacy_root)
+        migrated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        migrated_overview = json.loads(overview_path.read_text(encoding="utf-8"))
+        self.assertEqual(migrated_manifest["generated_at"], original_generated_at)
+        self.assertEqual(migrated_manifest["overview"]["schema_version"], 2)
+        self.assertEqual(migrated_overview["schema_version"], 2)
+        self.assertEqual(migrated_overview["records"][0]["epss"], {"score": 0.2, "percentile": 0.95})
+        self.assertEqual((legacy_root / "data" / "epss.json").read_bytes(), original_epss)
+        self.assertEqual({path: (legacy_root / path).read_bytes() for path in original_shards}, original_shards)
+        self.assertEqual(report["records"], 1)
+        self.assertEqual(validate_snapshot(legacy_root)["records"], 1)
+
     def test_real_checked_in_full_snapshot_validates(self):
         snapshot_root = ROOT / "snapshot"
         manifest = json.loads((snapshot_root / "manifest.json").read_text(encoding="utf-8"))

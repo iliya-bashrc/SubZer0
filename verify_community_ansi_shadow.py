@@ -552,11 +552,24 @@ def main() -> None:
             results['responsive_layouts'] = layout_results
 
             if not community_only:
-                regressions = []
-                for width, height in ((1440, 1000), (390, 844), (320, 740)):
-                    for page_name in ('overview', 'center', 'community'):
-                        regressions.append(screenshot_comparison(browser, base_url, preview_url, page_name, width, height, f'regression-{page_name}-{width}'))
-                results['page_pixel_regressions'] = {'zero_changed_pixels_outside_expected_masks_with_one_rgb_level_tolerance': True, 'renders': regressions, 'overview_action_and_center_feed': 'Explore CVEs works; CVE Center loaded the first 24 captured records.'}
+                overview = browser.new_page(viewport={'width': 1440, 'height': 900}, device_scale_factor=1)
+                overview_errors: list[str] = []
+                watch_errors(overview, overview_errors)
+                overview.emulate_media(reduced_motion='reduce')
+                load(overview, f'{preview_url}/?page=overview')
+                overview.locator('#latest-list .latest-preview-row').first.wait_for(state='visible', timeout=30000)
+                explore_action = overview.get_by_role('button', name='Explore records')
+                assert explore_action.is_visible(), 'The redesigned Overview Explore action is not visible on desktop.'
+                explore_action.click()
+                overview.locator('#record-list .record-row').first.wait_for(state='visible', timeout=30000)
+                assert overview.locator('#tab-center').get_attribute('aria-selected') == 'true'
+                results['overview_to_explore'] = {'cta': 'Explore records', 'verified_rows_loaded': overview.locator('#record-list .record-row').count()}
+                assert_no_page_errors(overview, overview_errors)
+                overview.close()
+                results['whole_site_pixel_regression'] = {
+                    'status': 'Not applicable after the approved full redesign of Overview, Latest, Explore and global navigation; the redesigned Overview-to-Explore route is tested semantically above.',
+                    'community_terminal': 'Exact banner/content, geometry, responsive layouts, keyboard controls and locally intercepted actions remain covered below.'
+                }
 
             # The actions and timing are browser-driven, while both Telegram destinations are intercepted locally.
             results['actions'] = test_actions(browser, preview_url)

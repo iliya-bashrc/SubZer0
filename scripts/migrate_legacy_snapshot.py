@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Upgrade an older checked-in snapshot's metadata without refreshing its sources.
+"""Upgrade checked-in snapshot metadata without refreshing its sources.
 
 This migration preserves every original daily shard and the EPSS sidecar byte for
-byte. It adds the bounded Overview sidecar and exact byte/hash metadata required
-by the current app, removes stale pointers to unbundled legacy outputs, validates
-the complete staged snapshot, then swaps it into place atomically. It never
-changes generated_at or claims to fetch/refresh upstream data.
+byte. It creates or upgrades the bounded Overview sidecar and exact byte/hash
+metadata required by the current app, removes stale pointers to unbundled legacy
+outputs, validates the complete staged snapshot, then swaps it into place
+atomically. It never changes generated_at or fetches/refreshes upstream data.
 """
 from __future__ import annotations
 
@@ -37,11 +37,26 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
     manifest = verifier._loads(manifest_raw, "manifest.json")
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 2 or manifest.get("complete") is not True:
         raise producer.FeedError("Only complete schema-v2 snapshots can be migrated")
-    if manifest.get("overview"):
-        try:
-            return verifier.validate_snapshot(root)
-        except verifier.SnapshotValidationError as exc:
-            raise producer.FeedError(f"Snapshot already advertises an Overview sidecar but fails current validation: {exc}") from exc
+    upgrade_existing_overview = False
+    overview_meta = manifest.get("overview")
+    if overview_meta is not None:
+        if not isinstance(overview_meta, dict) or overview_meta.get("path") != "data/overview.json":
+            raise producer.FeedError("Existing Overview metadata has an unexpected path or shape")
+        old_overview_raw = verifier._contained_bytes(root, "data/overview.json", verifier.MAX_OVERVIEW_BYTES)
+        if "bytes" in overview_meta and overview_meta["bytes"] != len(old_overview_raw):
+            raise producer.FeedError("Existing Overview sidecar byte-count mismatch")
+        if overview_meta.get("sha256") and hashlib.sha256(old_overview_raw).hexdigest().lower() != str(overview_meta["sha256"]).lower():
+            raise producer.FeedError("Existing Overview sidecar SHA-256 mismatch")
+        old_overview = verifier._loads(old_overview_raw, "data/overview.json")
+        old_schema = old_overview.get("schema_version") if isinstance(old_overview, dict) else None
+        if old_schema == producer.OVERVIEW_SCHEMA_VERSION and overview_meta.get("schema_version") == producer.OVERVIEW_SCHEMA_VERSION:
+            try:
+                return verifier.validate_snapshot(root)
+            except verifier.SnapshotValidationError as exc:
+                raise producer.FeedError(f"Snapshot already advertises a current Overview sidecar but fails validation: {exc}") from exc
+        if old_schema != 1 or overview_meta.get("schema_version") not in (None, 1):
+            raise producer.FeedError("Existing Overview sidecar is neither the supported legacy schema nor the current schema")
+        upgrade_existing_overview = True
 
     days = manifest.get("days")
     epss_meta = manifest.get("epss")
@@ -49,6 +64,8 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
         raise producer.FeedError("Legacy manifest must declare daily shards and the standard EPSS sidecar")
 
     expected_paths: set[str] = {"data/epss.json"}
+    if upgrade_existing_overview:
+        expected_paths.add("data/overview.json")
     for summary in days:
         if not isinstance(summary, dict):
             raise producer.FeedError("Legacy manifest contains a malformed day entry")
@@ -98,12 +115,13 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
     generated_at = producer.parse_datetime(manifest.get("generated_at"))
     if generated_at is None:
         raise producer.FeedError("Legacy manifest generated_at is invalid")
-    overview_raw = producer._json_bytes(producer.build_overview(records, generated_at))
+    overview_raw = producer._json_bytes(producer.build_overview(records, generated_at, epss_payload))
     manifest["overview"] = {
+        "schema_version": producer.OVERVIEW_SCHEMA_VERSION,
         "path": "data/overview.json",
         "bytes": len(overview_raw),
         "sha256": hashlib.sha256(overview_raw).hexdigest(),
-        "count": min(3, len(records)),
+        "count": len(producer.build_overview(records, generated_at, epss_payload)["records"]),
     }
     manifest.pop("facets", None)
     manifest.pop("history", None)

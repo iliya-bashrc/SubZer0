@@ -1,96 +1,67 @@
-# SubZer0 review-branch implementation map
+# SubZer0 redesign implementation map
 
-**Purpose:** record the verified pre-edit architecture, baseline, and first implementation slice for owner review. This file and all following work are confined to `review/overview-intelligence-20261005`; nothing here changes or deploys `main`.
-
-## Branch and production boundary
+SubZer0 remains a dependency-free static application: GitHub Actions builds and validates the snapshot; GitHub Pages serves the application and JSON; browser code never calls NVD, GitHub Advisories, CISA or FIRST directly.
 
 - Repository: `iliya-bashrc/SubZer0`
-- Base: `main` / `origin/main` at `7dcb0a96e920f732211a253d303419c8f465bde0` (PR #23 merge commit)
-- Review branch: `review/overview-intelligence-20261005`, created directly from that exact SHA
-- PR #23 merged at `2026-10-04T22:33:58Z`; its security checks and Pages build/deployment both completed successfully on the supplied SHA.
-- GitHub Pages is configured as legacy branch publishing from `main` at `/`, with deployment status `built`. This work will not edit the Pages source/configuration, run a deployment, merge a PR, or publish to production.
+- Existing review branch: `review/overview-intelligence-20261005`
+- Pull request: [#24](https://github.com/iliya-bashrc/SubZer0/pull/24), based on production `main` at `7dcb0a96e920f732211a253d303419c8f465bde0` before this update.
+- The redesign preserves vanilla HTML/CSS/JS, the existing snapshot updater and GitHub Actions security boundaries, plus the separate Community terminal. It does not introduce a framework, backend, new upstream service, API credential or combined severity score.
 
-## Architecture map (observed on the clean base)
+## Architecture
 
 ```text
-Official upstreams (NVD, GitHub Advisories, CISA KEV; optional FIRST EPSS)
-        │
-        ▼
-.github/workflows/update.yml (main-only, scheduled every six hours or manual)
-  prepare [read-only] → scripts/update_data.py → complete staged snapshot
-                      → scripts/verify_data_snapshot.py + offline/browser gates
-  publish [contents:write only] → independently revalidate → snapshot/ only
-  verify-pages [read-only] → scripts/verify_pages.py after publication
-        │
-        ▼
-snapshot/manifest.json (schema v2, provenance, source_status, per-file hashes)
-snapshot/data/YYYY-MM-DD.json (31 rolling UTC-day shards)
-snapshot/data/overview.json (schema v1, three newest records)
-snapshot/data/epss.json (separate FIRST EPSS score sidecar)
-snapshot/VALIDATION.json (checked-in validation record)
-        │ same-origin static files only; no browser calls to upstream APIs
-        ▼
-index.html + vanilla app.js + styles.css / severity-effects.css / feed.css /
-community.css + community.js; strict CSP, text-only untrusted rendering,
-manifest/schema/size/count/path/hash validation, fail-closed loading and URL state
-        │
-        ├── Overview: verified manifest + hash-verified overview sidecar only;
-        │   captured source-check provenance and approximate age; no shard fetch
-        ├── Latest: the three actual newest sidecar records, linked to details
-        ├── Explore: existing CVE Center; lazily verifies shards/EPSS, then search,
-        │   filters, paging, detail, shareable URL and browser history
-        ├── Archive: date/count summaries and Explore filters inside this manifest's
-        │   validated rolling window only; no implied cross-snapshot history
-        └── Community: existing terminal-style interaction and explicit Telegram
-            navigation; external links remain user-activated, not auto-fetched
+NVD + GitHub Security Advisories + CISA KEV + FIRST EPSS
+                         │
+                         ▼
+.github/workflows/update.yml
+  main-only scheduled/manual candidate collection
+  → complete snapshot validation + deterministic/browser gates
+  → isolated publish of snapshot/ only
+  → read-only public Pages verification
+                         │
+                         ▼
+GitHub Pages: same-origin static application and validated JSON
+  index.html + app.js + styles.css + feed.css + community.js/css
+  sw.js (bounded same-origin app-shell cache)
+  snapshot/manifest.json
+  snapshot/data/overview.json (bounded schema-v2 index, up to 50 records)
+  snapshot/data/YYYY-MM-DD.json (31 rolling UTC daily shards)
+  snapshot/data/epss.json (separate FIRST EPSS evidence)
+                         │
+                         ▼
+Browser: manifest/schema/size/path/count/hash checks before render
+  Overview + Latest: manifest and Overview sidecar
+  Explore: every required daily shard plus EPSS sidecar before full results
+  Archive: dates represented by this rolling manifest only
+  Community: existing terminal-inspired content and explicit outbound links
 ```
 
-### Data and trust contract
+## Views and query behavior
 
-- The checked-in snapshot is a captured 30-day rolling window, generated at `2026-10-04T17:08:24Z`: 14,903 CVEs, 31 daily shards, 40 CISA KEV records, 14,749 EPSS scores, 33,869,716 JSON bytes. Its source checks are successful **as recorded in that snapshot**, not a claim about current upstream health.
-- EPSS date, source-updated timestamp, coverage and stale/unavailable state are separate from CVSS severity and CISA KEV membership. Missing EPSS is unscored, not zero. No combined priority score is present.
-- Hashes ensure downloaded files agree with the same-origin manifest; they are not a signature or independent authenticity proof.
-- No validated cross-snapshot history or retained long-term archive exists. Any Archive view in this slice must say it is bounded to this rolling snapshot and must not imply change history or records beyond its window.
-- Latest can use the already-versioned, bounded `overview.json` sidecar (three actual newest records). No new artifact, schema migration, upstream service, API key, cache policy, or runtime dependency is needed.
+- **Overview** presents validated CVE and CISA KEV totals, FIRST EPSS coverage, the actual daily distribution, captured source checks and four links to real latest records. Captured metadata is not presented as live source health.
+- **Latest** searches and facets the hash-verified top-50 sidecar locally, with source, EPSS minimum and KEV controls. A record opens in the complete Explore view.
+- **Explore** searches the complete verified snapshot and keeps CVSS severity, numeric CVSS minimum, EPSS probability minimum, CISA KEV membership and feed-source attribution independent. Activity dates, supplied vendor, search, pagination and detail state remain shareable through the URL.
+- **Archive** is a UTC-date/count index for the current rolling window, linked to matching inclusive Explore date filters; it is not permanent retention or cross-snapshot history.
+- **Community** keeps its original terminal identity, keyboard-accessible behavior and user-activated Telegram navigation.
 
-### First review-candidate slice delivered
+CVE dossiers distinguish CVSS severity, FIRST EPSS probability, CISA KEV evidence and advisory/research leads. The “Why This Matters” section summarizes only the selected record's actual validated evidence and explicitly avoids a combined score or live assessment. The checked-in record schema has no CWE classification field, so the UI says when CWE is not supplied rather than inferring one.
 
-- Preserve the established dark black-metal visual system, ice/steel action accents, semantic severity colors, system-safe typography, 8px spacing rhythm, existing desktop/mobile behavior, and Community implementation.
-- Delivered five meaningful views: **Overview**, **Latest**, **Explore** (the existing CVE Center), **Archive** (date-browse inside the current rolling window only), and **Community**. Latest renders real sidecar records; Archive rows link into the existing URL-backed Explore date filters.
-- Overview shows captured source status, provided source coverage and exact capture timestamps only from the validated manifest, plus an explicitly approximate age based on the visitor's device clock. A user-activated workflow-runs link replaces browser polling; the page never presents captured values as current health.
-- Added a real manifest/Overview-sidecar retry action that re-requests the static data and has a regression scenario for a first failure, no partial content, recovery and focus announcement. The existing fail-closed full-feed loading/retry path in Explore remains intact.
-- Extended shareable routing and adjacent keyboard/touch navigation to five views while retaining browser Back/Forward, mobile layouts, reduced-motion behavior, accessible labels and safe text rendering.
-- Deliberately omitted automatic browser updates, a claimed 15-minute cadence, a separate Latest artifact, long-term/cross-snapshot Archive, new upstream API/credentials, and a command palette. Static Pages has no safe candidate-artifact handoff for foreground freshness without new infrastructure; the five explicit tabs and existing `/` shortcut provide direct access without an additional dialog or state model.
-- All changes remain on the isolated review branch until the owner separately approves release. No Pages deploy, production publication, merge, new runtime dependency, or upstream updater run is part of this slice.
+The shared compact header identifies the active page. On small screens, the five destinations move to a safe-area-aware bottom rail and dense feed rows transform into cards. Search, filters, dossier sections, focus return, keyboard navigation, touch/mouse gestures and reduced-motion behavior remain accessible.
 
-## Pre-edit baseline record
+## Data integrity, freshness and offline use
 
-All checks below ran on the clean review branch at `7dcb0a96e920f732211a253d303419c8f465bde0`, before application code edits.
+The checked-in capture was generated at `2026-10-04T17:08:24Z`: 14,903 CVEs across 31 UTC date shards, 40 captured CISA KEV records and 14,749 EPSS scores dated `2026-10-04`. The window covers a rolling 30 days of activity; these values describe that capture, not current conditions.
 
-| Check | Result |
-|---|---|
-| `node --check app.js` and `node --check community.js` | Pass |
-| `python3 -m unittest discover -s tests -v` | Pass — 41 tests |
-| `python3 scripts/verify_data_snapshot.py` | Pass — 14,903 CVEs / 31 shards / 14,749 EPSS values / 33,869,716 bytes; generated `2026-10-04T17:08:24Z` |
-| `python3 verify_full_feed.py` | Pass — Overview, lazy full-feed verification, filters/search/detail/focus, loading and retries, cache/integrity/error cases, URL/back-forward, reduced motion, mobile/desktop, touch/swipe; zero browser/page/console errors, failed requests, or automatic external requests |
-| `python3 verify_community_ansi_shadow.py --community-only` | Pass — keyboard/reduced motion/actions and history; Telegram navigation intercepted locally; zero browser errors |
-| `python3 scripts/verify_pages.py --root snapshot --timeout-seconds 60 --interval-seconds 5` | Pass — public site matched local manifest, application assets, hashes, byte counts and content on attempt 1 |
-| `python3 -m pytest -q` | Not available in this environment (`No module named pytest`); the repository's documented test command is the passing standard-library `unittest` suite, so no dependency was added |
+The updater generates an Overview schema-v2 sidecar containing up to 50 actual records and the EPSS/KEV evidence available for each. The manifest records byte sizes and SHA-256 digests. The browser retains strict bounds, schema validation, safe text/link rendering, timeouts and no-partial-data behavior. A same-origin digest verifies consistency with the manifest; it is not a digital signature or independent authenticity proof.
 
-### Existing scheduled-refresh failure found during baseline inspection
+Snapshot state is capture-relative and uses the viewer's approximate device clock: **FRESH** through six hours, **DELAYED** over six and through 24 hours, **STALE** after 24 hours, **DEGRADED** for captured source/EPSS issues or failed verification, and **OFFLINE** when the application uses successfully verified cached data. Source status rows and timestamps are values recorded in the captured manifest, not live checks.
 
-GitHub Actions run [37236058061](https://github.com/iliya-bashrc/SubZer0/actions/runs/37236058061), scheduled on the prior `main` SHA `951ce65feaa1da12e2d2133cd606eaa74d4c151b`, collected upstream data and passed candidate snapshot validation. It then failed the second unittest step because `test_real_checked_in_full_snapshot_validates` asserted a historical hard-coded total of 15,318 while the just-generated valid snapshot contained 14,608. The isolated publish and verify-pages jobs were skipped, so that candidate was not published. This is a pre-existing test brittleness, not evidence of an upstream fetch failure. Correcting the fixed-count assertion to compare validated records against the same snapshot's validated manifest is a compatible test-only reliability fix; the updater will not be run against upstream sources during this task.
+The service worker caches the same-origin app shell. The application stores snapshot files only after their byte limits, manifest digests, schemas and relevant cross-file consistency have passed. In offline mode each file is verified again; Explore refuses partial results if any required shard is missing. Caching is best-effort and limited to files previously verified in that browser.
 
-## Post-edit verification (2026-10-05)
+A same-origin background check runs every 15 minutes while visible and also on visibility return/reconnection. It validates a candidate manifest and compact Overview index, then offers reload or dismissal if a newer capture exists. It neither polls upstream vulnerability sources nor silently replaces the snapshot already displayed.
 
-| Check | Result |
-|---|---|
-| `node --check app.js`, `node --check community.js`, `python3 -m py_compile …`, `git diff --check` | Pass |
-| `python3 -m unittest discover -s tests -v` | Pass — 41 deterministic tests, no upstream requests |
-| `python3 scripts/verify_data_snapshot.py` | Pass — 14,903 CVEs, 31 UTC shards, 14,749 EPSS values, 33,869,716 JSON bytes; unchanged checked-in snapshot generated `2026-10-04T17:08:24Z` |
-| `python3 verify_full_feed.py` | Pass — all five views at nine widths (320–1440 px); Explore search/filter/detail, hash/cache/loading failures, routing/history, keyboard/touch/desktop swipes, reduced motion, precise retry recovery, zero unexpected console/page errors, failed non-test requests or automatic external requests |
-| `python3 verify_community_ansi_shadow.py --community-only` | Pass — ten desktop/mobile viewports; keyboard, action, history and reduced-motion checks; Telegram destinations intercepted locally; zero browser errors |
-| Focused Latest/Archive/retry browser scenario | Pass — three sidecar record IDs match the validated sidecar; 31 Archive dates match the manifest; links restore exact UTC date filters; one simulated sidecar outage shows no unverified records and explicit retry restores data and focus; zero external requests |
-| Focused touch/mouse/pen navigation regression | Pass — adjacent five-view routes, swipe cancellation, no-wrap, scrolling, state preservation, reduced-motion behavior and safe Community background interactions |
+## Verification and publication boundary
 
-Desktop screenshots from the final Chromium run were copied outside the repository to `/workspace/subzero-review-artifacts-20261005/`. No schema, feed payload, workflow, runtime dependency, upstream refresh, production deployment, or merge changed during this slice. The next phase is owner review of the branch PR; any release remains a separate owner-approved action.
+Static gates include `node --check` for application, worker and Community JavaScript; Python compilation; `python3 scripts/verify_data_snapshot.py`; `python3 -m unittest discover -s tests -v`; and `git diff --check`. `python3 verify_full_feed.py` exercises record filtering, source/EPSS/CVSS thresholds, deep links, dossiers, browser history, integrity/tamper and retry behavior, the mobile transformation, offline cache, background-update notice and fail-closed missing-shard behavior. `python3 verify_community_ansi_shadow.py` smoke-tests the redesigned Overview “Explore records” action before checking the preserved Community terminal, exact banner text/geometry, responsive states, keyboard/reduced-motion behavior and locally intercepted Telegram actions; `--community-only` runs only Community checks. Cross-route pixel equality is intentionally not asserted after the approved whole-site redesign. `scripts/verify_pages.py` checks the public Pages app assets and the deployed snapshot after release.
+
+GitHub Pages is configured for the `main` branch at `/`. The Cloudflare Git integration is a separate deployment system: its production build watches `main` and runs `npx wrangler deploy`, while its PR-branch preview uses a separate `npx wrangler preview` build. Therefore merging this PR also triggers a **production Cloudflare Worker deployment**, not only a Pages build. That Worker release requires its own explicit narrow authorization; Pages approval alone does not authorize a separate Worker publication. No Cloudflare resource or production deployment is changed by this implementation map.

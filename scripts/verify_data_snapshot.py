@@ -34,6 +34,7 @@ MAX_MANIFEST_BYTES = 512 * 1024
 MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 MAX_SHARD_BYTES = 16 * 1024 * 1024
 MAX_OVERVIEW_BYTES = 64 * 1024
+MAX_OVERVIEW_RECORDS = 50
 MAX_EPSS_BYTES = 4 * 1024 * 1024
 MAX_SHARDS = 31
 MAX_RECORDS = 50_000
@@ -523,22 +524,31 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     overview_config = manifest.get("overview")
     overview_raw, overview = _verify_blob(root, overview_config, "data/overview.json", MAX_OVERVIEW_BYTES, "overview")
     overview_records = overview.get("records") if isinstance(overview, dict) else None
-    overview_count = _count(overview_config.get("count"), "manifest.overview.count", 3)
-    if not isinstance(overview, dict) or overview.get("schema_version") != 1 or overview.get("generated_at") != manifest["generated_at"]:
+    overview_count = _count(overview_config.get("count"), "manifest.overview.count", MAX_OVERVIEW_RECORDS)
+    if (not isinstance(overview, dict) or overview.get("schema_version") != 2 or
+            set(overview) != {"schema_version", "generated_at", "records"} or
+            overview.get("generated_at") != manifest["generated_at"] or overview_config.get("schema_version") != 2):
         raise SnapshotValidationError("overview.json schema or generated_at does not match the manifest")
-    if not isinstance(overview_records, list) or len(overview_records) != overview_count or overview_count != min(3, len(all_records)):
+    if not isinstance(overview_records, list) or len(overview_records) != overview_count or overview_count != min(MAX_OVERVIEW_RECORDS, len(all_records)):
         raise SnapshotValidationError("overview.json record count is inconsistent")
-    latest_records = sorted(all_records, key=_activity_key, reverse=True)[:overview_count]
-    overview_keys = ("id", "title", "sev", "score", "window_date", "activity_at", "date_basis", "sources")
-    for index, (summary_record, expected_record) in enumerate(zip(overview_records, latest_records, strict=True)):
-        if not isinstance(summary_record, dict):
-            raise SnapshotValidationError(f"overview.records[{index}] must be an object")
-        actual_summary = {key: summary_record.get(key) for key in overview_keys}
-        expected_summary = {key: expected_record.get(key) for key in overview_keys}
-        if actual_summary != expected_summary:
-            raise SnapshotValidationError(f"overview.records[{index}] does not match the newest full-feed record")
-        if set(summary_record) != set(overview_keys):
-            raise SnapshotValidationError(f"overview.records[{index}] has unexpected fields")
+    overview_keys = ("id", "title", "sev", "score", "window_date", "activity_at", "date_basis", "sources", "kev_date_added", "epss")
+    overview_ids: set[str] = set()
+    for index, summary_record in enumerate(overview_records):
+        label = f"overview.records[{index}]"
+        if not isinstance(summary_record, dict) or set(summary_record) != set(overview_keys):
+            raise SnapshotValidationError(f"{label} has an invalid shape")
+        cve_id = summary_record.get("id")
+        if not isinstance(cve_id, str) or not CVE_RE.fullmatch(cve_id) or cve_id in overview_ids:
+            raise SnapshotValidationError(f"{label}.id is invalid or duplicated")
+        overview_ids.add(cve_id)
+        if summary_record.get("kev_date_added") is not None:
+            _date(summary_record["kev_date_added"], f"{label}.kev_date_added")
+        epss_value = summary_record.get("epss")
+        if epss_value is not None:
+            if not isinstance(epss_value, dict) or set(epss_value) != {"score", "percentile"}:
+                raise SnapshotValidationError(f"{label}.epss must be null or a score/percentile object")
+            _score(epss_value["score"], f"{label}.epss.score", 1)
+            _score(epss_value["percentile"], f"{label}.epss.percentile", 1)
     declared_files.add("data/overview.json")
     snapshot_bytes += len(overview_raw)
 
@@ -572,6 +582,14 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
             raise SnapshotValidationError(f"EPSS value for {cve_id} must contain score and percentile")
         _score(value["score"], f"EPSS {cve_id}.score", 1)
         _score(value["percentile"], f"EPSS {cve_id}.percentile", 1)
+    latest_records = sorted(all_records, key=_activity_key, reverse=True)[:overview_count]
+    for index, (summary_record, expected_record) in enumerate(zip(overview_records, latest_records, strict=True)):
+        expected_summary = {key: expected_record[key] for key in overview_keys[:8]}
+        expected_kev = expected_record.get("kev")
+        expected_summary["kev_date_added"] = expected_kev.get("date_added") if isinstance(expected_kev, dict) else None
+        expected_summary["epss"] = scores.get(expected_record["id"])
+        if summary_record != expected_summary:
+            raise SnapshotValidationError(f"overview.records[{index}] does not match the newest full-feed record and EPSS sidecar")
     epss_status = status_by_name.get("FIRST EPSS")
     if epss_status is None:
         raise SnapshotValidationError("Manifest is missing FIRST EPSS status")

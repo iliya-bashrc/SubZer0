@@ -22,6 +22,7 @@ MAX_SITE_ASSET_BYTES = 4 * 1024 * 1024
 SITE_ASSETS = (
     "index.html",
     "app.js",
+    "sw.js",
     "community.js",
     "styles.css",
     "feed.css",
