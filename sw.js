@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'subzero-offline-v1';
+const CACHE_NAME = 'subzero-offline-v3';
 const CACHE_PREFIX = 'subzero-offline-';
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname;
@@ -20,7 +20,8 @@ const SHELL_PATHS = [
   'snapshot/data/overview.json'
 ];
 const SHELL_URLS = SHELL_PATHS.map((path) => new URL(path || './', SCOPE_URL).href);
-const MAX_SHARDS_TO_KEEP = 40;
+const MAX_SHARDS_TO_KEEP = 31;
+const MAX_SNAPSHOT_CACHE_BYTES = 128 * 1024 * 1024;
 
 function relativePath(url) {
   if (!url.pathname.startsWith(SCOPE_PATH)) return '';
@@ -30,6 +31,8 @@ function relativePath(url) {
 function snapshotByteLimit(path) {
   if (path === 'snapshot/manifest.json') return 512 * 1024;
   if (path === 'snapshot/data/overview.json') return 64 * 1024;
+  if (path === 'snapshot/data/search-index.json') return 16 * 1024 * 1024;
+  if (path === 'snapshot/data/history.json') return 8 * 1024 * 1024;
   if (path === 'snapshot/data/epss.json') return 4 * 1024 * 1024;
   if (/^snapshot\/data\/\d{4}-\d{2}-\d{2}\.json$/.test(path)) return 16 * 1024 * 1024;
   return 0;
@@ -49,14 +52,31 @@ function cacheableSnapshotSize(path, response) {
 }
 
 async function trimOldShards(cache) {
-  const keys = await cache.keys();
-  const shards = keys.map((request) => {
+  let keys = await cache.keys();
+  let shards = keys.map((request) => {
     const path = relativePath(new URL(request.url));
     const match = path.match(/^snapshot\/data\/(\d{4}-\d{2}-\d{2})\.json$/);
     return match ? { request, date: match[1] } : null;
   }).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date));
   const expired = shards.slice(0, Math.max(0, shards.length - MAX_SHARDS_TO_KEEP));
   await Promise.all(expired.map(({ request }) => cache.delete(request)));
+
+  keys = await cache.keys();
+  const snapshotEntries = await Promise.all(keys.map(async (request) => {
+    const path = relativePath(new URL(request.url));
+    if (!path.startsWith('snapshot/')) return null;
+    const response = await cache.match(request);
+    const header = response?.headers.get('content-length');
+    const bytes = header && /^\d+$/.test(header) ? Number(header) : 0;
+    const shard = path.match(/^snapshot\/data\/(\d{4}-\d{2}-\d{2})\.json$/);
+    return response ? { request, bytes: Number.isSafeInteger(bytes) ? bytes : 0, date: shard?.[1] || null } : null;
+  })).then((entries) => entries.filter(Boolean));
+  let totalBytes = snapshotEntries.reduce((total, entry) => total + entry.bytes, 0);
+  const oldestShards = snapshotEntries.filter((entry) => entry.date).sort((a, b) => a.date.localeCompare(b.date));
+  while (totalBytes > MAX_SNAPSHOT_CACHE_BYTES && oldestShards.length > 1) {
+    const oldest = oldestShards.shift();
+    if (await cache.delete(oldest.request)) totalBytes -= oldest.bytes;
+  }
 }
 
 async function cacheNetworkResponse(request, response, path) {
@@ -137,6 +157,19 @@ async function serveStaticResource(request, path, event) {
       return cachedWithOfflineMarker(await cache.match(new Request(request.url, { method: 'GET' })));
     } catch {
       return null;
+    }
+  }
+  if (path.startsWith('snapshot/data/') && request.cache !== 'reload' && request.cache !== 'no-store' && request.cache !== 'no-cache') {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      const candidate = await cache.match(new Request(request.url, { method: 'GET' }));
+      if (candidate) {
+        // The app verifies this candidate against the freshly fetched manifest before using it.
+        finishCache();
+        return candidate;
+      }
+    } catch {
+      // CacheStorage is opportunistic; continue with the network path.
     }
   }
   try {

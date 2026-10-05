@@ -7,6 +7,8 @@
   const LIMITS = Object.freeze({
     manifestBytes: 512 * 1024,
     overviewBytes: 64 * 1024,
+    indexBytes: 16 * 1024 * 1024,
+    historyBytes: 8 * 1024 * 1024,
     shardBytes: 16 * 1024 * 1024,
     epssBytes: 4 * 1024 * 1024,
     snapshotBytes: 128 * 1024 * 1024,
@@ -21,6 +23,7 @@
   const LATEST_PREVIEW_LIMIT = 50;
   const PAGE_SIZES = new Set([24, 48, 96]);
   const CVE_ID_RE = /^CVE-\d{4,}-\d+$/i;
+  const GHSA_ID_RE = /^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/i;
   const BASE_SEVERITIES = ['critical', 'high', 'medium', 'low'];
   const VALID_SEVERITIES = new Set([...BASE_SEVERITIES, 'unrated']);
   const initialUrlParams = new URLSearchParams(window.location.search);
@@ -57,10 +60,7 @@
   const tabs = $$('.nav-tab');
   const pages = new Map($$('.page').map((page) => [page.id.replace('page-', ''), page]));
   const searchInput = $('#record-search');
-  const searchAnchor = $('.center-search-anchor');
-  const siteHeader = $('.site-header');
   const centerPage = $('#page-center');
-  const headerSearchReturn = $('#header-search-return');
   const snapshotUpdateNotice = $('#snapshot-update-notice');
   const snapshotUpdateCopy = $('#snapshot-update-copy');
   const snapshotUpdateReload = $('#snapshot-update-reload');
@@ -75,7 +75,6 @@
   const overviewLatestList = $('#latest-list');
   const activityChart = $('#activity-chart');
   const activityChartData = $('#activity-chart-data');
-  const archiveDayList = $('#archive-day-list');
   const overviewRetryButtons = $$('.overview-retry');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
@@ -86,7 +85,6 @@
   const snapshotShardCount = $('#snapshot-shard-count');
   const snapshotShardProgress = $('#snapshot-shard-progress');
   const filterControls = $('#filter-controls');
-  const centerDock = $('.center-dock');
   const severityDistribution = $('.severity-distribution');
   const feedView = $('#feed-view');
   const detailView = $('#detail-view');
@@ -116,6 +114,13 @@
   let dismissedSnapshotGeneratedAt = '';
   let records = [];
   let latestSummaryRecords = [];
+  let historyData = null;
+  let historyPromise = null;
+  let historyLoadError = false;
+  let activeChangeFilter = 'all';
+  let detailShardCache = new Map();
+  let detailRequestSerial = 0;
+  let searchDebounceTimer = 0;
   let snapshotStarted = false;
   let snapshotLoading = false;
   let epssScores = Object.create(null);
@@ -152,6 +157,15 @@
 
   function safeString(value, fallback = '') {
     return typeof value === 'string' ? value : fallback;
+  }
+
+  function displayTitle(value, fallback = '') {
+    const text = safeString(value, fallback);
+    if (text.length !== 180) return text;
+    const bounded = text.slice(0, 179);
+    const wordBoundary = bounded.lastIndexOf(' ');
+    const preview = wordBoundary >= 0 ? bounded.slice(0, wordBoundary) : bounded;
+    return `${preview.trimEnd()}…`;
   }
 
   function safeStringList(value) {
@@ -468,8 +482,13 @@
     const nextAddress = `${url.pathname}${url.search}${url.hash}`;
     const currentAddress = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (nextAddress !== currentAddress) {
-      if (pushHistory) window.history.pushState(window.history.state, '', nextAddress);
-      else window.history.replaceState(window.history.state, '', nextAddress);
+      if (pushHistory) {
+        const entryState = window.history.state && typeof window.history.state === 'object'
+          ? { ...window.history.state }
+          : {};
+        delete entryState.subzeroDossierEntry;
+        window.history.pushState(entryState, '', nextAddress);
+      } else window.history.replaceState(window.history.state, '', nextAddress);
     }
   }
 
@@ -506,7 +525,8 @@
       button.setAttribute('aria-pressed', String(selected));
     });
 
-    const pageParam = params.get('page');
+    const requestedPageParam = params.get('page');
+    const pageParam = requestedPageParam === 'archive' ? 'center' : requestedPageParam;
     const nextPage = pages.has(pageParam)
       ? pageParam
       : pageParam === null && requestedCveId ? 'center' : 'overview';
@@ -533,14 +553,15 @@
     if (requestedCveId) {
       if (nextPage === 'center') {
         const record = records.find((candidate) => candidate.id === requestedCveId);
-        if (record && (detailView.hidden || $('#detail-heading').textContent !== requestedCveId)) {
+        const currentHeadingId = $('#detail-heading')?.textContent;
+        if (record && (detailView.hidden || currentHeadingId !== requestedCveId)) {
           openDetails(record, recordButtons.get(requestedCveId));
         } else if (!record && !detailView.hidden) {
           restoreResultsView({ restoreFocus: false, restoreScroll: false });
         }
       }
     } else if (!detailView.hidden) {
-      restoreResultsView({ restoreFocus: false, restoreScroll: false });
+      restoreResultsView();
     }
     updateAddressBar();
   }
@@ -622,11 +643,20 @@
 
     const overview = candidate.overview;
     const epss = candidate.epss;
-    for (const [config, expectedPath, maxBytes] of [[overview, 'data/overview.json', LIMITS.overviewBytes], [epss, 'data/epss.json', LIMITS.epssBytes]]) {
+    const searchIndex = candidate.search_index;
+    const history = candidate.history;
+    for (const [config, expectedPath, maxBytes] of [
+      [overview, 'data/overview.json', LIMITS.overviewBytes],
+      [epss, 'data/epss.json', LIMITS.epssBytes],
+      [searchIndex, 'data/search-index.json', LIMITS.indexBytes],
+      [history, 'data/history.json', LIMITS.historyBytes]
+    ]) {
       if (!config || config.path !== expectedPath || !isCount(config.bytes, maxBytes) || config.bytes === 0 || !SHA256_RE.test(safeString(config.sha256))) throw new Error('A manifest sidecar has invalid integrity metadata.');
       totalBytes += config.bytes;
     }
-    if (totalBytes > LIMITS.snapshotBytes || !isCount(epss.scored_cves, totals.cves) || epss.records !== totals.cves) throw new Error('Manifest sidecar or total-snapshot limits are invalid.');
+    if (searchIndex.schema_version !== 2 || !isCount(searchIndex.count, LIMITS.records) || searchIndex.count !== totals.cves ||
+        history.schema_version !== 1 || history.retention_days !== 30 || !isCount(history.event_count, 10_000) || !isCount(history.snapshot_count, 800) || !isCount(history.kev_catalog_count, 5_000) ||
+        totalBytes > LIMITS.snapshotBytes || !isCount(epss.scored_cves, totals.cves) || epss.records !== totals.cves) throw new Error('Manifest sidecar or total-snapshot limits are invalid.');
     if (typeof epss.score_date !== 'string' || (epss.score_date && !isCanonicalDate(epss.score_date)) || typeof epss.source_updated_at !== 'string' || typeof epss.updated_at !== 'string' || !isCanonicalTimestamp(epss.updated_at)) throw new Error('Manifest EPSS dates are invalid.');
 
     if (!Array.isArray(candidate.source_status) || candidate.source_status.length !== 4) throw new Error('Manifest source status is incomplete.');
@@ -715,10 +745,10 @@
     try {
       const url = new URL(path, document.baseURI);
       if (url.origin !== window.location.origin || !url.pathname.startsWith(new URL('.', document.baseURI).pathname)) return;
-      const cache = await caches.open('subzero-offline-v1');
+      const cache = await caches.open('subzero-offline-v3');
       await cache.put(new Request(url.href, { method: 'GET' }), new Response(bytes.slice(), {
         status: 200,
-        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': String(bytes.byteLength) }
       }));
       const dayPattern = /\/snapshot\/data\/(\d{4}-\d{2}-\d{2})\.json$/;
       if (!dayPattern.test(url.pathname)) return;
@@ -726,7 +756,7 @@
         const match = new URL(request.url).pathname.match(dayPattern);
         return match ? { request, date: match[1] } : null;
       }).filter(Boolean).sort((left, right) => left.date.localeCompare(right.date));
-      await Promise.all(shards.slice(0, Math.max(0, shards.length - 40)).map(({ request }) => cache.delete(request)));
+      await Promise.all(shards.slice(0, Math.max(0, shards.length - 31)).map(({ request }) => cache.delete(request)));
     } catch {
       // Cache storage is optional; every online and offline response is still revalidated before use.
     }
@@ -769,7 +799,7 @@
         trackCacheFallback: false, storeOffline: false
       }), candidate);
       noticedSnapshotGeneratedAt = candidate.generated_at;
-      snapshotUpdateCopy.textContent = `A newer captured snapshot is available, generated ${formatTimestamp(candidate.generated_at, 'at an unknown time')}. Its Overview index is verified; reload to verify the full archive before exploring it.`;
+      snapshotUpdateCopy.textContent = `A newer captured snapshot is available, generated ${formatTimestamp(candidate.generated_at, 'at an unknown time')}. Its manifest and Overview preview are verified; reload to verify the compact search index.`;
       snapshotUpdateNotice.hidden = false;
     } catch {
       // A background check never replaces or clears the last fully verified view.
@@ -925,6 +955,82 @@
     $('#source-check-age').textContent = `Approximate snapshot age at page load: ${approximateSnapshotAge(candidate.generated_at)} · uses this device's clock.`;
   }
 
+  function changeTypeLabel(type) {
+    return ({ NEW_CVE: 'NEW', CVE_UPDATED: 'UPDATED', CVE_REOBSERVED: 'RECENTLY UPDATED · PRIOR DETAIL NOT RETAINED', CVSS_CHANGED: 'CVSS CHANGED', TITLE_CHANGED: 'TITLE CHANGED',
+      DESCRIPTION_CHANGED: 'DESCRIPTION CHANGED', KEV_ADDED: 'KEV ADDED', KEV_CHANGED: 'KEV CHANGED', KEV_REMOVED: 'KEV REMOVED',
+      EPSS_CHANGED: 'EPSS CHANGED', AFFECTED_PRODUCTS_CHANGED: 'PRODUCT DATA CHANGED', REFERENCE_CHANGED: 'REFERENCES CHANGED',
+      ADVISORY_CHANGED: 'ADVISORY CHANGED', ADVISORY_ADDED: 'ADVISORY ADDED', ADVISORY_REMOVED: 'ADVISORY REMOVED',
+      REFERENCE_ADDED: 'REFERENCE ADDED', REFERENCE_REMOVED: 'REFERENCE REMOVED', VERSION_RANGE_CHANGED: 'VERSION RANGE CHANGED', SOURCE_METADATA_CHANGED: 'SOURCE METADATA CHANGED' })[type] || type.replaceAll('_', ' ');
+  }
+
+  function changeValueText(event) {
+    const format = (value) => {
+      if (value === null) return 'Not present';
+      if (typeof value === 'number' && event.type === 'EPSS_CHANGED') return `${(value * 100).toFixed(2)}%`;
+      if (typeof value === 'object') { const text = JSON.stringify(value); return text.length > 220 ? `${text.slice(0, 217)}…` : text; }
+      return String(value);
+    };
+    if (event.type === 'CVE_UPDATED') return `${event.to?.changes || 0} meaningful field changes were detected.`;
+    if (event.type === 'CVE_REOBSERVED') return event.to?.note || 'Recently modified in a source; the prior detail is outside the retained feed window.';
+    const before = format(event.from); const after = format(event.to);
+    if (before === 'Not present') return `Added · ${after}`;
+    if (after === 'Not present') return `Removed · ${before}`;
+    return `${before} → ${after}`;
+  }
+
+  function renderChangeEvents(container, events, emptyMessage, limit = Infinity) {
+    container.replaceChildren();
+    if (!events.length) { addText(container, 'li', 'discovery-placeholder', emptyMessage); container.setAttribute('aria-busy', 'false'); return; }
+    events.slice().sort((left, right) => right.observed_at.localeCompare(left.observed_at)).slice(0, limit).forEach((event) => {
+      const item = document.createElement('li'); item.className = 'change-event-row';
+      const article = document.createElement('article'); article.className = 'change-event';
+      const heading = document.createElement('div'); heading.className = 'change-event__heading';
+      const link = document.createElement('a'); link.className = 'change-event__id'; link.href = `?page=center&cve=${encodeURIComponent(event.id)}`; link.textContent = event.id;
+      heading.append(link, Object.assign(document.createElement('span'), { className: `change-type change-type--${event.type.toLowerCase()}`, textContent: changeTypeLabel(event.type) }));
+      const indexRecord = records.find((record) => record.id === event.id);
+      if (indexRecord) addText(article, 'p', 'change-event__title', displayTitle(indexRecord.title));
+      addText(article, 'p', 'change-event__diff', changeValueText(event));
+      const meta = document.createElement('div'); meta.className = 'change-event__meta';
+      const observed = document.createElement('time'); observed.dateTime = event.observed_at; observed.textContent = `Observed ${formatTimestamp(event.observed_at, 'time unavailable')}`; meta.append(observed);
+      if (event.source_time) addText(meta, 'span', '', `Source time ${event.source_time}`);
+      addText(meta, 'span', '', `Source ${event.source}`);
+      article.prepend(heading); article.append(meta); item.append(article); container.append(item);
+    });
+    container.setAttribute('aria-busy', 'false');
+  }
+
+  function renderLatestChanges() {
+    const list = $('#latest-change-list'); if (!list) return;
+    if (!historyData) { renderChangeEvents(list, [], historyLoadError ? 'Change history is unavailable or failed verification.' : 'No observed change history is available yet.'); return; }
+    renderChangeEvents(list, historyData.events, historyData.events.length ? 'No observed changes are retained in this 30-day window.' : 'No changes are shown until two complete captures can be compared.', 6);
+  }
+
+  function renderChanges() {
+    const list = $('#change-event-list'); if (!list || !historyData) return;
+    const query = ($('#change-search').value || '').trim().toLocaleLowerCase();
+    const from = $('#change-from').value; const to = $('#change-to').value;
+    const events = historyData.events.filter((event) => {
+      const typeMatches = activeChangeFilter === 'all' || (activeChangeFilter === 'KEV' ? event.type.startsWith('KEV_') : activeChangeFilter === 'REFERENCE_CHANGED' ? event.type.startsWith('REFERENCE_') : activeChangeFilter === 'ADVISORY_CHANGED' ? event.type.startsWith('ADVISORY_') : activeChangeFilter === 'AFFECTED_PRODUCTS_CHANGED' ? ['AFFECTED_PRODUCTS_CHANGED', 'VERSION_RANGE_CHANGED'].includes(event.type) : event.type === activeChangeFilter);
+      const date = event.observed_at.slice(0, 10); const dateMatches = (!from || date >= from) && (!to || date <= to);
+      const record = records.find((candidate) => candidate.id === event.id);
+      const text = [event.id, event.type, event.source, changeValueText(event), record?.title, record?.summary, record?.sources, record?.affected].filter(Boolean).join(' ').toLocaleLowerCase();
+      return typeMatches && dateMatches && (!query || text.includes(query));
+    });
+    $('#change-event-count').textContent = nf.format(events.length);
+    $('#change-window-note').textContent = historyData.baseline
+      ? `Changes retained for 30 days · baseline capture ${formatTimestamp(historyData.baseline.core_snapshot_at, 'time unavailable')} · older observed changes are not available.`
+      : 'Changes retained for 30 days · observed time is distinct from source time and capture publication time.';
+    renderChangeEvents(list, events, historyData.events.length ? 'No verified change events match these filters.' : 'No changes are shown until two complete captures can be compared.');
+    $('#change-page-status').textContent = `Showing ${nf.format(events.length)} of ${nf.format(historyData.events.length)} verified change events.`;
+    $('#changes-retry').hidden = true;
+  }
+
+  function renderChangesError() {
+    const list = $('#change-event-list'); if (list) renderChangeEvents(list, [], 'Change history could not be verified. No events are displayed.');
+    const line = $('#change-page-status'); if (line) line.textContent = 'History integrity check or fetch failed. Retry when the capture is available.';
+    const retry = $('#changes-retry'); if (retry) retry.hidden = false;
+  }
+
   function renderLatestRows() {
     latestPageList.replaceChildren();
     const query = latestSearchInput.value.trim().toLocaleLowerCase();
@@ -962,7 +1068,7 @@
 
       const title = document.createElement('p');
       title.className = 'latest-page-item__title';
-      title.textContent = record.title;
+      title.textContent = displayTitle(record.title);
       const facts = document.createElement('p');
       facts.className = 'latest-page-item__facts';
       facts.textContent = record.score === null ? 'CVSS unscored' : `CVSS ${record.score.toFixed(1)}`;
@@ -1008,42 +1114,6 @@
     renderLatestRows();
   }
 
-  function renderArchivePage(candidate) {
-    const start = candidate.window.start.slice(0, 10);
-    const end = candidate.window.end.slice(0, 10);
-    const startTime = $('#archive-window-start');
-    const endTime = $('#archive-window-end');
-    startTime.dateTime = start;
-    endTime.dateTime = end;
-    startTime.textContent = formatDate(start);
-    endTime.textContent = formatDate(end);
-
-    archiveDayList.replaceChildren();
-    [...candidate.days].reverse().forEach((day) => {
-      const item = document.createElement('li');
-      item.className = 'archive-day-item';
-      const details = document.createElement('div');
-      details.className = 'archive-day-item__details';
-      const date = document.createElement('time');
-      date.dateTime = day.date;
-      date.textContent = formatDate(day.date);
-      const count = document.createElement('strong');
-      count.textContent = `${nf.format(day.count)} CVEs`;
-      const signals = document.createElement('span');
-      signals.textContent = `Critical ${nf.format(day.critical)} · High ${nf.format(day.high)} · KEV ${nf.format(day.exploited)}`;
-      details.append(date, count, signals);
-
-      const link = document.createElement('a');
-      link.className = 'archive-day-item__link';
-      link.href = `?page=center&from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}`;
-      link.setAttribute('aria-label', `Browse ${formatDate(day.date)} in Explore`);
-      link.textContent = 'Browse in Explore';
-      item.append(details, link);
-      archiveDayList.append(item);
-    });
-    archiveDayList.setAttribute('aria-busy', 'false');
-    $('#archive-status').textContent = `The validated manifest lists ${nf.format(candidate.days.length)} UTC days and ${nf.format(candidate.totals.cves)} CVEs in this ${formatDate(start)} to ${formatDate(end)} window. Explore verifies shard files before displaying records.`;
-  }
 
   function renderActivityChart(candidate) {
     const namespace = 'http://www.w3.org/2000/svg';
@@ -1124,8 +1194,8 @@
       link.href = `?page=center&cve=${encodeURIComponent(record.id)}`;
       link.textContent = record.id;
       link.setAttribute('aria-label', `Open ${record.id} in Explore`);
-      const title = addText(item, 'span', 'latest-preview-row__title', record.title);
-      title.title = record.title;
+      const title = addText(item, 'span', 'latest-preview-row__title', displayTitle(record.title));
+      title.title = displayTitle(record.title);
       const source = addText(item, 'span', 'latest-preview-row__source', record.sources.join(' · '));
       source.title = record.sources.join(', ');
       const signals = document.createElement('span');
@@ -1169,28 +1239,24 @@
     setSnapshotStatus('Loading snapshot manifest…', 'loading', null, null, 'overview');
     statusLine.setAttribute('aria-busy', 'true');
     $('#latest-page-status').textContent = 'Verifying the snapshot index…';
-    $('#archive-status').textContent = 'Waiting for the validated manifest…';
     overviewSourceList.setAttribute('aria-busy', 'true');
     latestPageList.setAttribute('aria-busy', 'true');
-    archiveDayList.setAttribute('aria-busy', 'true');
     try {
       candidate = await getManifest();
       setSnapshotStatus('Manifest verified. Checking the Overview preview integrity…', 'verifying', candidate, null, 'overview');
       renderSourceChecks(candidate);
-      renderArchivePage(candidate);
       const payload = await fetchVerifiedJson(candidate.overview, LIMITS.overviewBytes, retry ? FETCH_CACHE.retry : FETCH_CACHE.data, {
         validate: (overview) => validateOverview(overview, candidate)
       });
       manifest = candidate;
       renderOverview(payload, candidate);
       if (retryHadFocus) {
-        const statusTarget = activePage === 'latest' ? $('#latest-page-status') : activePage === 'archive' ? $('#archive-status') : statusLine;
         statusTarget.focus({ preventScroll: true });
       }
     } catch {
       const failureState = candidate
-        ? 'DEGRADED · Overview index verification failed. No unverified Overview or Latest records are shown; verified manifest source details and Archive remain. Use Try again to re-request the static data.'
-        : 'DEGRADED · Snapshot manifest verification failed. No unverified source, record, or Archive content is shown. Use Try again to re-request the static data.';
+        ? 'DEGRADED · Overview index verification failed. No unverified Overview or Latest records are shown; verified source details remain. Use Try again to re-request the static data.'
+        : 'DEGRADED · Snapshot manifest verification failed. No unverified source or record content is shown. Use Try again to re-request the static data.';
       setSnapshotStatus(failureState, 'error', candidate, null, 'overview');
       statusLine.textContent = snapshotCacheFallbackUsed || navigator.onLine === false
         ? 'OFFLINE · The cache does not contain a complete verified Overview index. Reconnect and try again; no unverified records are shown.'
@@ -1201,13 +1267,7 @@
       if (!candidate) {
         $('#source-check-age').textContent = 'Snapshot age unavailable because the manifest could not be verified.';
         overviewSourceList.replaceChildren();
-        $('#archive-status').textContent = 'Archive summaries are unavailable because the manifest could not be verified. Choose Try again to request it again.';
-        archiveDayList.replaceChildren();
-        $('#archive-window-start').textContent = 'Unavailable';
-        $('#archive-window-end').textContent = 'Unavailable';
       } else {
-        const archiveStatus = $('#archive-status');
-        archiveStatus.textContent = `${archiveStatus.textContent} The Overview index could not be verified; record previews remain hidden. Choose Try again to re-request that index.`;
       }
       overviewSourceList.setAttribute('aria-busy', 'false');
       latestSummaryRecords = [];
@@ -1232,12 +1292,10 @@
       $('#latest-record-count').textContent = 'Unavailable';
       $('#latest-generated-at').textContent = 'Unavailable';
       $('#latest-activity-at').textContent = 'Unavailable';
-      archiveDayList.setAttribute('aria-busy', 'false');
       overviewRetryButtons.forEach((button) => { button.hidden = false; button.disabled = false; });
     } finally {
       statusLine.setAttribute('aria-busy', 'false');
       latestPageList.setAttribute('aria-busy', 'false');
-      archiveDayList.setAttribute('aria-busy', 'false');
       overviewSourceList.setAttribute('aria-busy', 'false');
     }
   }
@@ -1282,13 +1340,84 @@
     return results;
   }
 
+  function validateSearchIndex(payload, candidate) {
+    if (!payload || typeof payload !== 'object' || payload.schema_version !== 2 || payload.generated_at !== candidate.generated_at ||
+        !Array.isArray(payload.records) || payload.records.length !== candidate.search_index.count || payload.records.length !== candidate.totals.cves) {
+      throw new Error('Search index is invalid or incomplete.');
+    }
+    const dayPaths = new Set(candidate.days.map((day) => day.path));
+    const seen = new Set();
+    return payload.records.map((row) => {
+      const fields = ['id', 'title', 'summary', 'score', 'sev', 'kev', 'published', 'modified', 'window_date', 'activity_at', 'date_basis', 'sources', 'affected', 'advisory_ids', 'detail_path', 'epss'];
+      if (!row || typeof row !== 'object' || fields.some((key) => !Object.hasOwn(row, key)) || !CVE_ID_RE.test(safeString(row.id)) ||
+          row.id !== row.id.toUpperCase() || seen.has(row.id) || !isValidText(row.title, 4_096) ||
+          !isValidText(row.summary, 320, true) ||
+          !['critical', 'high', 'medium', 'low', 'none', 'unknown'].includes(row.sev) ||
+          !(row.score === null || (isFiniteScore(row.score) && row.score >= 0 && row.score <= 10)) ||
+          !isCanonicalDate(row.window_date) || !isCanonicalTimestamp(row.activity_at) ||
+          !(row.published === null || isCanonicalTimestamp(row.published)) || !(row.modified === null || isCanonicalTimestamp(row.modified)) ||
+          !isValidText(row.date_basis, 32) || !dayPaths.has(row.detail_path) || row.detail_path !== `data/${row.window_date}.json` ||
+          !Array.isArray(row.sources) || row.sources.some((source) => !SOURCE_LABELS.has(source)) ||
+          !Array.isArray(row.affected) || row.affected.length > 8 ||
+          !Array.isArray(row.advisory_ids) || row.advisory_ids.length > 8 || row.advisory_ids.some((id) => typeof id !== 'string' || !GHSA_ID_RE.test(id)) ||
+          row.affected.some((item) => !item || typeof item !== 'object' || !Object.keys(item).length ||
+            Object.keys(item).some((key) => !['vendor', 'product', 'versions'].includes(key)) ||
+            Object.entries(item).some(([key, value]) => !isValidText(value, key === 'versions' ? 160 : 2_048, true))) ||
+          (row.kev !== null && (!row.kev || typeof row.kev !== 'object' || !isCanonicalDate(row.kev.date_added))) ||
+          (row.epss !== null && (!row.epss || typeof row.epss !== 'object' || !isFiniteScore(row.epss.score) || row.epss.score < 0 || row.epss.score > 1 || !isFiniteScore(row.epss.percentile) || row.epss.percentile < 0 || row.epss.percentile > 1))) {
+        throw new Error('A compact search-index record is invalid.');
+      }
+      seen.add(row.id);
+      return { ...row, desc: row.summary, refs: [], advisories: row.advisory_ids.map((ghsa_id) => ({ ghsa_id })) };
+    });
+  }
+
+  const CHANGE_TYPES = new Set(['NEW_CVE', 'CVE_UPDATED', 'CVE_REOBSERVED', 'CVSS_CHANGED', 'TITLE_CHANGED', 'DESCRIPTION_CHANGED',
+    'KEV_ADDED', 'KEV_CHANGED', 'KEV_REMOVED', 'EPSS_CHANGED', 'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED',
+    'ADVISORY_CHANGED', 'ADVISORY_ADDED', 'ADVISORY_REMOVED', 'VERSION_RANGE_CHANGED', 'REFERENCE_ADDED', 'REFERENCE_REMOVED', 'SOURCE_METADATA_CHANGED']);
+
+  function validateHistory(payload, candidate) {
+    if (!payload || typeof payload !== 'object' || payload.schema_version !== 1 || payload.retention_days !== 30 ||
+        !Array.isArray(payload.snapshots) || payload.snapshots.length !== candidate.history.snapshot_count ||
+        !Array.isArray(payload.events) || payload.events.length !== candidate.history.event_count ||
+        payload.events.length > 10_000 || payload.snapshots.length > 800 ||
+        (Array.isArray(payload.kev_catalog) ? payload.kev_catalog.length : 0) !== candidate.history.kev_catalog_count ||
+        (payload.kev_catalog && (payload.kev_catalog.length > 5_000 || payload.kev_catalog.some((item) => !item || !CVE_ID_RE.test(safeString(item.cveID)) || !isCanonicalDate(item.dateAdded))))) throw new Error('Change history is invalid or incomplete.');
+    if (payload.baseline !== null && (!payload.baseline || typeof payload.baseline !== 'object' ||
+        !isCanonicalTimestamp(payload.baseline.core_snapshot_at) || !isCount(payload.baseline.record_count, LIMITS.records) ||
+        typeof payload.baseline.complete !== 'boolean')) throw new Error('Change-history baseline provenance is invalid.');
+    payload.events.forEach((event) => {
+      if (!event || typeof event !== 'object' || !CVE_ID_RE.test(safeString(event.id)) || event.id !== event.id.toUpperCase() ||
+          !CHANGE_TYPES.has(event.type) || !isCanonicalTimestamp(event.observed_at) || !isValidText(event.source, 128) ||
+          !(event.source_time === null || isCanonicalTimestamp(event.source_time) || isCanonicalDate(event.source_time))) throw new Error('A change-history event is invalid.');
+    });
+    return payload;
+  }
+
+  async function loadHistory() {
+    if (historyData) return historyData;
+    if (historyPromise) return historyPromise;
+    historyPromise = (async () => {
+      if (!manifest) manifest = await getManifest();
+      try {
+        historyData = await fetchVerifiedJson(manifest.history, LIMITS.historyBytes, FETCH_CACHE.data, {
+          validate: (payload) => validateHistory(payload, manifest)
+        });
+        historyLoadError = false;
+        return historyData;
+      } catch (error) { historyLoadError = true; throw error; }
+      finally { historyPromise = null; }
+    })();
+    return historyPromise;
+  }
+
   function validateEpssFile(payload, candidate, rows) {
     if (!payload || typeof payload !== 'object' || payload.schema_version !== 1 || payload.updated_at !== candidate.epss.updated_at ||
         payload.score_date !== candidate.epss.score_date || payload.source_updated_at !== candidate.epss.source_updated_at || !isCanonicalTimestamp(payload.checked_at) ||
         (payload.error !== null && !isValidText(payload.error, 2048, true, true)) || !payload.scores || typeof payload.scores !== 'object' || Array.isArray(payload.scores)) throw new Error('EPSS sidecar is invalid.');
     const ids = new Set(rows.map((record) => record.id));
     const scores = Object.keys(payload.scores);
-    if (scores.length !== candidate.epss.scored_cves || scores.some((id) => {
+    if (rows.some((row) => JSON.stringify(row.epss) !== JSON.stringify(payload.scores[row.id] || null)) || scores.length !== candidate.epss.scored_cves || scores.some((id) => {
       const value = payload.scores[id];
       return !ids.has(id) || !/^CVE-\d{4,}-\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value) ||
         Object.keys(value).length !== 2 || !Object.hasOwn(value, 'score') || !Object.hasOwn(value, 'percentile') ||
@@ -1307,7 +1436,7 @@
     snapshotLoaderStatus.textContent = 'Waiting for the snapshot manifest.';
     snapshotManifestState.textContent = 'Waiting';
     snapshotManifestState.classList.remove('is-verified');
-    snapshotEpssState.textContent = 'Waiting for daily shards';
+    snapshotEpssState.textContent = 'Waiting for search index';
     snapshotEpssState.classList.remove('is-verified');
     snapshotShardCount.textContent = 'Waiting for manifest';
     snapshotShardProgress.max = 1;
@@ -1317,30 +1446,30 @@
   }
 
   function acceptSnapshotManifest(candidate) {
-    setSnapshotStatus('Manifest verified. Verifying all snapshot shards and EPSS; no records are shown until checks pass.', 'verifying', candidate, null, 'center');
+    setSnapshotStatus('Manifest verified. Verifying the compact search index and EPSS; detail shards load only when opened.', 'verifying', candidate, null, 'center');
     snapshotManifestState.textContent = 'Verified';
     snapshotManifestState.classList.add('is-verified');
-    snapshotEpssState.textContent = 'Waiting for daily shards';
-    snapshotShardProgress.max = candidate.days.length;
+    snapshotEpssState.textContent = 'Waiting for search index';
+    snapshotShardProgress.max = candidate.totals.cves;
     snapshotShardProgress.value = 0;
     snapshotShardProgress.hidden = false;
-    const progressText = `0 of ${nf.format(candidate.days.length)} daily shards verified`;
+    const progressText = `0 of ${nf.format(candidate.totals.cves)} index records verified`;
     snapshotShardProgress.setAttribute('aria-valuetext', progressText);
-    snapshotShardCount.textContent = `0 of ${nf.format(candidate.days.length)} verified`;
-    snapshotLoaderStatus.textContent = 'Manifest verified. Daily shards are being checked as they arrive.';
+    snapshotShardCount.textContent = `0 of ${nf.format(candidate.totals.cves)} indexed`;
+    snapshotLoaderStatus.textContent = 'Manifest verified. Checking the compact searchable index and EPSS sidecar.';
   }
 
   function reportVerifiedShard(count, total) {
     if (!snapshotLoading) return;
     snapshotShardProgress.value = count;
-    snapshotShardProgress.setAttribute('aria-valuetext', `${nf.format(count)} of ${nf.format(total)} daily shards verified`);
-    snapshotShardCount.textContent = `${nf.format(count)} of ${nf.format(total)} verified`;
+    snapshotShardProgress.setAttribute('aria-valuetext', `${nf.format(count)} of ${nf.format(total)} index records verified`);
+    snapshotShardCount.textContent = `${nf.format(count)} of ${nf.format(total)} indexed`;
   }
 
   function acceptSnapshotSidecar() {
     snapshotEpssState.textContent = 'Verified';
     snapshotEpssState.classList.add('is-verified');
-    snapshotLoaderStatus.textContent = 'Required data verified. Preparing the record view.';
+    snapshotLoaderStatus.textContent = 'Search index and EPSS verified. Full detail remains in integrity-checked daily shards.';
   }
 
   function closeSnapshotLoader() {
@@ -1364,64 +1493,66 @@
   }
 
   async function loadSnapshot() {
+    const loadStartedAt = window.performance?.now?.() ?? 0;
     try {
       manifest = await getManifest();
       acceptSnapshotManifest(manifest);
-      let verifiedShardCount = 0;
-      const [dayPayloads, epssResult] = await Promise.all([
-        mapWithConcurrency(manifest.days, LIMITS.shardConcurrency, async (day) => {
-          const rows = await fetchVerifiedJson(day, LIMITS.shardBytes, FETCH_CACHE.data, {
-            validate: (payload) => validateShard(day, payload)
-          });
-          verifiedShardCount += 1;
-          reportVerifiedShard(verifiedShardCount, manifest.days.length);
-          return { day, rows };
-        }),
-        fetchVerifiedJson(manifest.epss, LIMITS.epssBytes, FETCH_CACHE.data, {
-          storeOffline: false, retainBytes: true
-        })
+      const [indexResult, epssResult] = await Promise.all([
+        fetchVerifiedJson(manifest.search_index, LIMITS.indexBytes, FETCH_CACHE.data, { retainBytes: true, validate: (payload) => validateSearchIndex(payload, manifest) }),
+        fetchVerifiedJson(manifest.epss, LIMITS.epssBytes, FETCH_CACHE.data, { storeOffline: false, retainBytes: true })
       ]);
-      records = validateRecords(dayPayloads);
+      records = indexResult.payload;
       epssScores = validateEpssFile(epssResult.payload, manifest, records);
-      await storeVerifiedOfflineBytes(`${SNAPSHOT_BASE}${manifest.epss.path}`, epssResult.bytes);
+      await Promise.all([
+        storeVerifiedOfflineBytes(`${SNAPSHOT_BASE}${manifest.search_index.path}`, indexResult.bytes),
+        storeVerifiedOfflineBytes(`${SNAPSHOT_BASE}${manifest.epss.path}`, epssResult.bytes)
+      ]);
+      reportVerifiedShard(records.length, records.length);
       acceptSnapshotSidecar();
-
       setSnapshotStats();
       const freshness = snapshotFreshnessLabel(manifest);
-      const fullCaptureMessage = snapshotCacheFallbackUsed
-        ? `OFFLINE · all ${nf.format(manifest.days.length)} daily shards and EPSS verified against the captured manifest (${formatTimestamp(manifest.generated_at, 'unavailable')}). This is not live data.`
-        : `${freshness} · snapshot verified · dated static capture · not live.`;
-      setSnapshotStatus(fullCaptureMessage, freshness.toLowerCase(), manifest, {
-        records: records.length,
-        kev: records.filter((record) => record.kev !== null).length
-      }, 'center');
+      const captureMessage = snapshotCacheFallbackUsed
+        ? `OFFLINE · the compact ${nf.format(records.length)}-record index and EPSS set were verified against the captured manifest (${formatTimestamp(manifest.generated_at, 'unavailable')}). Detail opens only when its shard is cached; this is not live data.`
+        : `${freshness} · compact search index verified · detail shards integrity-checked on demand · not live.`;
+      setSnapshotStatus(captureMessage, freshness.toLowerCase(), manifest, { records: records.length, kev: records.filter((record) => record.kev !== null).length }, 'center');
       lastBackgroundSnapshotCheck = Date.now();
       renderRecords();
       updateAddressBar();
       const requestedRecord = requestedCveId ? records.find((record) => record.id === requestedCveId) : null;
-      if (requestedRecord) {
-        openDetails(requestedRecord, recordButtons.get(requestedCveId));
-      }
+      if (requestedRecord) openDetails(requestedRecord, recordButtons.get(requestedCveId));
       closeSnapshotLoader();
+      if (loadStartedAt && window.performance?.measure) {
+        try { window.performance.measure('subzero-index-verified-and-rendered', { start: loadStartedAt, end: window.performance.now() }); } catch { /* Diagnostic metrics are optional. */ }
+      }
     } catch {
-      records = [];
-      epssScores = Object.create(null);
+      records = []; epssScores = Object.create(null);
       const offlineFailure = snapshotCacheFallbackUsed || navigator.onLine === false;
       setSnapshotStatus(offlineFailure
-        ? 'OFFLINE · snapshot is incomplete or failed integrity verification. No records are shown; reconnect before retrying.'
-        : 'DEGRADED · snapshot verification failed. No records are displayed; reload to try again.', 'error', manifest, null, 'center');
+        ? 'OFFLINE · the cached search index or EPSS file is incomplete or failed integrity verification. No results are shown; reconnect before retrying.'
+        : 'DEGRADED · search-index verification failed. No records are displayed; reload to try again.', 'error', manifest, null, 'center');
       recordList.replaceChildren();
       status.textContent = offlineFailure
-        ? 'OFFLINE · the cached snapshot is incomplete or does not match its manifest. No partial records are shown. Reconnect and reload to verify the full capture.'
-        : 'DEGRADED · the captured CVE snapshot could not be verified. No partial records are shown. Check your connection and reload to try again.';
-      const retry = document.createElement('button');
-      retry.type = 'button';
-      retry.className = 'clear-filters';
-      retry.textContent = 'Reload snapshot';
-      retry.addEventListener('click', () => window.location.reload());
-      recordList.append(retry);
-      closeSnapshotLoader();
+        ? 'OFFLINE · the compact cached index is incomplete or does not match its manifest. No partial records are shown. Reconnect and reload to verify the capture.'
+        : 'DEGRADED · the captured search index could not be verified. No partial records are shown. Check your connection and retry.';
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'clear-filters'; retry.textContent = 'Reload snapshot';
+      retry.addEventListener('click', () => window.location.reload()); recordList.append(retry); closeSnapshotLoader();
     }
+  }
+
+  async function loadDetailRecord(indexRecord) {
+    const day = manifest?.days.find((candidate) => candidate.path === indexRecord.detail_path);
+    if (!day) throw new Error('The detail shard is not declared by this verified manifest.');
+    let shard = detailShardCache.get(day.path);
+    if (!shard) {
+      shard = await fetchVerifiedJson(day, LIMITS.shardBytes, FETCH_CACHE.data, { validate: (payload) => validateShard(day, payload) });
+      detailShardCache.set(day.path, shard);
+    }
+    const detail = shard.find((record) => record.id === indexRecord.id);
+    if (!detail || detail.title !== indexRecord.title || detail.window_date !== indexRecord.window_date ||
+        detail.activity_at !== indexRecord.activity_at || detail.sev !== indexRecord.sev || detail.score !== indexRecord.score) {
+      throw new Error('The verified detail shard does not match its compact index entry.');
+    }
+    return detail;
   }
 
   function startSnapshot() {
@@ -1443,7 +1574,7 @@
     const references = Array.isArray(record.refs)
       ? record.refs.map((item) => [item?.label, item?.source, item?.url].filter(Boolean).join(' ')).join(' ')
       : '';
-    return [record.id, record.title, record.desc, record.date_basis, ...safeStringList(record.sources), affected, kev, advisories, references]
+    return [record.id, record.title, record.desc, record.summary, record.date_basis, ...safeStringList(record.sources), affected, kev, advisories, references]
       .map((part) => typeof part === 'string' ? part : '')
       .join(' ')
       .toLocaleLowerCase();
@@ -1501,7 +1632,7 @@
 
     const body = document.createElement('span');
     body.className = 'record-body';
-    addText(body, 'span', 'record-title', safeString(record.title, 'Title not supplied'));
+    addText(body, 'span', 'record-title', displayTitle(record.title, 'Title not supplied'));
     const summary = safeString(record.desc, safeString(record.title, 'Description not supplied'));
     addText(body, 'span', 'record-summary', summary);
     const date = document.createElement('time');
@@ -1535,7 +1666,7 @@
     }
 
     open.append(body, signals);
-    open.addEventListener('click', () => openDetails(record, open));
+    open.addEventListener('click', () => openDetails(record, open, { pushHistory: true }));
     row.append(open);
     recordList.append(row);
     recordButtons.set(record.id, open);
@@ -1550,6 +1681,7 @@
   }
 
   function renderRecords() {
+    const renderStartedAt = window.performance?.now?.() ?? 0;
     if (!manifest || !records.length) return;
     recordButtons = new Map();
     matchedRecords = filteredRecords();
@@ -1583,6 +1715,9 @@
     pagePrevious.disabled = pageIndex === 0;
     pageNext.disabled = pageIndex >= pageCount - 1;
     pagination.hidden = pageCount <= 1;
+    if (renderStartedAt && window.performance?.measure) {
+      try { window.performance.measure('subzero-list-render', { start: renderStartedAt, end: window.performance.now() }); } catch { /* Diagnostic metrics are optional. */ }
+    }
   }
 
   function clearFilters() {
@@ -1630,7 +1765,7 @@
     nav.setAttribute('aria-label', 'CVE record sections');
     const sections = [
       ['Summary', 'detail-summary'], ['Why This Matters', 'detail-why'], ['Record', 'detail-record'], ['Signals', 'detail-signals'],
-      ['Affected', 'detail-affected'], ['References', 'detail-references'], ['Sources', 'detail-sources']
+      ['Affected', 'detail-affected'], ['References', 'detail-references'], ['Sources', 'detail-sources'], ['History', 'detail-history']
     ];
     sections.forEach(([label, id], index) => {
       const tab = document.createElement('a');
@@ -1682,15 +1817,51 @@
     return section;
   }
 
-  function openDetails(record, opener) {
+  async function openDetails(indexRecord, opener, { pushHistory = false } = {}) {
+    if (!indexRecord || !indexRecord.id) return;
+    const serial = ++detailRequestSerial;
+    activeCveId = indexRecord.id;
+    lastDetailFocus = opener || document.activeElement;
+    lastScrollY = window.scrollY;
+    if (pushHistory) {
+      updateAddressBar({ pushHistory: true });
+      const entryState = window.history.state && typeof window.history.state === 'object'
+        ? { ...window.history.state }
+        : {};
+      entryState.subzeroDossierEntry = true;
+      window.history.replaceState(entryState, '', window.location.href);
+    }
+    feedView.hidden = true;
+    detailView.hidden = false;
+    detailContent.replaceChildren();
+    const loading = addText(detailContent, 'p', 'detail-loading', `Verifying the ${indexRecord.id} detail shard…`);
+    loading.setAttribute('role', 'status');
+    try {
+      const record = await loadDetailRecord(indexRecord);
+      await loadHistory().catch(() => null);
+      if (serial !== detailRequestSerial || activeCveId !== indexRecord.id) return;
+      renderDetailRecord(record, opener);
+    } catch {
+      if (serial !== detailRequestSerial || activeCveId !== indexRecord.id) return;
+      detailContent.replaceChildren();
+      const offlineDetail = snapshotCacheFallbackUsed || navigator.onLine === false;
+      const detailFailure = offlineDetail
+        ? `OFFLINE · This cached dataset is ${approximateSnapshotAge(manifest?.generated_at)} old, but ${indexRecord.id}'s full detail shard is not cached. No partial dossier is shown; reconnect, then retry.`
+        : 'The full detail shard is unavailable or failed integrity verification. No partial dossier is shown. Reload or retry the detail.';
+      addText(detailContent, 'p', 'detail-load-error', detailFailure);
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'primary-action'; retry.textContent = 'Retry detail';
+      retry.addEventListener('click', () => openDetails(indexRecord, opener));
+      detailContent.append(retry);
+      $('#back-to-results').focus({ preventScroll: true });
+    }
+  }
+
+  function renderDetailRecord(record, opener) {
     if (!record || !record.id) return;
     activeCveId = record.id;
     lastDetailFocus = opener || document.activeElement;
     lastScrollY = window.scrollY;
     severityDistribution.hidden = true;
-    centerDock.hidden = true;
-    centerDock.classList.remove('is-released');
-    headerSearchReturn.hidden = true;
     feedView.hidden = true;
     detailView.hidden = false;
     detailContent.replaceChildren();
@@ -1707,7 +1878,7 @@
     titleGroup.append(date);
     header.append(titleGroup, makeSeverityTag(record));
 
-    const detailTitle = addText(detailContent, 'h3', 'detail-title', safeString(record.title, 'Title not supplied'));
+    const detailTitle = addText(detailContent, 'h3', 'detail-title', displayTitle(record.title, 'Title not supplied'));
     detailTitle.id = 'detail-summary';
     addText(detailContent, 'p', 'detail-description', safeString(record.desc, 'Description not supplied'));
     detailContent.prepend(header);
@@ -1815,6 +1986,29 @@
     if (sourceRecordUrl) addLink(sourceLine, 'Open primary source record', sourceRecordUrl);
     detailContent.append(sourceLine);
 
+    const historyHeading = addText(detailContent, 'h3', 'detail-section-heading', 'Observed change history');
+    historyHeading.id = 'detail-history';
+    const matchingEvents = (historyData?.events || []).filter((event) => event.id === record.id).slice().reverse();
+    if (matchingEvents.length) {
+      const timeline = document.createElement('ol'); timeline.className = 'detail-change-timeline';
+      matchingEvents.forEach((event) => {
+        const item = document.createElement('li'); item.className = 'detail-change-event';
+        addText(item, 'strong', '', changeTypeLabel(event.type));
+        const diff = changeValueText(event);
+        if (diff) addText(item, 'p', '', diff);
+        const observed = document.createElement('time'); observed.dateTime = event.observed_at;
+        observed.textContent = `Observed ${formatTimestamp(event.observed_at, 'time unavailable')}`;
+        item.append(observed);
+        addText(item, 'span', '', `Source: ${event.source}${event.source_time ? ` · source time ${event.source_time}` : ''}`);
+        timeline.append(item);
+      });
+      detailContent.append(timeline);
+    } else {
+      addText(detailContent, 'p', 'detail-empty-copy', historyLoadError
+        ? 'Change history could not be verified. Earlier history is not inferred from source modified timestamps.'
+        : 'No retained observed changes are available for this CVE. History starts from the first comparison after the recorded baseline; earlier changes cannot be reconstructed.');
+    }
+
     updateAddressBar();
     $('#back-to-results').focus({ preventScroll: true });
     requestAnimationFrame(() => {
@@ -1824,11 +2018,11 @@
   }
 
   function restoreResultsView({ restoreFocus = true, restoreScroll = true } = {}) {
+    detailRequestSerial += 1;
     detailView.hidden = true;
     activeCveId = null;
     requestedCve = null;
     requestedCveId = null;
-    centerDock.hidden = false;
     severityDistribution.hidden = false;
     feedView.hidden = false;
     renderRecords();
@@ -1836,69 +2030,25 @@
     if (restoreScroll) window.scrollTo({ top: lastScrollY, behavior: 'auto' });
     if (restoreFocus) (restore || searchInput).focus({ preventScroll: true });
     lastDetailFocus = null;
-    scheduleSearchDockSync();
   }
 
   function backToResults() {
+    if (window.history.state?.subzeroDossierEntry === true) {
+      window.history.back();
+      return;
+    }
     restoreResultsView();
     updateAddressBar();
   }
 
-  function setSearchDockCompact(compact) {
-    const nextCompact = Boolean(compact && document.activeElement !== searchInput);
-    centerDock.classList.toggle('is-compact', nextCompact);
-  }
-
-  function returnToSearch() {
-    if (activePage !== 'center' || centerPage.hidden || !detailView.hidden) return;
-    centerDock.classList.remove('is-released');
-    headerSearchReturn.hidden = true;
-    const headerBottom = siteHeader.getBoundingClientRect().bottom;
-    const anchorTop = searchAnchor.getBoundingClientRect().top;
-    const top = Math.max(0, window.scrollY + anchorTop - headerBottom - 8);
-    window.scrollTo({ top, behavior: reducedMotion.matches ? 'auto' : 'smooth' });
-    searchInput.focus({ preventScroll: true });
-    scheduleSearchDockSync();
-  }
-
-  function scheduleSearchDockSync() {
-    if (searchDockFrame) return;
-    searchDockFrame = window.requestAnimationFrame(() => {
-      searchDockFrame = 0;
-      const centerIsActive = activePage === 'center' && !centerPage.hidden && !centerDock.hidden;
-      if (!centerIsActive) {
-        centerDock.classList.remove('is-released');
-        headerSearchReturn.hidden = true;
-        setSearchDockCompact(false);
-        return;
-      }
-      const headerBottom = siteHeader.getBoundingClientRect().bottom;
-      const searchTop = searchAnchor.getBoundingClientRect().top;
-      const alreadyCompact = centerDock.classList.contains('is-compact');
-      // Keep native scroll anchoring from flapping the dock across its threshold.
-      const scrollHysteresis = 48;
-      const collapseThreshold = headerBottom + (alreadyCompact ? scrollHysteresis : -scrollHysteresis);
-      const shouldCompact = searchTop < collapseThreshold && document.activeElement !== searchInput;
-      const compactDockHeight = Number.parseFloat(getComputedStyle(centerDock).getPropertyValue('--center-dock-compact-height'))
-        || centerDock.getBoundingClientRect().height;
-      const releaseBoundary = headerBottom + compactDockHeight;
-      const feedTop = feedView.getBoundingClientRect().top;
-      const alreadyReleased = centerDock.classList.contains('is-released');
-      const searchReentryBoundary = headerBottom + 4;
-      const shouldRelease = alreadyReleased
-        ? searchTop < searchReentryBoundary
-        : feedTop <= releaseBoundary;
-      centerDock.classList.toggle('is-released', shouldRelease);
-      headerSearchReturn.hidden = !shouldRelease;
-      setSearchDockCompact(shouldCompact);
-    });
-  }
 
   function switchPage(name, focusPage = false, options = {}) {
     if (!pages.has(name)) return;
     const pageChanged = activePage !== name;
     finishActiveSwipeSettlement();
     if (name === 'center') startSnapshot();
+    if (name === 'changes') loadHistory().then(renderChanges).catch(renderChangesError);
+    if (name === 'latest') loadHistory().then(renderLatestChanges).catch(() => renderLatestChanges());
     const next = pages.get(name);
     const previous = pages.get(activePage);
     if (activePage === 'community' && name !== 'community') cancelCommunityTransition();
@@ -1929,23 +2079,22 @@
       const requestedRecord = records.find((record) => record.id === requestedCveId);
       if (requestedRecord) openDetails(requestedRecord, recordButtons.get(requestedCveId));
     }
-    scheduleSearchDockSync();
   }
 
   function bindSwipeNavigation() {
     const main = $('#main-content');
     if (!main || typeof window.PointerEvent !== 'function') return;
 
-    const pageOrder = ['overview', 'latest', 'center', 'archive', 'community'];
+    const pageOrder = ['overview', 'latest', 'center', 'changes', 'community'];
     const blockedSelector = [
       'a[href]', 'button', 'input', 'select', 'textarea', 'option', 'summary', 'details',
       '[role="button"]', '[role="link"]', '[role="combobox"]', '[role="textbox"]',
       '[role="dialog"]', '[aria-modal="true"]', '[contenteditable]:not([contenteditable="false"])',
-      '.record-list', '.record-row', '.center-dock', '.filter-controls', '.severity-distribution',
+      '.record-list', '.record-row', '.research-toolbar', '.filter-controls', '.severity-distribution',
       '.pagination', '.detail-view', '.snapshot-loader', '.overview-kpis', '.overview-grid',
       '.activity-panel', '.latest-preview-row', '.latest-page-item', '.latest-list', '.source-intelligence',
     ].join(',');
-    const desktopCardSelector = '.snapshot-status-strip, .snapshot-rail, .latest-list, .latest-page-list, .archive-day-list, .source-intelligence, .snapshot-summary, .overview-kpis, .overview-grid, .activity-panel, .latest-preview-row, article, .terminal-frame';
+    const desktopCardSelector = '.snapshot-status-strip, .snapshot-rail, .latest-list, .latest-page-list, .change-event-list, .source-intelligence, .snapshot-summary, .overview-kpis, .overview-grid, .activity-panel, .latest-preview-row, article, .terminal-frame';
     const horizontalIntentRatio = 1.2;
     let gesture = null;
     let settlement = null;
@@ -2397,17 +2546,6 @@
     });
     window.addEventListener('online', () => checkForUpdatedSnapshot({ force: true }));
     window.setInterval(() => checkForUpdatedSnapshot(), BACKGROUND_SNAPSHOT_CHECK_MS);
-    window.addEventListener('scroll', scheduleSearchDockSync, { passive: true });
-    window.addEventListener('resize', scheduleSearchDockSync, { passive: true });
-    searchInput.addEventListener('focus', () => {
-      if (centerDock.classList.contains('is-released')) {
-        centerDock.classList.remove('is-released');
-        headerSearchReturn.hidden = true;
-      }
-      setSearchDockCompact(false);
-    });
-    searchInput.addEventListener('blur', scheduleSearchDockSync);
-    scheduleSearchDockSync();
 
     tabs.forEach((tab, index) => {
       tab.addEventListener('click', () => switchPage(tab.dataset.page));
@@ -2424,7 +2562,6 @@
       event.preventDefault();
       switchPage('overview');
     });
-    headerSearchReturn.addEventListener('click', returnToSearch);
     $('#back-to-results').addEventListener('click', backToResults);
     $('#telegram-cta').addEventListener('click', handleTelegramClick);
     bindSwipeNavigation();
@@ -2459,7 +2596,8 @@
       requestedCve = null;
       requestedCveId = null;
       pageIndex = 0;
-      renderRecords();
+      window.clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = window.setTimeout(renderRecords, 70);
       updateAddressBar();
     });
     searchInput.addEventListener('keydown', (event) => {
@@ -2514,6 +2652,20 @@
     latestSourceSelect.addEventListener('change', renderLatestOnFilter);
     latestEpssMinInput.addEventListener('input', renderLatestOnFilter);
     latestKevOnlyInput.addEventListener('change', renderLatestOnFilter);
+    $('#change-search').addEventListener('input', renderChanges);
+    ['change-from', 'change-to'].forEach((id) => $(`#${id}`).addEventListener('change', renderChanges));
+    $$('[data-change-filter]').forEach((button) => button.addEventListener('click', () => {
+      activeChangeFilter = button.dataset.changeFilter;
+      $$('[data-change-filter]').forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === button)));
+      renderChanges();
+    }));
+    $('#changes-retry').addEventListener('click', () => {
+      historyData = null; historyPromise = null;
+      loadHistory().then(() => {
+        renderChanges();
+        $('#change-page-status').focus({ preventScroll: true });
+      }).catch(renderChangesError);
+    });
 
     $$('.severity-tab').forEach((button) => {
       button.addEventListener('click', () => {
@@ -2583,12 +2735,13 @@
       const typing = target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
       if (event.key === '/' && !typing && activePage === 'center' && detailView.hidden) {
         event.preventDefault();
-        returnToSearch();
+        searchInput.focus();
       }
       if (event.key === 'Escape' && !detailView.hidden) backToResults();
     });
 
-    const initialPage = initialUrlParams.get('page');
+    const requestedInitialPage = initialUrlParams.get('page');
+    const initialPage = requestedInitialPage === 'archive' ? 'center' : requestedInitialPage;
     if (initialPage && pages.has(initialPage)) switchPage(initialPage, false, { updateUrl: false });
     else if (!initialPage && requestedCveId) switchPage('center', false, { updateUrl: false });
   }

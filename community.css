@@ -86,7 +86,7 @@
 .info-subtitle { margin-top: 1px !important; color: #aebbc0; }
 .info-description { margin-top: 9px !important; color: #c4cdd1; }
 .info-group { margin-top: 9px; }
-.info-label { margin-bottom: 2px !important; color: #849299; font-size: 10px; font-weight: 650; letter-spacing: .09em; }
+.info-label { margin-bottom: 2px !important; color: #849299; font-size: 11px; font-weight: 650; letter-spacing: .09em; }
 .info-values { color: #c5d0d4; white-space: pre-wrap; }
 .info-status-group { margin-top: 8px; }
 .online-dot { color: #83af95; }
@@ -150,7 +150,7 @@
   .terminal-line { font-size: 12px; line-height: 1.5; }
   .terminal-info { margin-top: 6px; font-size: 11px; line-height: 1.32; }
   .info-name { font-size: 12px; }
-  .info-label { font-size: 9px; }
+  .info-label { font-size: 11px; }
   .info-description { margin-top: 5px !important; }
   .info-group { margin-top: 5px; }
   .info-status-group { margin-top: 6px; }

@@ -36,6 +36,7 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", prepare)
         self.assertNotIn("git push", prepare)
         for gate in (
+            "node --check sw.js",
             "python -m unittest discover -s tests -v",
             "python scripts/verify_data_snapshot.py --max-age-hours 36",
             "python verify_full_feed.py",
@@ -77,6 +78,8 @@ class WorkflowSecurityTests(unittest.TestCase):
             self.assertTrue(all(re.search(r"@[0-9a-f]{40}(?:\s|$)", value) for value in uses), uses)
         self.assertIn("permissions:\n  contents: read", self.checks)
         self.assertIn("persist-credentials: false", self.checks)
+        self.assertIn("node --check sw.js", self.checks)
+        self.assertIn("node --check sw.js", self.update)
         self.assertNotIn("contents: write", self.checks)
 
     def test_development_dependencies_are_exact_sha256_locked_in_both_workflows(self):

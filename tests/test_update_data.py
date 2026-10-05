@@ -42,7 +42,19 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual((len(records), total, page_count), (3, 3, 2))
         self.assertEqual([int(call["startIndex"][0]) for call in calls], [0, 2])
         self.assertEqual(sleeps, [feed.NVD_PAGE_PAUSE_SECONDS])
-        self.assertEqual(calls[0]["pubStartDate"], ["2026-09-01T00:00:00.000"])
+        self.assertEqual(calls[0]["lastModStartDate"], ["2026-09-01T00:00:00.000"])
+        self.assertEqual(calls[0]["lastModEndDate"], ["2026-09-30T00:00:00.000"])
+
+    def test_nvd_can_query_publication_window_explicitly(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        calls = []
+        page = {"totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]}
+        feed.iter_nvd(start, end, lambda url, headers=None: (calls.append(url) or page, {}),
+                      lambda _: None, date_field="published")
+        query = parse_qs(urlparse(calls[0]).query)
+        self.assertIn("pubStartDate", query)
+        self.assertIn("pubEndDate", query)
 
     def test_nvd_fails_on_empty_or_changing_pages(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -81,7 +93,10 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual([item["ghsa_id"] for item in items], ["GHSA-one", "GHSA-two"])
         self.assertEqual(calls[0][1]["Authorization"], "Bearer test-token")
         self.assertEqual(calls[0][1]["X-GitHub-Api-Version"], "2026-03-10")
-        self.assertEqual(parse_qs(urlparse(calls[0][0]).query)["per_page"], ["100"])
+        query = parse_qs(urlparse(calls[0][0]).query)
+        self.assertEqual(query["per_page"], ["100"])
+        self.assertEqual(query["modified"], ["2026-09-01..2026-09-30"])
+        self.assertEqual(query["sort"], ["updated"])
 
     def test_github_rejects_off_origin_cursor_and_empty_success(self):
         bad_cursor = "https://attacker.example/advisories?after=next"
@@ -141,6 +156,7 @@ class NormalizationTests(unittest.TestCase):
         advisory = {
             "ghsa_id": "GHSA-test", "cve_id": "cve-2026-1001",
             "summary": "Acme Router command injection", "published_at": "2026-09-10T11:00:00Z",
+            "updated_at": "2026-09-18T14:30:00Z",
             "html_url": "https://github.com/advisories/GHSA-test",
         }
         kev = [{
@@ -155,11 +171,69 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual((record["id"], record["score"], record["sev"]), ("CVE-2026-1001", 9.8, "critical"))
         self.assertEqual(record["published"], "2026-09-10T11:00:00.123Z")
         self.assertEqual(record["modified"], "2026-09-12T12:00:00Z")
-        self.assertEqual(record["window_date"], "2026-09-15")
+        self.assertEqual(record["window_date"], "2026-09-18")
+        self.assertEqual(record["activity_at"], "2026-09-18T14:30:00Z")
+        self.assertEqual(record["date_basis"], "GitHub advisory updated")
+        self.assertEqual(record["advisories"][0]["published_at"], "2026-09-10T11:00:00Z")
+        self.assertEqual(record["advisories"][0]["updated_at"], "2026-09-18T14:30:00Z")
         self.assertEqual(record["sources"], ["NVD", "GitHub Advisory Database", "CISA KEV"])
         self.assertEqual(record["kev"]["date_added"], "2026-09-15")
         self.assertIn("http://vendor.example/security/advisory", [item["url"] for item in record["refs"]])
         self.assertEqual(record["primary_url"], "https://nvd.nist.gov/vuln/detail/CVE-2026-1001")
+
+    def test_modified_cve_keeps_older_publication_date(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        cve = {"id": "CVE-2021-4242", "published": "2021-04-10T09:00:00Z",
+               "lastModified": "2026-09-17T12:00:00Z", "descriptions": [{"lang": "en", "value": "Updated vendor record."}]}
+        record = feed.build_records([{"cve": cve}], [], [], start, end)[0]
+        self.assertEqual(record["published"], "2021-04-10T09:00:00Z")
+        self.assertEqual(record["modified"], "2026-09-17T12:00:00Z")
+        self.assertEqual(record["window_date"], "2026-09-17")
+        self.assertEqual(record["date_basis"], "NVD last modified")
+
+
+class ChangeHistoryTests(unittest.TestCase):
+    def test_new_cve_and_reobserved_modified_cve_are_not_conflated(self):
+        observed = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+        previous_capture = datetime(2026, 10, 4, 12, tzinfo=timezone.utc)
+        records = [
+            {"id": "CVE-2026-8001", "title": "New", "published": "2026-10-05T10:00:00Z",
+             "activity_at": "2026-10-05T10:00:00Z", "date_basis": "CVE publication"},
+            {"id": "CVE-2020-8002", "title": "Updated", "published": "2020-01-01T00:00:00Z",
+             "activity_at": "2026-10-05T11:00:00Z", "date_basis": "NVD last modified"},
+        ]
+        events = feed.material_change_events([], records, None, None, observed, previous_capture)
+        by_id = {event["id"]: event["type"] for event in events}
+        self.assertEqual(by_id, {"CVE-2026-8001": "NEW_CVE", "CVE-2020-8002": "CVE_REOBSERVED"})
+
+    def test_epss_score_removal_is_observed_with_the_score_set_timestamp(self):
+        observed = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+        previous = [{"id": "CVE-2021-8100", "published": "2021-01-01T00:00:00Z",
+                     "activity_at": "2026-10-04T12:00:00Z", "date_basis": "NVD last modified"}]
+        current = [{"id": "CVE-2021-8100", "published": "2021-01-01T00:00:00Z",
+                    "activity_at": "2026-10-04T12:00:00Z", "date_basis": "NVD last modified"}]
+        old_epss = {"scores": {"CVE-2021-8100": {"score": 0.12, "percentile": 0.91}}}
+        new_epss = {"scores": {}, "source_updated_at": "2026-10-05T11:00:00Z"}
+        events = feed.material_change_events(previous, current, old_epss, new_epss, observed)
+        change = next(event for event in events if event["type"] == "EPSS_CHANGED")
+        self.assertEqual(change["from"], 0.12)
+        self.assertIsNone(change["to"])
+        self.assertEqual(change["source_time"], "2026-10-05T11:00:00Z")
+
+    def test_full_kev_catalog_detects_old_entry_change_and_removal(self):
+        observed = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+        previous = [
+            {"cveID": "CVE-2019-9001", "dateAdded": "2019-03-01", "requiredAction": "Patch"},
+            {"cveID": "CVE-2018-9002", "dateAdded": "2018-02-01", "requiredAction": "Remove"},
+        ]
+        current = [
+            {"cveID": "CVE-2019-9001", "dateAdded": "2019-03-01", "requiredAction": "Upgrade"},
+            {"cveID": "CVE-2026-9003", "dateAdded": "2026-10-05", "requiredAction": "Patch"},
+        ]
+        events = feed.material_change_events([], [], None, None, observed, observed - timedelta(days=1), previous, current)
+        by_pair = {(event["id"], event["type"]) for event in events}
+        self.assertEqual(by_pair, {("CVE-2019-9001", "KEV_CHANGED"), ("CVE-2018-9002", "KEV_REMOVED"), ("CVE-2026-9003", "KEV_ADDED")})
 
 
 class EpssTests(unittest.TestCase):
@@ -260,7 +334,7 @@ class PipelineFailureTests(unittest.TestCase):
             self.assertEqual(manifest["totals"]["cves"], 1)
             self.assertFalse((Path(temporary) / "api").exists())
             data_names = {path.name for path in (output / "data").iterdir()}
-            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json"})
+            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json", "search-index.json", "history.json"})
 
     def test_core_source_failure_or_empty_result_preserves_every_prior_snapshot_byte(self):
         now = self._now()

@@ -2,7 +2,7 @@
 
 # SubZer0
 
-SubZer0 is a vanilla HTML/CSS/JavaScript CVE intelligence browser published with [GitHub Pages](https://iliya-bashrc.github.io/SubZer0/). It reads versioned JSON from the same site; no backend or vulnerability API is called by the page.
+SubZer0 is a static CVE intelligence browser published with [GitHub Pages](https://iliya-bashrc.github.io/SubZer0/). The browser reads integrity-declared JSON from the same origin. It does not call vulnerability APIs directly and has no backend dependency.
 
 [![Join @RootAccessClub on Telegram](assets/telegram-rootaccessclub.svg)](https://t.me/RootAccessClub) [![Join @BugCod3 on Telegram](assets/telegram-bugcod3.svg)](https://t.me/BugCod3)
 
@@ -10,53 +10,60 @@ SubZer0 is a vanilla HTML/CSS/JavaScript CVE intelligence browser published with
 
 ## Views
 
-- **Overview** — verified CVE and CISA KEV totals, FIRST EPSS coverage, daily activity, source-check metadata recorded in the capture, and four linked records.
-- **Latest** — a source-derived, integrity-checked index of up to 50 records, with local text, source, EPSS minimum and KEV filters.
-- **Explore** — the complete captured feed, with search across supplied CVE/product/vendor/source/reference text; separate severity and numeric CVSS minimum filters; activity-date, supplied-vendor, source, EPSS minimum and KEV filters; pagination; and an evidence-led dossier.
-- **Archive** — UTC-date counts and links within the current rolling snapshot, not a permanent archive or cross-snapshot history.
-- **Community** — the existing terminal-style introduction and Telegram destinations remain a distinct experience. Its displayed `xdg-open` command is a visual simulation; no shell command runs in the browser.
+- **Overview** — snapshot totals, source-check results captured at generation time, daily activity and the newest verified feed records. It does not represent those source checks as live.
+- **Latest** — up to 50 actual feed records ordered by their newest source activity timestamp. It also surfaces only change events measured between complete captures.
+- **Changes** — a filterable 30-day log of observed record and catalog differences. Every event distinguishes the upstream source timestamp, when present, from the time SubZer0 observed the change.
+- **Explore** — the stable research toolbar searches a compact, structured index before any detail shard is fetched. Search covers CVE ID, title and short summary, source, bounded affected-vendor/product/version hints, and GHSA identifiers. CVSS, EPSS, KEV, source, vendor, date and pagination filters remain independently represented in the URL.
+- **CVE dossier** — opens one daily detail shard on demand, then verifies its declared size, SHA-256 and schema before rendering the complete record, affected products, references, advisories, provenance and observed history. Source records are treated as untrusted text; no combined risk score or missing classification is invented.
+- **Community** — the terminal-style introduction and Telegram destinations remain a separate experience. Its displayed `xdg-open` command is a visual simulation; no shell command runs in the browser.
 
-The dossier separates CVSS severity, FIRST EPSS probability, CISA KEV membership and advisory/research leads. Its “Why This Matters” points are assembled from the record’s actual captured evidence, with caveats rather than a combined score or live risk judgment. The current validated record schema has no CWE field; the dossier says when CWE is not supplied instead of inventing a classification.
+The small-screen layout uses safe-area-aware navigation and stacked research rows. Adjacent-page swipe navigation is supported without intercepting links, controls, text selection or vertical scrolling. The interface remains dependency-free vanilla HTML, CSS and JavaScript.
 
-The compact active-state header becomes a five-item, safe-area-aware bottom navigation on small screens; research rows become stacked cards. The implementation remains dependency-free vanilla HTML, CSS and JavaScript.
+## Snapshot, freshness and offline use
 
-## Snapshot status and offline behavior
+The currently checked-in capture was generated at **2026-10-05T14:41:08Z**. It contains **14,614 CVE records** across 31 UTC day shards and **14,456 EPSS scores** dated **2026-10-04**. The current full-capture history sidecar is an explicitly identified baseline with **zero observed change events**: no earlier comparable complete capture was available in this retained history. The UI does not manufacture prior changes. These values describe this capture only; the [manifest](snapshot/manifest.json) and [validation record](snapshot/VALIDATION.json) are authoritative.
 
-Freshness labels describe the age and captured source metadata of this static snapshot, not current upstream health. **FRESH** means up to six hours old (the scheduled refresh interval); **DELAYED** is over six and up to 24 hours; **STALE** is older than 24 hours; **DEGRADED** marks recorded source/EPSS issues or failed verification; **OFFLINE** means verified cached snapshot files are being used. Snapshot age is approximate and uses the viewing device’s clock. A source check shown in the interface is the result recorded when the snapshot was generated, not a live check.
+Freshness labels describe the age of the static capture and its recorded source metadata, not current upstream health. **FRESH** means up to six hours old; **DELAYED** is over six and up to 24 hours; **STALE** is older than 24 hours; **DEGRADED** marks a recorded source/EPSS issue or failed verification; **OFFLINE** identifies use of a cached capture. Snapshot age is approximate and uses the viewing device's clock. A source check shown in the interface is the result recorded at generation time, not a current check.
 
-A same-origin service worker caches the app shell. The application stores snapshot data only after its size, manifest, hash, schema and relevant cross-file checks pass. When offline, cached files go through the same integrity checks; Explore shows no partial records if any required shard is missing. The cache is best-effort and only contains files that have already been successfully verified in that browser.
+Explore first verifies the manifest, a compact **13,428,927-byte** search index and EPSS data; it does **not** download all 31 full-record shards to display the list. A dossier fetches only the necessary full shard. The service worker keeps same-origin app resources and bounded snapshot data; a fresh manifest is checked before cache candidates are used, and the application still verifies every payload against that manifest before display. When offline, cached records go through the same integrity checks. If a required detail shard is not cached, the dossier stays closed and reports the cached snapshot age rather than presenting partial or unverified evidence. Cache storage is best-effort, limited to the rolling 31-shard window and 128 MiB of snapshot data.
 
-While the page is open, it checks the same-origin manifest and compact Overview index every 15 minutes, when a hidden page becomes visible, and after the browser comes back online. A newer manifest and Overview index that pass their schema, size and hash checks produce a reload-or-dismiss notice; full daily shards are verified after reload before Explore shows records. The application does not silently replace the data already on screen. This check does not poll NVD, GitHub, CISA or FIRST, and it does not report GitHub Actions or live source health. The user-activated workflow link opens GitHub Actions history.
+While the page is open, the app checks the same-origin manifest and compact Overview index every 15 minutes, when a hidden page becomes visible, and when connectivity returns. A newer manifest that passes size, schema and digest checks produces a reload-or-dismiss notice; the app does not silently replace data already on screen. This does not poll NVD, GitHub, CISA or FIRST, and it does not report current upstream or GitHub Actions health.
 
-The checked-in snapshot was generated at **2026-10-04 17:08:24 UTC**. It contains **14,903 CVE records** across 31 UTC date shards in a rolling 30-day activity window, including **40 CISA KEV records**. Its FIRST EPSS sidecar contains **14,749 scored CVEs** for **2026-10-04**. These counts document this particular capture and are not estimates of current conditions.
+## Data collection and change history
 
-## Static data and integrity
+The scheduled GitHub Actions workflow runs every six hours UTC and can be started manually from `main`. The updater collects recent NVD CVE modifications, GitHub security advisories updated in the rolling window, the complete CISA KEV catalog and FIRST EPSS scores. It retains the original source publication/update timestamps; the record activity date uses the newest in-window source activity, or the CISA catalog's supplied `dateAdded` for a newly entering KEV-only record. NVD offsets and GitHub cursors are fully paginated and validated.
 
-GitHub Actions gathers records from the NVD CVE API, GitHub Security Advisory Database, the CISA Known Exploited Vulnerabilities catalog and FIRST EPSS. The refresh workflow runs every six hours (UTC) and can be started manually from `main`. It validates a complete candidate snapshot and exercises the browser before publishing only `snapshot/` to the GitHub Pages source branch. A core-source failure, incomplete pagination, invalid data, failed test or failed validation stops publication and retains the previous complete snapshot. EPSS is optional; retained scores remain explicitly marked stale or unavailable when its source data is stale or missing.
+History is generated by comparing complete, validated captures—not by assuming that omission from a rolling feed means deletion. A CVE first seen during the retained comparison window can be labeled new; a CVE modified outside the rolling feed can be called re-observed rather than newly published. Changes to older KEV catalog entries are compared against a separately retained complete catalog state. EPSS score changes retain their score-set date. History is bounded to 30 days, and its baseline/empty state is explicit. Source timestamps and SubZer0 observation timestamps are never conflated.
 
-`snapshot/data/overview.json` is a bounded 50-record schema-v2 index containing actual feed records and associated EPSS/KEV evidence when present. Its size and SHA-256 digest appear in the manifest. Overview and Latest verify the manifest and this index; Explore verifies every daily shard and the EPSS file before rendering the complete feed. A hash shows that a downloaded file matches the same-origin manifest; it is **not a digital signature** or independent proof of authenticity.
+A core-source failure, incomplete pagination, invalid response, failed test or failed integrity check stops publication and keeps the previous complete snapshot. EPSS is optional; a retained old score set is labeled stale or unavailable rather than current. The app served to visitors only reads static same-origin files.
 
-## Shareable Explore state
+## Data contract and trust
 
-The selected page uses `page=overview|latest|center|archive|community`; `center` remains the stable URL name for Explore. Archive links use inclusive UTC `from=YYYY-MM-DD` and `to=YYYY-MM-DD` dates.
+The manifest declares SHA-256 hashes, exact sizes, counts and paths for the full-record day shards and for bounded Overview, search-index, EPSS and history sidecars. The compact search index is schema v2 and limited to **16 MiB**; full descriptions, references and configuration evidence remain in detail shards. Application-level limits and cross-file checks apply before data is rendered.
 
-Explore supports `search=…`, `severity=critical|high|medium|low|unrated`, `cvssMin=0..10`, `kev=true`, `vendor=…`, `source=NVD|GitHub%20Advisory%20Database|CISA%20KEV`, `epssMin=0..100`, `from=…`, `to=…`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` for a record detail. CVSS and EPSS thresholds are distinct: records without the relevant score are excluded when a numeric minimum is active, including zero.
+A hash detects a file that differs from its same-origin manifest; it is **not a digital signature** or independent proof of source authenticity. The page renders feed-controlled text using DOM text nodes, accepts parsed HTTP(S) references without URL credentials, and opens external destinations with `noopener noreferrer`. GitHub Pages does not provide this repository with configurable response headers; in particular, a meta Content Security Policy cannot enforce `frame-ancestors`.
 
-Search covers identifiers, titles, descriptions, source labels, supplied affected vendor/product/version/CPE values, KEV vendor/product fields, advisory identifiers/URLs, and reference labels/sources/URLs. The dedicated vendor filter uses only supplied affected-vendor and KEV-vendor fields; product ownership is not inferred.
+See [DATA-CONTRACT.md](DATA-CONTRACT.md), [PERFORMANCE.md](PERFORMANCE.md), [IMPLEMENTATION-REPORT.md](IMPLEMENTATION-REPORT.md), [source and trust notes](SOURCE-NOTES.md), and the [historical audit](AUDIT.md).
 
-See the [snapshot manifest](snapshot/manifest.json), [validation record](snapshot/VALIDATION.json), [source and trust notes](SOURCE-NOTES.md), [security audit](AUDIT.md), and [2026-10-04 review report](AUDIT-REPORT-2026-10-04.md).
+## Shareable state and legacy routes
+
+The current page query uses `page=overview|latest|center|changes|community`; `center` remains the stable URL name for Explore. The former `?page=archive` bookmark is mapped to Explore (`page=center`) while preserving valid `from` and `to` date filters. Archive is not a separate page and has no primary-navigation tab.
+
+Explore supports `search=…`, `severity=critical|high|medium|low|unrated`, `cvssMin=0..10`, `kev=true`, `vendor=…`, `source=NVD|GitHub%20Advisory%20Database|CISA%20KEV`, `epssMin=0..100`, inclusive UTC `from=…` and `to=…`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` to open a dossier. CVSS and EPSS thresholds are distinct: records without the relevant score are excluded when a numeric minimum is active, including zero.
+
+The Explore toolbar remains in one stable position while scrolling. `/` focuses search; the query, date and filter state are shareable in the URL. Opening a dossier creates a browser-history entry; Back, Forward and the in-app Back-to-results control restore the filtered list and reopen the same verified detail. Searchable summaries are intentionally compact; full references, descriptions and technical detail are available after a hash-verified dossier shard is opened.
 
 ## Run and validate locally
 
-Serve the repository over HTTP so the browser can load its same-origin files:
+Serve the repository over HTTP so the browser can load same-origin files:
 
 ```bash
 python3 -m http.server 8766 --bind 127.0.0.1
 ```
 
-Open [Overview](http://127.0.0.1:8766/), [Latest](http://127.0.0.1:8766/?page=latest), [Explore](http://127.0.0.1:8766/?page=center), or [Archive](http://127.0.0.1:8766/?page=archive). Stop the server with `Ctrl+C`.
+Open [Overview](http://127.0.0.1:8766/), [Latest](http://127.0.0.1:8766/?page=latest), [Changes](http://127.0.0.1:8766/?page=changes), or [Explore](http://127.0.0.1:8766/?page=center). Stop the server with `Ctrl+C`.
 
-The deterministic unit tests make no upstream requests. The Playwright browser suites test real checked-in records; the Community suite intercepts Telegram navigation locally. Development dependencies are hash-pinned in `requirements-dev.txt`.
+The deterministic unit tests make no upstream requests. The Playwright suites exercise the actual checked-in records and verify route, data, integrity, cache, keyboard, touch and responsive behavior; Community navigation is locally intercepted. Development dependencies are hash-pinned in `requirements-dev.txt`.
 
 ```bash
 node --check app.js
@@ -69,7 +76,7 @@ python3 verify_full_feed.py
 python3 verify_community_ansi_shadow.py --community-only
 ```
 
-`scripts/verify_pages.py` checks that the public Pages site serves the expected application assets and a manifest-consistent snapshot. It is intended for post-deployment verification.
+`scripts/verify_pages.py` checks whether the public Pages site serves the expected application assets and a manifest-consistent snapshot. It is intended for post-deployment verification, not for claiming that an unmerged branch is live.
 
 ## License
 

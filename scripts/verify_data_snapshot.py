@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = REPO_ROOT / "snapshot"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
+GHSA_RE = re.compile(r"^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$", re.I)
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$", re.I)
 NAIVE_SOURCE_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$")
 SEVERITIES = ("critical", "high", "medium", "low", "none", "unknown")
@@ -36,6 +37,10 @@ MAX_SHARD_BYTES = 16 * 1024 * 1024
 MAX_OVERVIEW_BYTES = 64 * 1024
 MAX_OVERVIEW_RECORDS = 50
 MAX_EPSS_BYTES = 4 * 1024 * 1024
+MAX_INDEX_BYTES = 16 * 1024 * 1024
+MAX_HISTORY_BYTES = 8 * 1024 * 1024
+MAX_HISTORY_EVENTS = 10_000
+MAX_HISTORY_SNAPSHOTS = 800
 MAX_SHARDS = 31
 MAX_RECORDS = 50_000
 MAX_TITLE_CHARS = 512
@@ -360,8 +365,8 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     manifest = _loads(manifest_raw, "manifest.json")
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 2 or manifest.get("complete") is not True:
         raise SnapshotValidationError("manifest.json must be a complete schema-v2 snapshot")
-    if {"history", "facets"} & manifest.keys():
-        raise SnapshotValidationError("Manifest contains obsolete history/facets output not consumed by this application")
+    if "facets" in manifest:
+        raise SnapshotValidationError("Manifest contains obsolete facets output not consumed by this application")
 
     generated = _timestamp(manifest.get("generated_at"), "manifest.generated_at")
     last_success = _timestamp(manifest.get("last_successful_update"), "manifest.last_successful_update")
@@ -600,6 +605,167 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
             raise SnapshotValidationError("EPSS is marked current despite a stale or future-dated score set")
     declared_files.add("data/epss.json")
     snapshot_bytes += len(epss_raw)
+
+    index_config = manifest.get("search_index")
+    index_raw, search_index = _verify_blob(root, index_config, "data/search-index.json", MAX_INDEX_BYTES, "search_index")
+    if (not isinstance(index_config, dict) or index_config.get("schema_version") != 2 or
+            not isinstance(search_index, dict) or search_index.get("schema_version") != 2 or
+            search_index.get("generated_at") != manifest["generated_at"] or
+            set(search_index) != {"schema_version", "generated_at", "records"}):
+        raise SnapshotValidationError("Search-index schema or capture time is invalid")
+    index_records = search_index.get("records")
+    if not isinstance(index_records, list) or len(index_records) != expected_cves or _count(index_config.get("count"), "manifest.search_index.count") != expected_cves:
+        raise SnapshotValidationError("Search-index record count does not match the full snapshot")
+    full_by_id = {record["id"]: record for record in all_records}
+    indexed_ids: set[str] = set()
+    index_keys = {"id", "title", "summary", "score", "sev", "kev", "published", "modified",
+                  "window_date", "activity_at", "date_basis", "sources", "affected", "advisory_ids", "detail_path", "epss"}
+    for index, row in enumerate(index_records):
+        label = f"search_index.records[{index}]"
+        if not isinstance(row, dict) or set(row) != index_keys:
+            raise SnapshotValidationError(f"{label} has an invalid shape")
+        cve_id = row.get("id")
+        if not isinstance(cve_id, str) or not CVE_RE.fullmatch(cve_id) or cve_id != cve_id.upper() or cve_id in indexed_ids or cve_id not in full_by_id:
+            raise SnapshotValidationError(f"{label}.id is invalid, duplicated, or absent from detail shards")
+        indexed_ids.add(cve_id)
+        full = full_by_id[cve_id]
+        if row.get("title") != full["title"] or row.get("sev") != full["sev"] or row.get("score") != full["score"]:
+            raise SnapshotValidationError(f"{label} identity or severity differs from its detail record")
+        _text(row.get("summary"), f"{label}.summary", 320, allow_empty=True)
+        if row.get("window_date") != full["window_date"] or row.get("activity_at") != full["activity_at"] or row.get("date_basis") != full["date_basis"]:
+            raise SnapshotValidationError(f"{label} activity fields differ from its detail record")
+        if row.get("published") != full["published"] or row.get("modified") != full["modified"] or row.get("sources") != full["sources"]:
+            raise SnapshotValidationError(f"{label} provenance differs from its detail record")
+        if row.get("detail_path") != f"data/{full['window_date']}.json":
+            raise SnapshotValidationError(f"{label}.detail_path does not resolve to its activity shard")
+        affected = row.get("affected")
+        if not isinstance(affected, list) or len(affected) > 8:
+            raise SnapshotValidationError(f"{label}.affected must be a compact list of at most eight entries")
+        for item in affected:
+            if not isinstance(item, dict) or set(item) - {"vendor", "product", "versions"} or not item or any(not isinstance(v, str) for v in item.values()):
+                raise SnapshotValidationError(f"{label}.affected contains invalid compact product data")
+            if "versions" in item and len(item["versions"]) > 160:
+                raise SnapshotValidationError(f"{label}.affected version hint exceeds its compact bound")
+        source_affected = full.get("affected") if isinstance(full.get("affected"), list) else []
+        expected_affected = []
+        for source_index, source_item in enumerate(source_affected[:8]):
+            if not isinstance(source_item, dict):
+                continue
+            expected_item = {key: source_item.get(key, "") for key in ("vendor", "product") if isinstance(source_item.get(key, ""), str)}
+            if source_index < 3 and isinstance(source_item.get("versions"), str):
+                version_hint = " ".join(source_item["versions"].split())[:160]
+                if version_hint:
+                    expected_item["versions"] = version_hint
+            if expected_item:
+                expected_affected.append(expected_item)
+        if affected != expected_affected:
+            raise SnapshotValidationError(f"{label}.affected differs from the source details or version hints")
+        advisory_ids = row.get("advisory_ids")
+        if not isinstance(advisory_ids, list) or len(advisory_ids) > 8 or any(not isinstance(value, str) or not GHSA_RE.fullmatch(value) for value in advisory_ids):
+            raise SnapshotValidationError(f"{label}.advisory_ids is invalid")
+        expected_advisory_ids = []
+        for advisory in full.get("advisories") or []:
+            if not isinstance(advisory, dict) or not isinstance(advisory.get("url"), str):
+                continue
+            parsed = urlsplit(advisory["url"])
+            candidate = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+            if parsed.scheme == "https" and parsed.netloc.lower() == "github.com" and GHSA_RE.fullmatch(candidate):
+                expected_advisory_ids.append(candidate.upper())
+        if advisory_ids != list(dict.fromkeys(expected_advisory_ids))[:8]:
+            raise SnapshotValidationError(f"{label}.advisory_ids differ from source advisory URLs")
+        kev = row.get("kev")
+        full_kev = full.get("kev")
+        if kev is not None:
+            if not isinstance(kev, dict) or set(kev) - {"date_added", "vendor", "product"}:
+                raise SnapshotValidationError(f"{label}.kev has an invalid compact shape")
+            if not isinstance(full_kev, dict) or kev.get("date_added") != full_kev.get("date_added"):
+                raise SnapshotValidationError(f"{label}.kev does not match its detail record")
+        elif full_kev is not None:
+            raise SnapshotValidationError(f"{label}.kev omits a catalog entry present in the detail record")
+        epss_row = row.get("epss")
+        if epss_row != scores.get(cve_id):
+            raise SnapshotValidationError(f"{label}.epss does not match the EPSS sidecar")
+    if indexed_ids != all_ids:
+        raise SnapshotValidationError("Search index must contain each detail record exactly once")
+    declared_files.add("data/search-index.json")
+    snapshot_bytes += len(index_raw)
+
+    history_config = manifest.get("history")
+    history_raw, history = _verify_blob(root, history_config, "data/history.json", MAX_HISTORY_BYTES, "history")
+    if (not isinstance(history_config, dict) or history_config.get("schema_version") != 1 or
+            not isinstance(history, dict) or set(history) - {"schema_version", "retention_days", "baseline", "snapshots", "events", "kev_catalog"} or
+            not {"schema_version", "retention_days", "baseline", "snapshots", "events"}.issubset(history) or
+            history.get("schema_version") != 1 or history.get("retention_days") != 30 or history_config.get("retention_days") != 30):
+        raise SnapshotValidationError("Change-history schema or retention policy is invalid")
+    baseline = history.get("baseline")
+    if baseline is not None:
+        if not isinstance(baseline, dict) or set(baseline) != {"core_snapshot_at", "epss_score_date", "record_count", "complete"} or baseline.get("complete") is not True:
+            raise SnapshotValidationError("Change-history baseline metadata is invalid")
+        _timestamp(baseline["core_snapshot_at"], "history.baseline.core_snapshot_at")
+        if baseline["epss_score_date"]:
+            _date(baseline["epss_score_date"], "history.baseline.epss_score_date")
+        _count(baseline["record_count"], "history.baseline.record_count")
+    snapshots = history.get("snapshots")
+    events = history.get("events")
+    if not isinstance(snapshots, list) or len(snapshots) > MAX_HISTORY_SNAPSHOTS or _count(history_config.get("snapshot_count"), "manifest.history.snapshot_count", MAX_HISTORY_SNAPSHOTS) != len(snapshots):
+        raise SnapshotValidationError("Change-history snapshot list exceeds its declared bound")
+    if not isinstance(events, list) or len(events) > MAX_HISTORY_EVENTS or _count(history_config.get("event_count"), "manifest.history.event_count", MAX_HISTORY_EVENTS) != len(events):
+        raise SnapshotValidationError("Change-history event list exceeds its declared bound")
+    retention_start = generated - timedelta(days=30)
+    for index, item in enumerate(snapshots):
+        label = f"history.snapshots[{index}]"
+        if not isinstance(item, dict) or set(item) != {"observed_at", "core_snapshot_at", "epss_score_date", "record_count", "complete"}:
+            raise SnapshotValidationError(f"{label} has an invalid shape")
+        observed = _timestamp(item["observed_at"], f"{label}.observed_at")
+        _timestamp(item["core_snapshot_at"], f"{label}.core_snapshot_at")
+        if observed > generated or observed < retention_start or item["complete"] is not True:
+            raise SnapshotValidationError(f"{label} is outside the retained complete-capture window")
+        if item["epss_score_date"]:
+            _date(item["epss_score_date"], f"{label}.epss_score_date")
+        _count(item["record_count"], f"{label}.record_count")
+    event_types = {"NEW_CVE", "CVE_UPDATED", "CVE_REOBSERVED", "CVSS_CHANGED", "TITLE_CHANGED", "DESCRIPTION_CHANGED",
+                   "KEV_ADDED", "KEV_CHANGED", "KEV_REMOVED", "EPSS_CHANGED", "AFFECTED_PRODUCTS_CHANGED",
+                   "REFERENCE_CHANGED", "REFERENCE_ADDED", "REFERENCE_REMOVED", "ADVISORY_CHANGED",
+                   "ADVISORY_ADDED", "ADVISORY_REMOVED", "VERSION_RANGE_CHANGED", "SOURCE_METADATA_CHANGED"}
+    for index, item in enumerate(events):
+        label = f"history.events[{index}]"
+        if not isinstance(item, dict) or set(item) != {"id", "type", "observed_at", "source_time", "source", "from", "to"}:
+            raise SnapshotValidationError(f"{label} has an invalid shape")
+        cve_id = _text(item["id"], f"{label}.id", 32)
+        if not CVE_RE.fullmatch(cve_id) or cve_id != cve_id.upper() or item["type"] not in event_types:
+            raise SnapshotValidationError(f"{label} identity or change type is invalid")
+        observed = _timestamp(item["observed_at"], f"{label}.observed_at")
+        if observed > generated or observed < retention_start:
+            raise SnapshotValidationError(f"{label} is outside the retained observation window")
+        if item["source_time"] is not None:
+            if isinstance(item["source_time"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item["source_time"]):
+                _date(item["source_time"], f"{label}.source_time")
+            else:
+                _timestamp(item["source_time"], f"{label}.source_time")
+        _text(item["source"], f"{label}.source", 128)
+    kev_catalog = history.get("kev_catalog", [])
+    if not isinstance(kev_catalog, list) or len(kev_catalog) > 5_000 or _count(history_config.get("kev_catalog_count"), "manifest.history.kev_catalog_count", 5_000) != len(kev_catalog):
+        raise SnapshotValidationError("Change-history CISA baseline exceeds its declared entry bound")
+    kev_keys = {"cveID", "dateAdded", "vendorProject", "product", "vulnerabilityName", "shortDescription", "requiredAction", "dueDate", "knownRansomwareCampaignUse", "notes"}
+    kev_ids: set[str] = set()
+    for index, item in enumerate(kev_catalog):
+        label = f"history.kev_catalog[{index}]"
+        if not isinstance(item, dict) or set(item) != kev_keys:
+            raise SnapshotValidationError(f"{label} has an invalid CISA catalog shape")
+        cve_id = _text(item["cveID"], f"{label}.cveID", 32)
+        if not CVE_RE.fullmatch(cve_id) or cve_id != cve_id.upper() or cve_id in kev_ids:
+            raise SnapshotValidationError(f"{label}.cveID is invalid or duplicated")
+        kev_ids.add(cve_id)
+        _date(item["dateAdded"], f"{label}.dateAdded")
+        for key, limit in (("vendorProject", 256), ("product", 256), ("vulnerabilityName", 512),
+                           ("shortDescription", 4_096), ("requiredAction", 2_048), ("dueDate", 10),
+                           ("knownRansomwareCampaignUse", 64), ("notes", 1_024)):
+            _text(item[key], f"{label}.{key}", limit, allow_empty=True, multiline=True)
+    if len(json.dumps(kev_catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 4 * 1024 * 1024:
+        raise SnapshotValidationError("Change-history CISA catalog baseline exceeds 4 MiB")
+
+    declared_files.add("data/history.json")
+    snapshot_bytes += len(history_raw)
 
     if snapshot_bytes > MAX_SNAPSHOT_BYTES:
         raise SnapshotValidationError(f"Static snapshot exceeds its {MAX_SNAPSHOT_BYTES}-byte total limit")

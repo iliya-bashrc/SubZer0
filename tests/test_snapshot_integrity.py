@@ -108,7 +108,7 @@ class SnapshotIntegrityTests(unittest.TestCase):
         original_bytes = {
             path.relative_to(legacy_root).as_posix(): path.read_bytes()
             for path in (legacy_root / "data").glob("*.json")
-            if path.name != "overview.json"
+            if path.name not in {"overview.json", "search-index.json"}
         }
         (legacy_root / "data" / "overview.json").unlink()
         original_manifest.pop("overview", None)
@@ -128,12 +128,13 @@ class SnapshotIntegrityTests(unittest.TestCase):
         after_bytes = {
             path.relative_to(legacy_root).as_posix(): path.read_bytes()
             for path in (legacy_root / "data").glob("*.json")
-            if path.name != "overview.json"
+            if path.name not in {"overview.json", "search-index.json"}
         }
         self.assertEqual(after_bytes, original_bytes)
         self.assertEqual(migrated_manifest["generated_at"], original_generated_at)
         self.assertNotIn("facets", migrated_manifest)
-        self.assertNotIn("history", migrated_manifest)
+        self.assertIn("history", migrated_manifest)
+        self.assertIn("search_index", migrated_manifest)
         self.assertTrue((legacy_root / "data" / "overview.json").is_file())
         self.assertEqual(report["records"], 1)
         self.assertEqual(validate_snapshot(legacy_root)["records"], 1)

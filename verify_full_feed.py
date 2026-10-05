@@ -160,7 +160,7 @@ def source_epss_stale(manifest: dict) -> bool:
 
 
 def browser_issue_track(page, issues: dict, origin: str) -> None:
-    page.on('pageerror', lambda error: issues['page_errors'].append(str(error)))
+    page.on('pageerror', lambda error: issues['page_errors'].append(f'{error}\n{getattr(error, "stack", "")}'))
     page.on('console', lambda message: issues['console_errors'].append(message.text) if message.type == 'error' else None)
     page.on('requestfailed', lambda request: issues['request_failures'].append(request.url))
     page.on('request', lambda request: issues['external_requests'].append(request.url)
@@ -169,52 +169,66 @@ def browser_issue_track(page, issues: dict, origin: str) -> None:
 
 def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count: int, issues: dict) -> dict:
     context = browser.new_context(
-        viewport={'width': 390, 'height': 844},
-        device_scale_factor=1,
-        is_mobile=True,
-        has_touch=True,
-        service_workers='allow',
-    )
+        viewport={'width': 390, 'height': 844}, device_scale_factor=1,
+        is_mobile=True, has_touch=True, service_workers='allow')
     page = context.new_page()
     browser_issue_track(page, issues, origin)
+    index = json.loads((ROOT / 'snapshot' / manifest['search_index']['path']).read_bytes())
+    history = json.loads((ROOT / 'snapshot' / manifest['history']['path']).read_bytes())
+    cached_record = index['records'][0]
+    missing_record = next(row for row in index['records'] if row['detail_path'] != cached_record['detail_path'])
+    cached_shard_path = f"snapshot/{cached_record['detail_path']}"
+    missing_shard_path = f"snapshot/{missing_record['detail_path']}"
     try:
         page.goto(f'{origin}/?page=overview', wait_until='load', timeout=30_000)
         expect(page.locator('#overview-status')).to_contain_text('CVE records', timeout=30_000)
         page.wait_for_function('Boolean(navigator.serviceWorker && navigator.serviceWorker.controller)', timeout=30_000)
 
-        expected_cache_paths = [
-            'index.html', 'app.js', 'community.js', 'styles.css', 'feed.css',
-            'severity-effects.css', 'community.css', 'assets/telegram-mark.svg',
-            'assets/telegram-bugcod3.svg', 'assets/telegram-rootaccessclub.svg',
-            'snapshot/manifest.json', f"snapshot/{manifest['overview']['path']}",
-            f"snapshot/{manifest['epss']['path']}",
-            *[f"snapshot/{day['path']}" for day in manifest['days']],
-        ]
-
         page.locator('#tab-center').click()
-        expect(page.locator('#page-center .snapshot-status-strip__state')).to_contain_text(
-            'snapshot verified', timeout=120_000
-        )
+        expect(page.locator('#page-center .snapshot-status-strip__state')).to_contain_text('compact search index verified', timeout=120_000)
         expect(page.locator('.record-row').first).to_be_visible(timeout=30_000)
+        page.locator('#tab-changes').click()
+        expect(page.locator('#page-changes')).to_be_visible()
+        expect(page.locator('#change-event-list')).to_be_visible(timeout=30_000)
+        page.locator('#tab-center').click()
+        page.locator('.record-open').first.click()
+        expect(page.locator('#detail-heading')).to_have_text(cached_record['id'], timeout=30_000)
         page.wait_for_function('''async (expected) => {
-          const cache = await caches.open('subzero-offline-v1');
-          const keys = await cache.keys();
-          const paths = new Set(keys.map((request) => new URL(request.url).pathname));
-          return expected.every((path) => paths.has(new URL(path, `${location.origin}/`).pathname));
-        }''', arg=expected_cache_paths, timeout=120_000)
-        page.screenshot(path=str(SCREENSHOTS / '05-offline-cache-warmed-mobile.png'))
+          const cache=await caches.open('subzero-offline-v3');
+          const keys=await cache.keys();
+          const paths=new Set(keys.map(request=>new URL(request.url).pathname));
+          return expected.every(path=>paths.has(new URL(path,`${location.origin}/`).pathname));
+        }''', arg=[
+            'index.html','app.js','community.js','styles.css','feed.css','severity-effects.css','community.css',
+            'assets/telegram-mark.svg','assets/telegram-bugcod3.svg','assets/telegram-rootaccessclub.svg',
+            'snapshot/manifest.json',f"snapshot/{manifest['overview']['path']}",f"snapshot/{manifest['search_index']['path']}",
+            f"snapshot/{manifest['epss']['path']}",f"snapshot/{manifest['history']['path']}",cached_shard_path])
+        cache_audit = page.evaluate('''async ({cachedPath, missingPath}) => {
+          const cache=await caches.open('subzero-offline-v3');
+          const keys=await cache.keys();
+          const paths=new Set(keys.map(request=>new URL(request.url).pathname));
+          const fullShardPaths=[...paths].filter(path=>path.includes('/snapshot/data/') && /^[0-9]{4}-[0-9]{2}-[0-9]{2}[.]json$/.test(path.split('/').pop()));
+          return {cachedShardPresent:paths.has(new URL(cachedPath,`${location.origin}/`).pathname),
+            missingShardPresent:paths.has(new URL(missingPath,`${location.origin}/`).pathname),cachedShardCount:fullShardPaths.length};
+        }''', {'cachedPath': cached_shard_path, 'missingPath': missing_shard_path})
+        assert cache_audit['cachedShardPresent'] and not cache_audit['missingShardPresent'] and cache_audit['cachedShardCount'] == 1, cache_audit
+        page.screenshot(path=str(SCREENSHOTS / '05-offline-cache-warmed-mobile.png'), animations='disabled')
 
         devtools = context.new_cdp_session(page)
         devtools.send('Network.setCacheDisabled', {'cacheDisabled': True})
         context.add_init_script("Object.defineProperty(Navigator.prototype, 'onLine', {configurable: true, get: () => false});")
         context.set_offline(True)
-        page.reload(wait_until='domcontentloaded', timeout=30_000)
+        page.goto(f'{origin}/?page=center&cve={cached_record["id"]}', wait_until='domcontentloaded', timeout=30_000)
+        expect(page.locator('#page-center .snapshot-status-strip__state')).to_have_attribute('data-state', 'offline', timeout=120_000)
         offline_status = page.locator('#page-center .snapshot-status-strip__state')
-        expect(offline_status).to_have_attribute('data-state', 'offline', timeout=120_000)
         expect(offline_status).to_contain_text('OFFLINE')
+        expect(offline_status).to_contain_text(f'the compact {nfmt(expected_count)}-record index and EPSS set were verified against the captured manifest')
+        expect(offline_status).to_contain_text('Detail opens only when its shard is cached')
+        expect(page.locator('#page-center .snapshot-status-strip')).to_contain_text(manifest['generated_at'][:4])
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count))
-        expect(page.locator('.record-row').first).to_be_visible()
-        assert page.locator('.record-row').count() > 0, 'The complete cached Explore feed should remain available offline.'
+        expect(page.locator('#detail-heading')).to_have_text(cached_record['id'], timeout=30_000)
+        expect(page.locator('#detail-history')).to_be_visible(timeout=30_000)
+        expect(page.locator('#detail-content')).to_contain_text('Observed change history')
 
         page.locator('#tab-latest').click()
         expect(page.locator('#latest-page-list .latest-page-item').first).to_be_visible()
@@ -223,46 +237,39 @@ def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count
         page.locator('#tab-overview').click()
         expect(page.locator('#page-overview [data-snapshot-state]')).to_have_attribute('data-state', 'offline')
         mobile_metrics = page.evaluate('''() => {
-          const nav = document.querySelector('.page-nav');
-          const rect = nav.getBoundingClientRect();
-          return {
-            viewportWidth: innerWidth,
-            documentWidth: document.documentElement.scrollWidth,
-            navPosition: getComputedStyle(nav).position,
-            navBottom: rect.bottom,
-            viewportHeight: innerHeight
-          };
+          const nav=document.querySelector('.page-nav'); const rect=nav.getBoundingClientRect();
+          return {viewportWidth:innerWidth,documentWidth:document.documentElement.scrollWidth,
+            navPosition:getComputedStyle(nav).position,navBottom:rect.bottom,viewportHeight:innerHeight};
         }''')
         assert mobile_metrics['documentWidth'] <= mobile_metrics['viewportWidth'], mobile_metrics
         assert mobile_metrics['navPosition'] == 'fixed' and mobile_metrics['navBottom'] > mobile_metrics['viewportHeight'] - 100, mobile_metrics
 
-        missing_day = next(day for day in reversed(manifest['days']) if day['count'])
-        deleted_cache_entry = page.evaluate('''async (path) => {
-          const cache = await caches.open('subzero-offline-v1');
-          const url = new URL(`snapshot/${path}`, `${location.origin}/`).href;
-          const existed = Boolean(await cache.match(url));
-          const deleted = await cache.delete(url);
-          return {existed, deleted, remains: Boolean(await cache.match(url))};
-        }''', missing_day['path'])
-        assert deleted_cache_entry == {'existed': True, 'deleted': True, 'remains': False}, deleted_cache_entry
-        console_error_offset = len(issues['console_errors'])
-        page.goto(f'{origin}/?page=center', wait_until='domcontentloaded', timeout=30_000)
-        error_state = page.locator('#page-center .snapshot-status-strip__state')
-        expect(error_state).to_have_attribute('data-state', 'error', timeout=120_000)
-        expect(error_state).to_contain_text('OFFLINE · snapshot is incomplete')
-        assert page.locator('.record-row').count() == 0, 'An incomplete offline snapshot must never render partial CVE rows.'
-        expect(page.locator('#result-status')).to_contain_text('No partial records are shown')
-        expected_cache_miss = issues['console_errors'][console_error_offset:]
-        assert all('status of 503' in message for message in expected_cache_miss), expected_cache_miss
-        del issues['console_errors'][console_error_offset:]
-        page.screenshot(path=str(SCREENSHOTS / '06-incomplete-offline-cache-fails-closed.png'))
+        # Chromium reports the service worker's deliberate offline 503 as a console error.
+        # Isolate and validate only this expected warning; unrelated console errors remain fatal.
+        offline_console_start = len(issues['console_errors'])
+        page.goto(f'{origin}/?page=center&search={missing_record["id"]}', wait_until='domcontentloaded', timeout=30_000)
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
+        expect(page.locator('.record-row')).to_have_count(1, timeout=30_000)
+        page.locator('.record-open').click()
+        expect(page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+        expect(page.locator('.detail-load-error')).to_contain_text('OFFLINE')
+        assert page.locator('#detail-heading').count() == 0
+        observed_offline_errors = issues['console_errors'][offline_console_start:]
+        assert len(observed_offline_errors) == 1 and observed_offline_errors[0].startswith(
+            'Failed to load resource: the server responded with a status of 503'
+        ), observed_offline_errors
+        del issues['console_errors'][offline_console_start:]
+        page.locator('#back-to-results').click()
+        expect(page.locator('.record-row')).to_have_count(1)
 
         return {
-            'cached_shell_and_verified_data_files': len(expected_cache_paths),
-            'offline_full_explore_records': expected_count,
-            'offline_latest_records': latest_count,
-            'missing_shard_removed_from_cache': deleted_cache_entry['deleted'],
-            'incomplete_cache_records_rendered': 0,
+            'offline_verified_index_records': expected_count,
+            'offline_cached_dataset_age_year': manifest['generated_at'][:4],
+            'cached_history_events': len(history['events']),
+            'cached_dossier_opens_offline': True,
+            'uncached_shard_fails_closed': True,
+            'index_remains_searchable_after_missing_shard': True,
+            'cached_detail_shards': cache_audit['cachedShardCount'],
             'mobile': mobile_metrics,
         }
     finally:
@@ -304,10 +311,11 @@ def run_background_snapshot_update_test(browser, origin: str, manifest: dict, ov
         notice = page.locator('#snapshot-update-notice')
         expect(notice).to_be_visible(timeout=30_000)
         expect(page.locator('#snapshot-update-copy')).to_contain_text('newer captured snapshot')
-        expect(page.locator('#snapshot-update-copy')).to_contain_text('Overview index is verified')
+        expect(page.locator('#snapshot-update-copy')).to_contain_text('manifest and Overview preview are verified')
+        expect(page.locator('#snapshot-update-copy')).to_contain_text('reload to verify the compact search index')
         page.locator('#snapshot-update-dismiss').click()
         expect(notice).to_be_hidden()
-        return {'background_interval_triggered': True, 'new_manifest_and_index_verified': True, 'dismissible_notice': True}
+        return {'background_interval_triggered': True, 'manifest_and_overview_preview_verified_before_reload': True, 'dismissible_notice': True}
     finally:
         page.close()
 
@@ -362,290 +370,100 @@ def assert_header_background_pixels(page, screenshot_path: Path, expected_rgb: t
     return len(sample['pixels'])
 
 
-def center_search_release_audit(browser, origin: str, issues: dict, expected_count: int, manifest: dict) -> list[dict]:
-    results = []
-    scenarios = (
-        (False, ((1440, 900), (1440, 624), (1024, 900), (768, 800))),
-        (True, ((390, 844), (360, 800), (320, 740), (320, 640))),
-    )
-    for is_touch, viewports in scenarios:
-        first_width, first_height = viewports[0]
-        page = browser.new_page(
-            viewport={'width': first_width, 'height': first_height},
-            device_scale_factor=1,
-            is_mobile=is_touch,
-            has_touch=is_touch,
-        )
-        page.emulate_media(reduced_motion='no-preference')
-        browser_issue_track(page, issues, origin)
-        page.goto(f'{origin}/?page=center', wait_until='load')
+def stable_search_toolbar_audit(browser, origin: str, issues: dict, expected_count: int, manifest: dict) -> list[dict]:
+    page = browser.new_page(viewport={'width': 1440, 'height': 900})
+    browser_issue_track(page, issues, origin)
+    metrics_by_width = []
+    try:
+        page.goto(f'{origin}/?page=center', wait_until='load', timeout=30_000)
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
+        expect(page.locator('#research-toolbar')).to_be_visible()
         expect(page.locator('#record-list')).to_have_attribute('aria-busy', 'false')
 
-        # Preserve a non-default search/filter state across every release-and-return path.
-        page.locator('#page-size').select_option('96')
+        # The slash shortcut focuses the real search control; filtering remains URL-backed.
+        page.locator('#record-search').evaluate('(input) => input.blur()')
+        page.keyboard.press('/')
+        expect(page.locator('#record-search')).to_be_focused()
+        search = page.locator('#record-search')
+        search.fill('CVE-')
+        expect(page.locator('.record-row')).to_have_count(min(24, expected_count))
+        page.locator('#page-size').select_option('48')
+        expect(page.locator('.record-row')).to_have_count(min(48, expected_count))
         page.locator('.severity-tab[data-severity="high"]').click()
+        high_count = manifest['totals']['high']
+        expect(page.locator('.record-row')).to_have_count(min(48, high_count))
+
         page.locator('#date-filter summary').click()
         page.locator('#date-from').fill(manifest['window']['start'][:10])
         page.locator('#date-to').fill(manifest['window']['end'][:10])
         page.locator('#date-form button[type="submit"]').click()
-        high_count = manifest['totals']['high']
         expect(page.locator('#result-status')).to_contain_text(f'of {nfmt(high_count)} matching records')
-        search = page.locator('#record-search')
-        action = page.locator('#header-search-return')
-        expected_rows = min(96, high_count)
-        viewport_results = []
 
-        for width, height in viewports:
+        for width, height in ((320, 740), (360, 800), (390, 844), (412, 892), (768, 800), (1024, 900), (1440, 900)):
             page.set_viewport_size({'width': width, 'height': height})
             page.evaluate('window.scrollTo({top:0,behavior:"instant"})')
-            page.wait_for_timeout(50)
-            search.fill('CVE-')
-            expect(page.locator('.record-row')).to_have_count(expected_rows)
-            initial = page.evaluate('''() => {
-              const dock=document.querySelector('.center-dock');
-              const nav=document.querySelector('.header-navigation').getBoundingClientRect();
-              const tabs=document.querySelector('.page-nav').getBoundingClientRect();
-              const action=document.querySelector('#header-search-return');
-              const header=document.querySelector('.site-header').getBoundingClientRect();
+            page.wait_for_timeout(40)
+            top_state = page.evaluate('''() => {
+              const toolbar=document.querySelector('#research-toolbar');
               const input=document.querySelector('#record-search');
-              const wrap=document.querySelector('.search-wrap').getBoundingClientRect();
-              const style=getComputedStyle(input);
-              return {
-                width:innerWidth,documentWidth:document.documentElement.scrollWidth,
-                headerBottom:header.bottom,nav:{left:nav.left,right:nav.right},tabs:{left:tabs.left,right:tabs.right},
-                actionHidden:action.hidden,inputLabel:input.getAttribute('aria-label'),inputTabIndex:input.tabIndex,
-                inputVisible:style.visibility==='visible'&&Number(style.opacity)>=.99,
-                inputValue:input.value,expandedWidth:wrap.width,compact:dock.classList.contains('is-compact')
-              };
-            }''')
-            assert initial['documentWidth'] == initial['width'] == width, f'horizontal overflow at {width}x{height}: {initial}'
-            assert initial['actionHidden'] and not initial['compact'], f'header return action should be absent and rail expanded at page top: {initial}'
-            assert initial['inputLabel'] and initial['inputTabIndex'] == 0 and initial['inputVisible'] and initial['inputValue'] == 'CVE-', initial
-            search.evaluate('(input)=>input.blur()')
-
-            page.evaluate('''() => {
-              const anchor=document.querySelector('.center-search-anchor').getBoundingClientRect();
+              const rect=toolbar.getBoundingClientRect();
+              const inputRect=input.getBoundingClientRect();
               const header=document.querySelector('.site-header').getBoundingClientRect();
-              window.scrollTo({top:Math.max(0,window.scrollY+anchor.top-header.bottom-2),behavior:'instant'});
+              const tabs=document.querySelector('.page-nav').getBoundingClientRect();
+              return {width:innerWidth,documentWidth:document.documentElement.scrollWidth,
+                toolbarPosition:getComputedStyle(toolbar).position,toolbarTop:rect.top,toolbarWidth:rect.width,
+                inputWidth:inputRect.width,inputHeight:inputRect.height,inputValue:input.value,
+                inputVisible:input.getClientRects().length>0&&getComputedStyle(input).visibility==='visible',
+                inputLabel:input.getAttribute('aria-label'),shortcut:input.getAttribute('aria-keyshortcuts'),
+                headerBottom:header.bottom,tabsPosition:getComputedStyle(document.querySelector('.page-nav')).position,
+                tabs:{left:tabs.left,right:tabs.right},oldDock:document.querySelector('.center-dock, .center-search-anchor')!==null,
+                returnControl:document.querySelector('#header-search-return')!==null};
             }''')
-            page.wait_for_timeout(50)
-            expanded_state = page.evaluate('''() => ({
-              compact:document.querySelector('.center-dock').classList.contains('is-compact'),
-              released:document.querySelector('.center-dock').classList.contains('is-released'),
-              anchorTop:document.querySelector('.center-search-anchor').getBoundingClientRect().top,
-              headerBottom:document.querySelector('.site-header').getBoundingClientRect().bottom,
-              wrapWidth:document.querySelector('.search-wrap').getBoundingClientRect().width
-            })''')
-            assert not expanded_state['compact'] and not expanded_state['released'], f'rail must stay expanded until the user crosses the actual docking threshold at {width}x{height}: {expanded_state}'
-            compact_target = min(460, expanded_state['wrapWidth'] - (32 if width <= 720 else 0))
-            if (width, height) in {(1440, 900), (390, 844)}:
-                page.screenshot(path=str(SCREENSHOTS / f'center-search-full-{width}x{height}.png'), animations='disabled')
-
-            page.evaluate('window.scrollBy({top:52,behavior:"instant"})')
-            page.wait_for_function("() => document.querySelector('.center-dock').classList.contains('is-compact')", timeout=5_000)
-            page.wait_for_timeout(210)
-            midpoint = page.evaluate('''() => {
-              const dock=document.querySelector('.center-dock');
-              const wrap=document.querySelector('.search-wrap').getBoundingClientRect();
+            assert top_state['documentWidth'] == width, f'horizontal overflow at {width}x{height}: {top_state}'
+            assert top_state['toolbarPosition'] == 'sticky' and top_state['inputVisible'], top_state
+            assert not top_state['oldDock'] and not top_state['returnControl'], f'legacy scroll-morph controls remain: {top_state}'
+            assert top_state['inputLabel'] and top_state['shortcut'] == '/' and top_state['inputValue'] == 'CVE-', top_state
+            page.evaluate('window.scrollTo({top:1400,behavior:"instant"})')
+            page.wait_for_timeout(60)
+            scrolled = page.evaluate('''() => {
+              const toolbar=document.querySelector('#research-toolbar');
+              const rect=toolbar.getBoundingClientRect();
               const input=document.querySelector('#record-search');
               const inputRect=input.getBoundingClientRect();
-              const hit=document.elementFromPoint(inputRect.left+inputRect.width/2,inputRect.top+inputRect.height/2);
-              const feed=document.querySelector('#feed-view').getBoundingClientRect();
-              return {compact:dock.classList.contains('is-compact'),released:dock.classList.contains('is-released'),
-                wrapWidth:wrap.width,wrapHeight:wrap.height,inputVisible:getComputedStyle(input).visibility==='visible',
-                inputHit:hit===input||input.contains(hit),inputValue:input.value,feedTop:feed.top,
-                dockBottom:dock.getBoundingClientRect().bottom};
-            }''')
-            assert midpoint['compact'] and not midpoint['released'], f'search should be compact but still in its normal-flow docking zone: {midpoint}'
-            assert compact_target < midpoint['wrapWidth'] < expanded_state['wrapWidth'] and 44 < midpoint['wrapHeight'] < 58, f'notched rail did not interpolate smoothly to its smaller geometry: {midpoint}'
-            assert midpoint['inputVisible'] and midpoint['inputHit'] and midpoint['inputValue'] == 'CVE-', f'the real query input must remain legible/editable during the shrink: {midpoint}'
-            assert midpoint['feedTop'] > midpoint['dockBottom'], f'feed content reached the rail before its release boundary: {midpoint}'
-            if (width, height) in {(1440, 900), (390, 844)}:
-                page.screenshot(path=str(SCREENSHOTS / f'center-search-motion-mid-{width}x{height}.png'))
-
-            # Reversing scroll reverses the same CSS transition; no scroll correction or alternate proxy field is used.
-            page.evaluate('window.scrollBy({top:-110,behavior:"instant"})')
-            page.wait_for_function("() => !document.querySelector('.center-dock').classList.contains('is-compact')", timeout=5_000)
-            page.wait_for_timeout(180)
-            reversed_state = page.evaluate('''() => ({released:document.querySelector('.center-dock').classList.contains('is-released'),width:document.querySelector('.search-wrap').getBoundingClientRect().width,value:document.querySelector('#record-search').value})''')
-            assert not reversed_state['released'] and compact_target < reversed_state['width'] < expanded_state['wrapWidth'] and reversed_state['value'] == 'CVE-', f'upward scroll did not restore the same live input: {reversed_state}'
-            page.evaluate('''() => {
-              const anchor=document.querySelector('.center-search-anchor').getBoundingClientRect();
               const header=document.querySelector('.site-header').getBoundingClientRect();
-              window.scrollTo({top:Math.max(0,window.scrollY+anchor.top-header.bottom+52),behavior:'instant'});
+              return {top:rect.top,inputWidth:inputRect.width,inputHeight:inputRect.height,
+                inputValue:input.value,visible:input.getClientRects().length>0&&getComputedStyle(input).visibility==='visible',
+                headerBottom:header.bottom,scrollY,position:getComputedStyle(toolbar).position};
             }''')
-            page.wait_for_function("() => document.querySelector('.center-dock').classList.contains('is-compact')", timeout=5_000)
-            page.wait_for_timeout(450)
+            assert scrolled['position'] == 'sticky' and scrolled['visible'] and scrolled['inputValue'] == 'CVE-', scrolled
+            assert abs(scrolled['top'] - scrolled['headerBottom']) <= 2, f'search is not predictably sticky below the global header: {scrolled}'
+            assert abs(scrolled['inputWidth'] - top_state['inputWidth']) <= 1 and abs(scrolled['inputHeight'] - top_state['inputHeight']) <= 1, f'search geometry changed on scroll: {top_state}, {scrolled}'
+            if width <= 412:
+                assert top_state['tabsPosition'] == 'fixed' and top_state['tabs']['left'] >= 0 and top_state['tabs']['right'] <= width, top_state
+            if width in (390, 1440):
+                page.screenshot(path=str(SCREENSHOTS / f'stable-search-{width}x{height}.png'), animations='disabled')
+            metrics_by_width.append({'width':width,'height':height,'top':round(scrolled['top'],1),'input_width':round(scrolled['inputWidth'],1),'overflow':False})
 
-            settled = page.evaluate('''() => {
-              const dock=document.querySelector('.center-dock');
-              const d=dock.getBoundingClientRect();
-              const h=document.querySelector('.site-header').getBoundingClientRect();
-              const feed=document.querySelector('#feed-view').getBoundingClientRect();
-              const input=document.querySelector('#record-search');
-              const rect=document.querySelector('.search-wrap').getBoundingClientRect();
-              const center=document.querySelector('.center-wrap').getBoundingClientRect();
-              const style=getComputedStyle(document.querySelector('.center-wrap'));
-              const contentLeft=center.left+parseFloat(style.paddingLeft);
-              const contentRight=center.right-parseFloat(style.paddingRight);
-              const contentCenter=(contentLeft+contentRight)/2;
-              const rows=[...document.querySelectorAll('.record-row')].map(row=>row.getBoundingClientRect()).filter(r=>r.bottom>d.bottom&&r.top<innerHeight);
-              return {scrollY,compact:dock.classList.contains('is-compact'),released:dock.classList.contains('is-released'),
-                dockPosition:getComputedStyle(dock).position,dock:{top:d.top,bottom:d.bottom,height:d.height},headerBottom:h.bottom,
-                feedTop:feed.top,search:{left:rect.left,width:rect.width,height:rect.height,center:rect.left+rect.width/2},
-                contentCenter,visibleRows:rows.length,firstVisibleRowTop:rows[0]?.top??null,
-                query:input.value,searchLabel:input.getAttribute('aria-label')};
-            }''')
-            expected_header_bottom = page.evaluate("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')) + 1")
-            assert settled['compact'] and not settled['released'] and settled['dockPosition'] == 'sticky', f'rail must settle briefly at its centered transition point before the feed boundary: {settled}'
-            assert abs(settled['headerBottom']-expected_header_bottom) <= 1.5, settled
-            assert abs(settled['search']['width']-compact_target) <= 1 and 42 <= settled['search']['height'] <= 46 and abs(settled['search']['center']-settled['contentCenter']) <= 1, f'compact strip lost its centered responsive geometry: {settled}'
-            assert settled['feedTop'] >= settled['dock']['bottom'] and settled['visibleRows'] > 0 and settled['firstVisibleRowTop'] >= settled['dock']['bottom'], f'CVE content must remain below the rail at its settled docking point: {settled}'
-            assert settled['query'] == 'CVE-' and settled['searchLabel'], settled
-            if (width, height) in {(1440, 900), (390, 844)}:
-                page.screenshot(path=str(SCREENSHOTS / f'center-search-docked-{width}x{height}.png'), animations='disabled')
-
-            # Release at the actual results-feed boundary, not a hard-coded scroll amount.
-            page.evaluate('window.scrollTo({top:2000,behavior:"instant"})')
-            page.wait_for_function("() => document.querySelector('.center-dock').classList.contains('is-released') && !document.querySelector('#header-search-return').hidden", timeout=10_000)
-            page.wait_for_timeout(450)
-            deep = page.evaluate('''() => {
-              const dock=document.querySelector('.center-dock');
-              const d=dock.getBoundingClientRect();
-              const header=document.querySelector('.site-header').getBoundingClientRect();
-              const action=document.querySelector('#header-search-return').getBoundingClientRect();
-              const nav=document.querySelector('.header-navigation').getBoundingClientRect();
-              const tabs=document.querySelector('.page-nav').getBoundingClientRect();
-              const inner=document.querySelector('.site-header-inner').getBoundingClientRect();
-              const rows=[...document.querySelectorAll('.record-row')].map(row=>row.getBoundingClientRect()).filter(r=>r.bottom>Math.max(0,d.top)&&r.top<Math.min(innerHeight,d.bottom));
-              const visibleRows=[...document.querySelectorAll('.record-row')].map(row=>row.getBoundingClientRect()).filter(r=>r.bottom>header.bottom&&r.top<innerHeight);
-              const feed=document.querySelector('#feed-view').getBoundingClientRect();
-              const list=getComputedStyle(document.querySelector('#record-list'));
-              return {scrollY,documentWidth:document.documentElement.scrollWidth,width:innerWidth,
-                released:dock.classList.contains('is-released'),compact:dock.classList.contains('is-compact'),position:getComputedStyle(dock).position,
-                dock:{top:d.top,bottom:d.bottom},headerBottom:header.bottom,feedTop:feed.top,
-                recordsIntersectingDock:rows.length,visibleRows:visibleRows.length,
-                action:{hidden:document.querySelector('#header-search-return').hidden,label:document.querySelector('#header-search-return').getAttribute('aria-label'),shortcut:document.querySelector('#header-search-return').getAttribute('aria-keyshortcuts'),left:action.left,right:action.right,top:action.top,bottom:action.bottom},
-                nav:{left:nav.left,right:nav.right},tabs:{left:tabs.left,right:tabs.right,position:getComputedStyle(document.querySelector('.page-nav')).position},inner:{left:inner.left,right:inner.right},
-                searchValue:document.querySelector('#record-search').value,searchLabel:document.querySelector('#record-search').getAttribute('aria-label'),
-                listOverflowY:list.overflowY};
-            }''')
-            assert deep['scrollY'] >= 1900 and deep['released'] and deep['compact'] and deep['position'] == 'static', f'rail must leave sticky positioning before results flow under it: {deep}'
-            assert deep['documentWidth'] == deep['width'] == width, f'released Search action/nav overflows at {width}x{height}: {deep}'
-            if width <= 720:
-                assert not deep['action']['hidden'] and deep['action']['right'] <= deep['inner']['right']+1, f'mobile Search action must fit the compact header at {width}x{height}: {deep}'
-                assert deep['tabs']['position'] == 'fixed' and deep['tabs']['left'] >= 0 and deep['tabs']['right'] <= deep['width'], f'mobile page tabs must occupy the visible fixed bottom rail at {width}x{height}: {deep}'
-            else:
-                assert not deep['action']['hidden'] and deep['action']['right'] <= deep['nav']['right']+1 and deep['tabs']['right'] <= deep['action']['left']+1, f'header Search action must fit beside tabs without overlap at {width}x{height}: {deep}'
-            assert deep['action']['label'] == 'Return to CVE search' and deep['action']['shortcut'] == '/', f'header search action must announce its purpose and shortcut: {deep}'
-            assert deep['visibleRows'] > 0 and deep['recordsIntersectingDock'] == 0, f'visible CVE rows are obscured by the released search rail at {width}x{height}: {deep}'
-            assert deep['searchValue'] == 'CVE-' and deep['searchLabel'] and deep['listOverflowY'] == 'visible', deep
-            if (width, height) in {(1440, 900), (390, 844)}:
-                page.screenshot(path=str(SCREENSHOTS / f'center-search-released-{width}x{height}.png'), animations='disabled')
-
-            result_status = page.locator('#result-status').inner_text()
-            if is_touch:
-                action.tap()
-            else:
-                action.click()
-            expect(search).to_be_focused(timeout=5_000)
-            page.wait_for_function('''() => {
-              const anchor=document.querySelector('.center-search-anchor').getBoundingClientRect();
-              const header=document.querySelector('.site-header').getBoundingClientRect();
-              return !document.querySelector('.center-dock').classList.contains('is-released') && anchor.top >= header.bottom-1;
-            }''', timeout=10_000)
-            expect(search).to_have_value('CVE-')
-            assert page.locator('#result-status').inner_text() == result_status, f'returning to the retained input changed the result set at {width}x{height}'
-            assert page.locator('.record-row').count() == expected_rows
-            assert page.locator('#page-size').input_value() == '96'
-            assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
-            assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
-            assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
-
-            search.press('Escape')
-            assert search.input_value() == 'CVE-' and not search.evaluate('(input)=>document.activeElement===input'), f'Escape should leave the retained query intact and close keyboard focus at {width}x{height}'
-
-            # The visible header action is keyboard operable and returns focus to the same input.
-            page.evaluate('window.scrollTo({top:2000,behavior:"instant"})')
-            expect(action).to_be_visible(timeout=10_000)
-            action.focus()
-            page.keyboard.press('Enter')
-            expect(search).to_be_focused(timeout=5_000)
-            expect(search).to_have_value('CVE-')
-            page.wait_for_function("() => !document.querySelector('.center-dock').classList.contains('is-released')", timeout=10_000)
-
-            # The / shortcut works from the released state, without clearing filters or replacing the input.
-            search.press('Escape')
-            page.evaluate('window.scrollTo({top:2000,behavior:"instant"})')
-            expect(action).to_be_visible(timeout=10_000)
-            page.evaluate('document.activeElement.blur()')
-            page.keyboard.press('/')
-            expect(search).to_be_focused(timeout=5_000)
-            expect(search).to_have_value('CVE-')
-            search.press('Escape')
-            assert search.input_value() == 'CVE-'
-            target_id = page.locator('.record-row').first.get_attribute('data-cve-id')
-            assert target_id
-            search.fill(target_id)
-            expect(page.locator('.record-row')).to_have_count(1)
-            expect(page.locator('.record-row').first).to_have_attribute('data-cve-id', target_id)
-            search.fill('CVE-')
-            expect(page.locator('.record-row')).to_have_count(expected_rows)
-            assert page.locator('#page-size').input_value() == '96'
-            assert page.locator('#date-from').input_value() == manifest['window']['start'][:10]
-            assert page.locator('#date-to').input_value() == manifest['window']['end'][:10]
-            assert page.locator('.severity-tab[data-severity="high"]').get_attribute('aria-pressed') == 'true'
-
-            if width == first_width:
-                search.evaluate('(input)=>input.blur()')
-                page.emulate_media(reduced_motion='reduce')
-                page.evaluate('window.scrollTo({top:2000,behavior:"instant"})')
-                expect(action).to_be_visible(timeout=10_000)
-                reduced = page.evaluate('''() => {
-                  const nodes=[document.querySelector('.center-dock'),document.querySelector('.search-wrap'),document.querySelector('#record-search')];
-                  const durations=nodes.flatMap(node=>getComputedStyle(node).transitionDuration.split(',').map(value=>parseFloat(value.trim())));
-                  return {matches:matchMedia('(prefers-reduced-motion: reduce)').matches,
-                    compact:document.querySelector('.center-dock').classList.contains('is-compact'),
-                    released:document.querySelector('.center-dock').classList.contains('is-released'),
-                    rootScrollBehavior:getComputedStyle(document.documentElement).scrollBehavior,
-                    durations,scrollY};
-                }''')
-                assert reduced['matches'] and reduced['compact'] and reduced['released'] and reduced['rootScrollBehavior'] == 'auto' and all(value <= .01 for value in reduced['durations']), f'reduced motion must preserve instant compaction/release and return scrolling: {reduced}'
-                before_return = page.evaluate('window.scrollY')
-                if is_touch:
-                    action.tap()
-                else:
-                    action.click()
-                expect(search).to_be_focused(timeout=5_000)
-                page.wait_for_function("() => !document.querySelector('.center-dock').classList.contains('is-released')", timeout=5_000)
-                after_return = page.evaluate('window.scrollY')
-                assert abs(after_return-before_return) > 100, f'reduced-motion return action did not navigate to the retained search: {before_return}->{after_return}'
-                page.emulate_media(reduced_motion='no-preference')
-
-            # Tab from the actual input continues to date filtering below it, never behind the rail.
-            search.focus()
-            page.keyboard.press('Tab')
-            expect(page.locator('#date-summary')).to_be_focused()
-            focus_layout = page.evaluate('''() => {
-              const target=document.querySelector('#date-summary').getBoundingClientRect();
-              const dock=document.querySelector('.center-dock').getBoundingClientRect();
-              return {targetTop:target.top,dockBottom:dock.bottom,scrollY};
-            }''')
-            assert focus_layout['targetTop'] >= focus_layout['dockBottom']-1, f'keyboard focus to filters was obstructed by the rail at {width}x{height}: {focus_layout}'
-            viewport_results.append({
-                'viewport':[width,height], 'touch':is_touch, 'released':deep['released'],
-                'visibleRows':deep['visibleRows'], 'rowsIntersectingRail':deep['recordsIntersectingDock'],
-                'headerActionFits':True, 'queryAndFiltersRetained':True,
-                'pointerReturn':'touch' if is_touch else 'mouse', 'keyboardReturn':True,
-                'slashShortcut':True, 'escapeRetainsQuery':True,
-                'reducedMotion':width == first_width,
-            })
-            page.evaluate('document.activeElement.blur()')
-
-        results.extend(viewport_results)
+        # A dossier opens from the indexed row and browser Back restores research state.
+        page.set_viewport_size({'width':1440,'height':900})
+        page.evaluate('window.scrollTo({top:0,behavior:"instant"})')
+        first = page.locator('.record-open').first
+        first_id = first.get_attribute('data-cve-id')
+        first.click()
+        expect(page.locator('#detail-view')).to_be_visible(timeout=30_000)
+        expect(page.locator('#detail-content')).to_contain_text(first_id, timeout=30_000)
+        page.go_back(wait_until='domcontentloaded')
+        expect(page.locator('#record-search')).to_have_value('CVE-')
+        expect(page.locator('#record-list')).to_be_visible()
+        page.go_forward(wait_until='domcontentloaded')
+        expect(page.locator('#detail-heading')).to_have_text(first_id, timeout=30_000)
+        page.locator('#back-to-results').click()
+        expect(page.locator('#record-search')).to_have_value('CVE-')
+        expect(page.locator('#record-list')).to_be_visible()
+        return metrics_by_width
+    finally:
         page.close()
-    return results
+
 
 def snapshot_override(manifest: dict, day: dict, records: list[dict]) -> tuple[bytes, bytes, str]:
     changed = json.loads(json.dumps(manifest))
@@ -657,9 +475,12 @@ def snapshot_override(manifest: dict, day: dict, records: list[dict]) -> tuple[b
     return manifest_body, body, day['date']
 
 
-def install_snapshot_override(page, manifest_body: bytes, shard_body: bytes, day: str) -> None:
+def install_snapshot_override(page, manifest_body: bytes, shard_body: bytes, day: str,
+                              index_body: bytes | None = None) -> None:
     page.route('**/snapshot/manifest.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=manifest_body))
     page.route(f'**/snapshot/data/{day}.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=shard_body))
+    if index_body is not None:
+        page.route('**/snapshot/data/search-index.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=index_body))
 
 
 def new_scenario() -> dict:
@@ -689,14 +510,20 @@ def serve_scenario(scenario: dict) -> http.server.ThreadingHTTPServer:
 
 
 def run_snapshot_loader_tests(browser, manifest: dict) -> dict:
-    day_paths = [f"snapshot/{day['path']}" for day in manifest['days']]
     manifest_path = 'snapshot/manifest.json'
+    index_path = f"snapshot/{manifest['search_index']['path']}"
     epss_path = f"snapshot/{manifest['epss']['path']}"
+    index_payload = json.loads((ROOT / 'snapshot' / manifest['search_index']['path']).read_bytes())
+    target = index_payload['records'][0]
+    target_id = target['id']
+    target_path = f"snapshot/{target['detail_path']}"
+    detail_day = next(day for day in manifest['days'] if day['path'] == target['detail_path'])
+    day_paths = [f"snapshot/{day['path']}" for day in manifest['days']]
     result: dict = {}
 
-    # The initial manifest is held; completed resources are then released out of manifest order.
+    # Delay the manifest and the compact sidecars independently; Explore remains empty until both verify.
     scenario = new_scenario()
-    gates = {path: threading.Event() for path in [manifest_path, *day_paths, epss_path]}
+    gates = {path: threading.Event() for path in (manifest_path, index_path, epss_path, target_path)}
     scenario['gates'] = gates
     server = serve_scenario(scenario)
     origin = f'http://127.0.0.1:{server.server_port}'
@@ -708,85 +535,58 @@ def run_snapshot_loader_tests(browser, manifest: dict) -> dict:
         expect(loader).to_be_visible()
         assert page.locator('#feed-view').get_attribute('aria-busy') == 'true'
         assert page.locator('#record-list').get_attribute('aria-busy') == 'true'
+        expect(page.locator('#snapshot-loader-title')).to_have_text('Verifying the search index')
         assert page.locator('#snapshot-manifest-state').inner_text() == 'Waiting'
-        assert page.locator('#snapshot-shard-progress').is_hidden()
-        assert page.locator('#snapshot-shard-count').get_attribute('aria-live') == 'polite'
         wait_for_scenario_request(scenario, manifest_path)
-        page.wait_for_timeout(120)
-        expect(loader).to_be_visible()
-        assert page.locator('#snapshot-shard-count').inner_text() == 'Waiting for manifest'
         gates[manifest_path].set()
-
-        progress = page.locator('#snapshot-shard-progress')
-        page.wait_for_function('(count) => { const p = document.querySelector("#snapshot-shard-progress"); return !p.hidden && p.max === count; }', arg=len(day_paths), timeout=10_000)
+        page.wait_for_function('(count) => { const p=document.querySelector("#snapshot-shard-progress"); return !p.hidden && p.max===count; }', arg=manifest['totals']['cves'], timeout=30_000)
         assert page.locator('#snapshot-manifest-state').inner_text() == 'Verified'
-        assert progress.evaluate('(element) => element.value') == 0
-        for path in day_paths[:6]:
-            wait_for_scenario_request(scenario, path)
-
-        # Release a later manifest shard first, and wait for its validated count before releasing an earlier one.
-        gates[day_paths[4]].set()
-        expect(page.locator('#snapshot-shard-count')).to_have_text(f'1 of {len(day_paths)} verified', timeout=20_000)
-        assert progress.evaluate('(element) => element.value') == 1
-        assert progress.get_attribute('aria-valuetext') == f'1 of {len(day_paths)} daily shards verified'
+        wait_for_scenario_request(scenario, index_path)
         wait_for_scenario_request(scenario, epss_path)
-        gates[day_paths[1]].set()
-        expect(page.locator('#snapshot-shard-count')).to_have_text(f'2 of {len(day_paths)} verified', timeout=20_000)
-        assert progress.evaluate('(element) => element.value') == 2
-        assert page.locator('#record-list .record-row').count() == 0
+        assert page.locator('#snapshot-shard-progress').evaluate('(element) => element.value') == 0
+        assert page.locator('.record-row').count() == 0
+        gates[epss_path].set()
+        page.wait_for_timeout(100)
         expect(loader).to_be_visible()
-
-        # Leaving and re-entering during the load retains the same work and count.
-        before_reentry = {path: scenario_request_count(scenario, path) for path in day_paths}
-        page.locator('#tab-overview').click()
-        page.locator('#tab-center').click()
-        expect(loader).to_be_visible()
-        assert page.locator('#snapshot-shard-count').inner_text() == f'2 of {len(day_paths)} verified'
-        assert before_reentry == {path: scenario_request_count(scenario, path) for path in day_paths}
-
-        # Allow every shard except the final manifest entry; all visible progress remains factual.
-        for path in day_paths[:-1]:
-            gates[path].set()
-        expect(page.locator('#snapshot-shard-count')).to_have_text(f'{len(day_paths) - 1} of {len(day_paths)} verified', timeout=60_000)
-        assert page.locator('#snapshot-shard-progress').evaluate('(element) => element.value') == len(day_paths) - 1
-        expect(loader).to_be_visible()
-        assert page.locator('#record-list .record-row').count() == 0
-        assert page.locator('#feed-view').get_attribute('aria-busy') == 'true'
-        assert page.locator('#snapshot-epss-state').inner_text() == 'Waiting for daily shards'
-        page.screenshot(path=str(SCREENSHOTS / '05-cve-loader-30-of-31-pending.png'), animations='disabled')
-
-        # The final shard can complete and the view still stays busy until the EPSS schema is accepted.
-        gates[day_paths[-1]].set()
-        expect(page.locator('#snapshot-shard-count')).to_have_text(f'{len(day_paths)} of {len(day_paths)} verified', timeout=20_000)
-        expect(loader).to_be_visible()
-        assert page.locator('#snapshot-epss-state').inner_text() == 'Waiting for daily shards'
+        assert page.locator('.record-row').count() == 0
+        # A narrow viewport still exposes the honest loading state and does not animate under reduced motion.
         for width, height in ((320, 740), (390, 844), (1440, 1000)):
             metrics = width_audit(page, width, height)
             assert metrics['activePageId'] == 'page-center'
-        gates[epss_path].set()
-        expect(page.locator('#snapshot-epss-state')).to_have_text('Verified', timeout=30_000)
+        page.set_viewport_size({'width':1440,'height':1000})
+        gates[index_path].set()
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=30_000)
-        expect(loader).to_be_hidden()
+        expect(page.locator('#snapshot-loader')).to_be_hidden()
         assert page.locator('#feed-view').get_attribute('aria-busy') == 'false'
         assert page.locator('#record-list').get_attribute('aria-busy') == 'false'
+        expect(page.locator('#snapshot-shard-count')).to_have_text(f"{nfmt(manifest['totals']['cves'])} of {nfmt(manifest['totals']['cves'])} indexed")
         assert page.locator('.record-row').count() == 24
+        assert all(scenario_request_count(scenario, path) == 0 for path in day_paths), 'Explore eagerly requested a detail shard.'
+        progress = page.locator('#snapshot-shard-progress')
+        assert progress.get_attribute('aria-valuetext') == f"{nfmt(manifest['totals']['cves'])} of {nfmt(manifest['totals']['cves'])} index records verified"
+        motion = page.locator('#snapshot-loader-status').evaluate("element => ({reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,name:getComputedStyle(element,'::before').animationName,duration:getComputedStyle(element,'::before').animationDuration})")
+        result['reduced_motion_static'] = motion['reduced'] and motion['name'] == 'none'
+        assert result['reduced_motion_static'], f'Loader remains animated with reduced motion enabled: {motion}'
 
-        # Re-entering after completion uses the in-memory, already-verified data without another request.
-        before_loaded_reentry = {path: scenario_request_count(scenario, path) for path in [*day_paths, epss_path]}
-        page.locator('#tab-overview').click()
-        page.locator('#tab-center').click()
-        expect(loader).to_be_hidden()
-        assert before_loaded_reentry == {path: scenario_request_count(scenario, path) for path in [*day_paths, epss_path]}
-        result['delayed_manifest'] = True
-        result['out_of_order_shard_completion'] = {'completion_order': [manifest['days'][4]['date'], manifest['days'][1]['date']], 'progress': f'{len(day_paths)}/{len(day_paths)} verified'}
-        result['held_until_last_shard_and_sidecar'] = True
-        result['pending_and_loaded_reentry'] = True
-        motion = page.locator('#snapshot-loader-status').evaluate("element => ({reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, name: getComputedStyle(element, '::before').animationName, duration: getComputedStyle(element, '::before').animationDuration})")
-        duration = motion['duration']
-        duration_seconds = float(duration[:-2]) / 1000 if duration.endswith('ms') else float(duration[:-1])
-        result['reduced_motion_static'] = motion['reduced'] and motion['name'] == 'none' and duration_seconds <= 0.00001
-        result['responsive_loader'] = {'widths': [320, 390, 1440], 'horizontal_overflow': False}
-        assert result['reduced_motion_static'], 'Loader status animation remains active with reduced motion enabled.'
+        # Only an explicit dossier open requests its daily shard; until release, no unverified detail is shown.
+        page.locator('.record-open').first.click()
+        wait_for_scenario_request(scenario, target_path)
+        expect(page.locator('.detail-loading')).to_be_visible()
+        assert page.locator('#detail-heading').count() == 0
+        gates[target_path].set()
+        expect(page.locator('#detail-heading')).to_have_text(target_id, timeout=30_000)
+        expect(page.locator('#detail-history')).to_be_visible(timeout=30_000)
+        assert scenario_request_count(scenario, target_path) == 1
+        result.update({
+            'index_verified_before_any_detail': True,
+            'index_records': manifest['search_index']['count'],
+            'eager_detail_shards': 0,
+            'lazy_detail_path': detail_day['path'],
+            'detail_shard_bytes': detail_day['bytes'],
+            'detail_request_count': 1,
+            'history_loaded_with_detail': True,
+            'responsive_loader_widths': [320, 390, 1440],
+        })
     finally:
         for gate in gates.values():
             gate.set()
@@ -794,50 +594,63 @@ def run_snapshot_loader_tests(browser, manifest: dict) -> dict:
         server.shutdown()
         server.server_close()
 
-    # A failed shard exits loading, presents the explicit retry state, then reloads successfully.
+    # A missing shard produces a dossier error, keeps the verified index usable, and retries only on user action.
     retry_scenario = new_scenario()
-    retry_gates = {path: threading.Event() for path in [*day_paths[1:], epss_path]}
-    retry_scenario['gates'] = retry_gates
-    retry_scenario['responses'][day_paths[0]] = lambda count: (503, b'upstream unavailable') if count == 1 else None
+    retry_scenario['responses'][target_path] = lambda count: (503, b'detail shard unavailable') if count == 1 else None
     retry_server = serve_scenario(retry_scenario)
     retry_origin = f'http://127.0.0.1:{retry_server.server_port}'
     retry_page = browser.new_page(viewport={'width': 1280, 'height': 900})
     try:
-        retry_page.goto(f'{retry_origin}/?page=center', wait_until='domcontentloaded')
-        expect(retry_page.locator('#result-status')).to_contain_text('could not be verified', timeout=30_000)
-        expect(retry_page.locator('#snapshot-loader')).to_be_hidden()
-        assert retry_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
-        assert retry_page.locator('#record-list').get_attribute('aria-busy') == 'false'
-        expect(retry_page.get_by_role('button', name='Reload snapshot')).to_be_visible()
-        retry_page.wait_for_timeout(180)
-        expect(retry_page.locator('#snapshot-loader')).to_be_hidden()
-        for gate in retry_gates.values():
-            gate.set()
-        retry_page.get_by_role('button', name='Reload snapshot').click()
+        retry_page.goto(f'{retry_origin}/?page=center&search={target_id}', wait_until='load')
         expect(retry_page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
-        expect(retry_page.locator('#snapshot-loader')).to_be_hidden()
-        assert scenario_request_count(retry_scenario, day_paths[0]) >= 2
-        result['source_failure_exits_loading'] = True
-        result['retry_reloads_verified_data'] = True
+        expect(retry_page.locator('.record-row')).to_have_count(1)
+        retry_page.locator('.record-open').click()
+        expect(retry_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+        assert retry_page.locator('#detail-heading').count() == 0
+        expect(retry_page.locator('.detail-load-error')).to_contain_text('No partial dossier is shown')
+        retry_page.get_by_role('button', name='Retry detail').click()
+        expect(retry_page.locator('#detail-heading')).to_have_text(target_id, timeout=30_000)
+        assert scenario_request_count(retry_scenario, target_path) == 2
+        result['missing_shard'] = {'partial_dossier': False, 'user_retry_requests': 2, 'index_records_retained': True}
     finally:
-        for gate in retry_gates.values():
-            gate.set()
         retry_page.close()
         retry_server.shutdown()
         retry_server.server_close()
 
+    # A digest mismatch is retried once; the failure state never renders details.
+    corrupt = (ROOT / target_path).read_bytes()
+    corrupt = corrupt[:-1] + (b' ' if corrupt.endswith(b'\n') else b'!')
+    corrupt_scenario = new_scenario()
+    corrupt_scenario['responses'][target_path] = (200, corrupt)
+    corrupt_server = serve_scenario(corrupt_scenario)
+    corrupt_origin = f'http://127.0.0.1:{corrupt_server.server_port}'
+    corrupt_page = browser.new_page(viewport={'width': 1280, 'height': 900})
+    try:
+        corrupt_page.goto(f'{corrupt_origin}/?page=center&search={target_id}', wait_until='load')
+        expect(corrupt_page.locator('.record-row')).to_have_count(1, timeout=120_000)
+        corrupt_page.locator('.record-open').click()
+        expect(corrupt_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+        assert corrupt_page.locator('#detail-heading').count() == 0
+        assert scenario_request_count(corrupt_scenario, target_path) == 2
+        result['corrupted_shard'] = {'integrity_retries': 1, 'partial_dossier': False}
+    finally:
+        corrupt_page.close()
+        corrupt_server.shutdown()
+        corrupt_server.server_close()
+
+    # A declared oversized shard is rejected before a successful dossier can be rendered.
     oversized_scenario = new_scenario()
-    oversized_scenario['declared_lengths'][day_paths[0]] = 16 * 1024 * 1024 + 1
+    oversized_scenario['declared_lengths'][target_path] = 16 * 1024 * 1024 + 1
     oversized_server = serve_scenario(oversized_scenario)
     oversized_origin = f'http://127.0.0.1:{oversized_server.server_port}'
     oversized_page = browser.new_page(viewport={'width': 1280, 'height': 900})
     try:
-        oversized_page.goto(f'{oversized_origin}/?page=center', wait_until='domcontentloaded')
-        expect(oversized_page.locator('#result-status')).to_contain_text('could not be verified', timeout=30_000)
-        expect(oversized_page.locator('#snapshot-loader')).to_be_hidden()
-        assert oversized_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
-        assert oversized_page.locator('#record-list .record-row').count() == 0
-        result['oversized_shard_exits_loading'] = True
+        oversized_page.goto(f'{oversized_origin}/?page=center&search={target_id}', wait_until='load')
+        expect(oversized_page.locator('.record-row')).to_have_count(1, timeout=120_000)
+        oversized_page.locator('.record-open').click()
+        expect(oversized_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+        assert oversized_page.locator('#detail-heading').count() == 0
+        result['oversized_shard'] = {'limit_bytes': 16 * 1024 * 1024, 'partial_dossier': False}
     finally:
         oversized_page.close()
         oversized_server.shutdown()
@@ -867,38 +680,40 @@ def serve_cache_scenario(scenario: dict) -> http.server.ThreadingHTTPServer:
 
 def run_http_cache_tests(browser, manifest: dict) -> dict:
     manifest_path = 'snapshot/manifest.json'
+    index_path = f"snapshot/{manifest['search_index']['path']}"
+    epss_path = f"snapshot/{manifest['epss']['path']}"
+    history_path = f"snapshot/{manifest['history']['path']}"
     manifest_raw = (ROOT / manifest_path).read_bytes()
-    overview_ids = {item['id'] for item in json.loads((ROOT / 'snapshot' / 'data' / 'overview.json').read_bytes())['records']}
-    target_day = None
-    target_rows = None
-    target = None
+    index_payload = json.loads((ROOT / index_path).read_bytes())
+    index_by_id = {row['id']: row for row in index_payload['records']}
+    overview_ids = {item['id'] for item in json.loads((ROOT / 'snapshot' / manifest['overview']['path']).read_bytes())['records']}
+
+    target_day = target_rows = target = None
     for day in manifest['days']:
         if not day['count']:
             continue
         rows = json.loads((ROOT / 'snapshot' / day['path']).read_bytes())
-        candidate = next((row for row in rows if row['id'] not in overview_ids), None)
+        candidate = next((row for row in rows if row['id'] not in overview_ids and row.get('refs') and row['id'] in index_by_id), None)
         if candidate:
             target_day, target_rows, target = day, rows, candidate
             break
-    assert target_day and target_rows and target, 'Could not choose a non-Overview CVE for the cache fixture.'
-
-    changed_rows = json.loads(json.dumps(target_rows))
-    changed_title = 'C' * len(target['title'].encode('utf-8'))
-    assert changed_title != target['title'], 'Could not create a same-byte-length digest-mismatch fixture.'
-    next(row for row in changed_rows if row['id'] == target['id'])['title'] = changed_title
-    updated_manifest_raw, updated_shard_raw, _ = snapshot_override(manifest, target_day, changed_rows)
+    assert target_day and target_rows and target, 'Could not choose a detail-only record with reference provenance for the cache fixture.'
     target_path = f"snapshot/{target_day['path']}"
-    expected_resource_paths = {
-        manifest_path,
-        *(f"snapshot/{day['path']}" for day in manifest['days']),
-        f"snapshot/{manifest['overview']['path']}",
-        f"snapshot/{manifest['epss']['path']}",
-    }
+    target_index = index_by_id[target['id']]
+    changed_rows = json.loads(json.dumps(target_rows))
+    changed_label = 'Verified reference updated after fresh manifest'
+    next(row for row in changed_rows if row['id'] == target['id'])['refs'][0]['label'] = changed_label
+    updated_manifest_raw, updated_shard_raw, _ = snapshot_override(manifest, target_day, changed_rows)
+
+    initial_paths = {manifest_path, index_path, epss_path}
+    detail_paths = {f"snapshot/{day['path']}" for day in manifest['days']}
     scenario = new_cache_scenario()
     server = serve_cache_scenario(scenario)
     origin = f'http://127.0.0.1:{server.server_port}'
     issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
-    context = browser.new_context(viewport={'width': 1280, 'height': 900})
+    cache_browser = browser.browser if isinstance(browser, BrowserWithoutServiceWorkers) else browser
+    context = cache_browser.new_context(viewport={'width': 1280, 'height': 900}, service_workers='allow')
+    context.add_init_script("window.__subzeroLongTasks=[]; if(window.PerformanceObserver && PerformanceObserver.supportedEntryTypes.includes('longtask')) new PerformanceObserver(list=>window.__subzeroLongTasks.push(...list.getEntries().map(entry=>entry.duration))).observe({entryTypes:['longtask']});")
     page = context.new_page()
     browser_issue_track(page, issues, origin)
     results: dict = {}
@@ -906,149 +721,167 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
         cold_started = time.monotonic()
         page.goto(f'{origin}/?page=center', wait_until='load')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        page.wait_for_function('Boolean(navigator.serviceWorker && navigator.serviceWorker.controller)', timeout=30_000)
         cold_elapsed = time.monotonic() - cold_started
-        cold_events = [event for event in cache_scenario_events(scenario) if event['path'] in expected_resource_paths]
+        cold_events = [event for event in cache_scenario_events(scenario) if event['path'] in initial_paths]
         cold_full = [event for event in cold_events if event['status'] == 200]
-        cold_counts = {path: sum(event['path'] == path for event in cold_full) for path in expected_resource_paths}
-        assert all(count == 1 for count in cold_counts.values()), f'Cold load did not fetch each resource exactly once: {cold_counts}'
+        cold_counts = {path: sum(event['path'] == path for event in cold_full) for path in initial_paths}
+        assert all(count == 1 for count in cold_counts.values()), f'Index-first visit did not fetch manifest and both compact sidecars once: {cold_counts}'
+        assert not [event for event in cache_scenario_events(scenario) if event['path'] in detail_paths], 'Initial Explore visit fetched a full detail shard.'
         cold_manifest_event = next(event for event in cold_full if event['path'] == manifest_path)
         assert cold_manifest_event['cache_control'] == 'public, max-age=600'
         cold_data_bytes = sum(event['body_bytes'] for event in cold_full if event['path'] != manifest_path)
-        assert cold_data_bytes == sum(day['bytes'] for day in manifest['days']) + manifest['overview']['bytes'] + manifest['epss']['bytes']
+        assert cold_data_bytes == manifest['search_index']['bytes'] + manifest['epss']['bytes']
+
+        # Search latency uses the actual input-to-one-row interaction; JS and memory metrics are sampled in Chromium.
+        search_started = time.perf_counter()
+        page.locator('#record-search').fill(target['id'])
+        expect(page.locator('.record-row')).to_have_count(1, timeout=30_000)
+        search_latency_ms = round((time.perf_counter() - search_started) * 1000, 2)
+        client_metrics = page.evaluate('''() => {
+          const latest=name=>{const entries=performance.getEntriesByName(name); return entries.length?entries.at(-1).duration:null};
+          const script=performance.getEntriesByType('resource').find(entry=>entry.name.endsWith('/app.js'));
+          return {list_render_ms:latest('subzero-list-render'),index_verify_render_ms:latest('subzero-index-verified-and-rendered'),
+            app_script_resource_ms:script?.duration ?? null,app_script_transfer_bytes:script?.transferSize ?? null,
+            long_task_count:window.__subzeroLongTasks?.length ?? null,max_long_task_ms:window.__subzeroLongTasks?.length?Math.max(...window.__subzeroLongTasks):0,
+            used_heap_mib:performance.memory?.usedJSHeapSize?Math.round(performance.memory.usedJSHeapSize/1048576*100)/100:null};
+        }''')
+
+        # Detail payload size/latency is measured separately from the compact full-feed index.
+        detail_marker = len(cache_scenario_events(scenario))
+        detail_started = time.perf_counter()
+        page.locator('.record-open').click()
+        expect(page.locator('#detail-heading')).to_have_text(target['id'], timeout=60_000)
+        expect(page.locator('#detail-content')).to_contain_text(target['refs'][0]['label'])
+        detail_latency_ms = round((time.perf_counter() - detail_started) * 1000, 2)
+        detail_events = [event for event in cache_scenario_events(scenario)[detail_marker:] if event['path'] == target_path and event['status'] == 200]
+        assert len(detail_events) == 1 and detail_events[0]['body_bytes'] == target_day['bytes'], f'Dossier did not fetch exactly one complete, manifest-sized shard: {detail_events}'
+        history_events = [event for event in cache_scenario_events(scenario)[detail_marker:] if event['path'] == history_path and event['status'] == 200]
+        assert len(history_events) == 1 and history_events[0]['body_bytes'] == manifest['history']['bytes']
+
+        page.set_viewport_size({'width':390,'height':844})
+        mobile_render = page.evaluate('''() => ({viewport_width:innerWidth,document_width:document.documentElement.scrollWidth,
+          first_row_width:document.querySelector('.record-row')?.getBoundingClientRect().width})''')
+        assert mobile_render['document_width'] <= mobile_render['viewport_width'], mobile_render
+        page.screenshot(path=str(SCREENSHOTS / '07-explore-search-mobile.png'), animations='disabled')
 
         repeat_started = time.monotonic()
         repeat_marker = len(cache_scenario_events(scenario))
         page.reload(wait_until='load')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
         repeat_elapsed = time.monotonic() - repeat_started
-        repeat_events = [event for event in cache_scenario_events(scenario)[repeat_marker:] if event['path'] in expected_resource_paths]
+        repeat_events = [event for event in cache_scenario_events(scenario)[repeat_marker:] if event['path'] in initial_paths]
         repeat_manifest = [event for event in repeat_events if event['path'] == manifest_path]
-        assert len(repeat_manifest) == 1 and repeat_manifest[0]['status'] == 304, f'Manifest was not ETag-revalidated: {repeat_events}'
-        assert repeat_manifest[0]['if_none_match'] == cold_manifest_event['etag'], 'Manifest revalidation omitted the cached ETag.'
-        assert not [event for event in repeat_events if event['path'] != manifest_path], f'Unchanged data resources were re-requested: {repeat_events}'
-        repeat_data_bytes = sum(event['body_bytes'] for event in repeat_events if event['path'] != manifest_path)
-        assert repeat_data_bytes == 0
-        results['cold_visit'] = {'seconds': round(cold_elapsed, 3), 'data_body_bytes': cold_data_bytes, 'resource_count': len(expected_resource_paths) - 1}
-        results['unchanged_repeat'] = {
-            'seconds': round(repeat_elapsed, 3), 'manifest_revalidation': '304 with matching ETag',
-            'data_resource_requests': 0, 'data_body_bytes': repeat_data_bytes,
-            'data_body_bytes_saved': cold_data_bytes,
-            'data_body_savings_percent': 100.0,
-        }
+        assert len(repeat_manifest) == 1 and repeat_manifest[0]['status'] == 304
+        assert repeat_manifest[0]['if_none_match'] == cold_manifest_event['etag']
+        assert not [event for event in repeat_events if event['path'] != manifest_path], f'Fresh compact data was re-requested: {repeat_events}'
 
-        # Re-entering the loaded page and using browser history preserves verified in-memory/cache data.
+        # Verified day-shard references do not multiply requests on same-page navigation.
         reentry_marker = len(cache_scenario_events(scenario))
         page.locator('#tab-overview').click()
+        expect(page.locator('#overview-status')).to_contain_text('CVE records')
         page.locator('#tab-center').click()
-        assert not [event for event in cache_scenario_events(scenario)[reentry_marker:] if event['path'] in expected_resource_paths]
-        page.locator('#tab-overview').click()
-        first_overview_id = json.loads((ROOT / 'snapshot' / 'data' / 'overview.json').read_bytes())['records'][0]['id']
-        page.locator('.latest-preview-row__id').first.click()
-        expect(page.locator('#detail-heading')).to_have_text(first_overview_id, timeout=120_000)
-        page.go_back(wait_until='domcontentloaded')
-        page.go_forward(wait_until='domcontentloaded')
-        expect(page.locator('#detail-heading')).to_have_text(first_overview_id, timeout=120_000)
-        history_events = [event for event in cache_scenario_events(scenario)[reentry_marker:] if event['path'] in expected_resource_paths]
-        assert not [event for event in history_events if event['path'] != manifest_path and event['body_bytes']], f'Re-entry/history redownloaded JSON bodies: {history_events}'
-        results['same_page_and_history'] = {'in_memory_reentry': True, 'back_forward': True, 'data_body_bytes': 0}
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']))
+        reentry_events = [event for event in cache_scenario_events(scenario)[reentry_marker:] if event['path'] in initial_paths | {target_path, history_path}]
+        assert not [event for event in reentry_events if event['body_bytes']], f'In-memory reentry downloaded verified JSON bodies: {reentry_events}'
 
-        # A fresh manifest changes the hash for a same-path shard; the stale cached body must be retried once.
-        page.goto(f'{origin}/?page=center', wait_until='load')
-        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        results['measured_performance'] = {
+            'initial_index_plus_epss_bytes': cold_data_bytes,
+            'index_bytes': manifest['search_index']['bytes'],
+            'index_budget_bytes': 16 * 1024 * 1024,
+            'detail_shard_bytes_on_open': detail_events[0]['body_bytes'],
+            'initial_index_load_seconds': round(cold_elapsed, 3),
+            'detail_open_seconds': detail_latency_ms / 1000,
+            'search_interaction_ms': search_latency_ms,
+            'synchronous_list_render_ms': round(client_metrics['list_render_ms'], 2) if client_metrics['list_render_ms'] is not None else None,
+            'index_verified_and_rendered_ms': round(client_metrics['index_verify_render_ms'], 2) if client_metrics['index_verify_render_ms'] is not None else None,
+            'app_script_resource_ms': round(client_metrics['app_script_resource_ms'], 2) if client_metrics['app_script_resource_ms'] is not None else None,
+            'app_script_transfer_bytes': client_metrics['app_script_transfer_bytes'],
+            'long_task_count': client_metrics['long_task_count'],
+            'max_long_task_ms': round(client_metrics['max_long_task_ms'], 2) if client_metrics['max_long_task_ms'] is not None else None,
+            'used_heap_mib_when_supported': client_metrics['used_heap_mib'],
+            'mobile_render': mobile_render,
+        }
+        results['unchanged_repeat'] = {'seconds': round(repeat_elapsed,3),'manifest_revalidation':'304 with matching ETag','sidecar_body_bytes':0,'same_page_reentry':True}
+
+        # Explicit retry must bypass a same-path cached candidate and fetch exact bytes.
+        reload_marker = len(cache_scenario_events(scenario))
+        reload_probe = page.evaluate('''async path=>{const response=await fetch(path,{cache:'reload',credentials:'same-origin'});return {status:response.status,bytes:(await response.arrayBuffer()).byteLength}}''',f'/{index_path}')
+        assert reload_probe == {'status':200,'bytes':manifest['search_index']['bytes']}, reload_probe
+        reload_events = [event for event in cache_scenario_events(scenario)[reload_marker:] if event['path'] == index_path]
+        assert len(reload_events) == 1 and reload_events[0]['status'] == 200 and reload_events[0]['body_bytes'] == manifest['search_index']['bytes'], reload_events
+        results['explicit_cache_reload']={'compact_index_status':200,'body_bytes':reload_probe['bytes']}
+
+        # Fresh manifest points to new same-path content; old browser-cached shard must fail digest and reload once.
         with scenario['lock']:
             scenario['overrides'][manifest_path] = updated_manifest_raw
             scenario['overrides'][target_path] = updated_shard_raw
         update_marker = len(cache_scenario_events(scenario))
-        page.reload(wait_until='load')
-        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
-        page.locator('#record-search').fill(target['id'])
-        expect(page.locator('.record-row')).to_have_count(1)
-        expect(page.locator('.record-title')).to_have_text(changed_title)
-        update_events = [event for event in cache_scenario_events(scenario)[update_marker:] if event['path'] in expected_resource_paths]
-        new_manifest_events = [event for event in update_events if event['path'] == manifest_path]
-        new_shard_events = [event for event in update_events if event['path'] == target_path]
-        assert len(new_manifest_events) == 1 and new_manifest_events[0]['status'] == 200 and new_manifest_events[0]['body_bytes'] == len(updated_manifest_raw)
-        assert len(new_shard_events) == 1 and new_shard_events[0]['status'] == 200 and new_shard_events[0]['body_bytes'] == len(updated_shard_raw), f'Changed shard was not fetched exactly once after cache mismatch: {new_shard_events}'
-        results['changed_manifest_and_shard'] = {
-            'manifest': 'fresh 200', 'changed_same_path_shard': 'one cache-reload request; digest and schema verified',
-            'updated_record_rendered': target['id'], 'shard_response_body_bytes': len(updated_shard_raw),
-        }
-
-        # Force one resource's cached validator to expire, then confirm default fetch revalidates by ETag.
-        expired_day = next(day for day in manifest['days'] if day['count'] and day['path'] != target_day['path'])
-        expired_path = f"snapshot/{expired_day['path']}"
-        with scenario['lock']:
-            scenario['cache_control'][expired_path] = 'public, max-age=0'
-        probe = page.evaluate('''async (path) => {
-          const response = await fetch(path, {cache: 'no-cache', credentials: 'same-origin'});
-          return {status: response.status, bytes: (await response.arrayBuffer()).byteLength};
-        }''', f'/{expired_path}')
-        assert probe == {'status': 200, 'bytes': expired_day['bytes']}, f'ETag probe did not recover the cached body: {probe}'
-        probe_event = [event for event in cache_scenario_events(scenario) if event['path'] == expired_path][-1]
-        assert probe_event['status'] == 304 and probe_event['if_none_match'], f'Expired ETag probe did not receive 304: {probe_event}'
-        expiry_marker = len(cache_scenario_events(scenario))
-        page.reload(wait_until='load')
-        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
-        expiry_events = [event for event in cache_scenario_events(scenario)[expiry_marker:] if event['path'] == expired_path]
-        assert len(expiry_events) == 1 and expiry_events[0]['status'] == 304 and expiry_events[0]['if_none_match'], f'Default cache mode did not revalidate the expired ETag: {expiry_events}'
-        results['expired_etag'] = {'probe_revalidation': 304, 'application_default_cache_revalidation': 304, 'body_bytes': 0}
+        page.goto(f'{origin}/?page=center&cve={target["id"]}', wait_until='load')
+        expect(page.locator('#detail-heading')).to_have_text(target['id'], timeout=120_000)
+        expect(page.locator('#detail-content')).to_contain_text(changed_label)
+        update_events = cache_scenario_events(scenario)[update_marker:]
+        new_manifest_events = [event for event in update_events if event['path']==manifest_path]
+        new_shard_events = [event for event in update_events if event['path']==target_path]
+        assert len(new_manifest_events)==1 and new_manifest_events[0]['status']==200
+        assert len(new_shard_events)==1 and new_shard_events[0]['status']==200 and new_shard_events[0]['body_bytes']==len(updated_shard_raw), new_shard_events
+        results['fresh_manifest_changed_shard']={'manifest':'fresh 200','same_path_shard':'one digest-triggered cache reload','verified_detail_text':changed_label}
     finally:
         context.close()
 
-    # A tampered response is retried once, remains untrusted, and never renders partial rows.
+    # A bad shard is retried once and never becomes a partial dossier; the compact search index remains valid.
     tampered_body = (ROOT / target_path).read_bytes()
     tampered_body = tampered_body[:-1] + (b' ' if tampered_body.endswith(b'\n') else b'!')
     with scenario['lock']:
         scenario['overrides'] = {manifest_path: manifest_raw}
         scenario['responses'] = {target_path: (200, tampered_body)}
-        scenario['events'] = []
-        scenario['counts'] = {}
+        scenario['events'] = []; scenario['counts'] = {}
     tamper_context = browser.new_context(viewport={'width': 1280, 'height': 900})
     tamper_page = tamper_context.new_page()
     browser_issue_track(tamper_page, issues, origin)
     try:
-        tamper_page.goto(f'{origin}/?page=center', wait_until='load')
-        expect(tamper_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
-        expect(tamper_page.locator('#record-list .record-row')).to_have_count(0)
-        assert tamper_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
-        tamper_events = [event for event in cache_scenario_events(scenario) if event['path'] == target_path]
-        assert len(tamper_events) == 2, f'Tampered shard did not receive exactly one retry: {tamper_events}'
-        results['tampered_network_resource'] = {'attempts': len(tamper_events), 'rendered_records': 0, 'state': 'fail-closed'}
+        tamper_page.goto(f'{origin}/?page=center&search={target["id"]}', wait_until='load')
+        expect(tamper_page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        expect(tamper_page.locator('.record-row')).to_have_count(1)
+        tamper_page.locator('.record-open').click()
+        expect(tamper_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+        assert tamper_page.locator('#detail-heading').count()==0
+        tamper_events=[event for event in cache_scenario_events(scenario) if event['path']==target_path]
+        assert len(tamper_events)==2, tamper_events
+        results['tampered_shard']={'attempts':2,'partial_dossier':False,'verified_index_retained':True}
     finally:
         tamper_context.close()
 
-    # Malformed JSON with a matching declared byte count/hash fails parsing without a retry or partial success.
-    malformed = b'{not valid JSON'
-    malformed_manifest = json.loads(json.dumps(manifest))
-    malformed_day = malformed_manifest['days'][0]
-    malformed_day['bytes'] = len(malformed)
-    malformed_day['sha256'] = hashlib.sha256(malformed).hexdigest()
-    malformed_manifest_raw = json.dumps(malformed_manifest, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
-    malformed_path = f"snapshot/{malformed_day['path']}"
+    # Valid manifest digest but malformed JSON fails parsing without a retry or partial dossier.
+    malformed=b'{not valid JSON'
+    malformed_manifest=json.loads(json.dumps(manifest))
+    malformed_day=next(day for day in malformed_manifest['days'] if day['count'])
+    malformed_record=next(row for row in index_payload['records'] if row['detail_path']==malformed_day['path'])
+    malformed_day['bytes']=len(malformed); malformed_day['sha256']=hashlib.sha256(malformed).hexdigest()
+    malformed_manifest_raw=json.dumps(malformed_manifest,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode('utf-8')
+    malformed_path=f"snapshot/{malformed_day['path']}"
     with scenario['lock']:
-        scenario['overrides'] = {manifest_path: malformed_manifest_raw, malformed_path: malformed}
-        scenario['responses'] = {}
-        scenario['events'] = []
-        scenario['counts'] = {}
-    malformed_context = browser.new_context(viewport={'width': 1280, 'height': 900})
-    malformed_page = malformed_context.new_page()
-    browser_issue_track(malformed_page, issues, origin)
+        scenario['overrides']={manifest_path:malformed_manifest_raw,malformed_path:malformed}
+        scenario['responses']={};scenario['events']=[];scenario['counts']={}
+    malformed_context=browser.new_context(viewport={'width':1280,'height':900})
+    malformed_page=malformed_context.new_page()
+    browser_issue_track(malformed_page,issues,origin)
     try:
-        malformed_page.goto(f'{origin}/?page=center', wait_until='load')
-        expect(malformed_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
-        expect(malformed_page.locator('#record-list .record-row')).to_have_count(0)
-        malformed_events = [event for event in cache_scenario_events(scenario) if event['path'] == malformed_path]
-        assert len(malformed_events) == 1, f'Hash-valid malformed JSON should fail schema parsing without cache retry: {malformed_events}'
-        results['malformed_json'] = {'attempts': 1, 'rendered_records': 0, 'state': 'fail-closed'}
+        malformed_page.goto(f'{origin}/?page=center&search={malformed_record["id"]}',wait_until='load')
+        expect(malformed_page.locator('.record-row')).to_have_count(1,timeout=120_000)
+        malformed_page.locator('.record-open').click()
+        expect(malformed_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+        assert malformed_page.locator('#detail-heading').count()==0
+        malformed_events=[event for event in cache_scenario_events(scenario) if event['path']==malformed_path]
+        assert len(malformed_events)==1,malformed_events
+        results['malformed_json_shard']={'attempts':1,'partial_dossier':False,'verified_index_retained':True}
     finally:
-        malformed_context.close()
-        server.shutdown()
-        server.server_close()
+        malformed_context.close();server.shutdown();server.server_close()
 
-    assert not issues['page_errors'], f"Cache browser page errors: {issues['page_errors']}"
-    assert not issues['console_errors'], f"Cache browser console errors: {issues['console_errors']}"
-    assert not issues['request_failures'], f"Cache browser request failures: {issues['request_failures']}"
-    assert not issues['external_requests'], f"Unexpected external requests in cache tests: {issues['external_requests']}"
+    assert not issues['page_errors'],f"Cache browser page errors: {issues['page_errors']}"
+    assert not issues['console_errors'],f"Cache browser console errors: {issues['console_errors']}"
+    assert not issues['request_failures'],f"Cache browser request failures: {issues['request_failures']}"
+    assert not issues['external_requests'],f'Unexpected external requests in cache tests: {issues["external_requests"]}'
     return results
 
 
@@ -1346,7 +1179,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # Swipe previews are visible before the route is committed; wait for the semantic active state first.
         expect(page.locator(f'#tab-{name}')).to_have_attribute('aria-selected', 'true')
         expect(page.locator(f'#page-{name}')).to_be_visible()
-        for candidate in ('overview', 'latest', 'center', 'archive', 'community'):
+        for candidate in ('overview', 'latest', 'center', 'changes', 'community'):
             tab = page.locator(f'#tab-{candidate}')
             selected = candidate == name
             actual = tab.get_attribute('aria-selected')
@@ -1362,7 +1195,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
     def safe_touch_corridor(direction: str = 'left', distance: int = 150) -> dict | None:
         return page.evaluate('''({direction, distance}) => {
           const active = document.querySelector('.page:not([hidden])');
-          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .center-dock, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .overview-kpis, .overview-grid, .activity-panel, .latest-preview-row, .latest-page-item, .latest-list, .source-intelligence';
+          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .research-toolbar, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .overview-kpis, .overview-grid, .activity-panel, .latest-preview-row, .latest-page-item, .latest-list, .source-intelligence';
           const hasTextAtPoint = (x, y) => {
             let node = null, offset = 0;
             if (typeof document.caretRangeFromPoint === 'function') {
@@ -1403,7 +1236,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
 
     def drag_from_edge(direction: str, distance: int = 150, *, y: int = 500, steps: int = 6, delay_ms: int = 12) -> None:
         active_id = page.locator('.page:not([hidden])').get_attribute('id')
-        if active_id in {'page-latest', 'page-archive'}:
+        if active_id in {'page-latest', 'page-changes'}:
             corridor = safe_touch_corridor(direction, distance)
             assert corridor is not None, f'No safe touch swipe corridor on {active_id}: {direction} {distance}px'
             x, y = corridor['x'], corridor['y']
@@ -1421,7 +1254,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
     def safe_drag_corridor(target_page, direction: str = 'left', distance: int = 190) -> dict:
         corridor = target_page.evaluate('''({direction, distance}) => {
           const active = document.querySelector('.page:not([hidden])');
-          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .center-dock, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .overview-kpis, .overview-grid, .activity-panel, .latest-preview-row, .latest-page-item, .latest-list, .source-intelligence, .snapshot-status-strip, .snapshot-rail, .latest-page-list, .archive-day-list, .snapshot-summary, article, .terminal-frame';
+          const blocked = 'a[href], button, input, select, textarea, option, summary, details, [role="button"], [role="link"], [role="combobox"], [role="textbox"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"]), .record-list, .record-row, .research-toolbar, .filter-controls, .severity-distribution, .pagination, .detail-view, .snapshot-loader, .overview-kpis, .overview-grid, .activity-panel, .latest-preview-row, .latest-page-item, .latest-list, .source-intelligence, .snapshot-status-strip, .snapshot-rail, .latest-page-list, .snapshot-summary, article, .terminal-frame';
           const hasTextAtPoint = (x, y) => {
             let node = null;
             let offset = 0;
@@ -1533,7 +1366,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         expect_active('center')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
         drag_from_edge('left')
-        expect_active('archive')
+        expect_active('changes')
         drag_from_edge('left')
         expect_active('community')
         expect(page).to_have_url(f'{origin}/?page=community')
@@ -1548,8 +1381,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         swipe(round(terminal['x'] + terminal['width'] - 5), panel_y, -180, steps=6, delay_ms=12)
         expect_active('community')
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
-        expect_active('archive')
-        expect(page).to_have_url(f'{origin}/?page=archive')
+        expect_active('changes')
+        expect(page).to_have_url(f'{origin}/?page=changes')
         page.locator('#tab-center').click()
         expect_active('center')
 
@@ -1576,11 +1409,11 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         }""")
         assert safe_start == {'page': 'page-center', 'blocked': False}, f'Post-pagination swipe did not start on a safe Center background: {safe_start}'
         drag_from_edge('left', y=150)
-        expect_active('archive')
+        expect_active('changes')
         drag_from_edge('left', y=150)
         expect_active('community')
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
-        expect_active('archive')
+        expect_active('changes')
         page.locator('#tab-center').click()
         expect_active('center')
         expect(page.locator('#page-indicator')).to_contain_text('Page 2 of')
@@ -1616,7 +1449,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # Swiping from the safe page background preserves the detail, search, and URL state.
         page.evaluate('window.scrollTo(0, 0)')
         drag_from_edge('left')
-        expect_active('archive')
+        expect_active('changes')
         drag_from_edge('left')
         expect_active('community')
         route_state = page.evaluate('''() => {
@@ -1646,9 +1479,9 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert page.locator('#page-community').evaluate('element => !element.classList.contains("is-swipe-tracking")')
         page.evaluate('window.getSelection()?.removeAllRanges()')
 
-        # The terminal background supports Community → Archive; the Explore tab restores retained detail/search state.
+        # The terminal background supports Community → Changes; the Explore tab restores retained detail/search state.
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
-        expect_active('archive')
+        expect_active('changes')
         page.locator('#tab-center').click()
         expect_active('center')
         expect(page.locator('#detail-view')).to_be_visible()
@@ -1676,16 +1509,16 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         }""")
         assert safe_start == {'page': 'page-center', 'blocked': False}, f'Post-pagination swipe did not start on a safe Center background: {safe_start}'
         drag_from_edge('left', y=150)
-        expect_active('archive')
-        assert not page.locator('#page-archive').evaluate('element => element.classList.contains("page-enter")')
+        expect_active('changes')
+        assert page.locator('#page-archive').count() == 0 and page.locator('#tab-archive').count() == 0
         page.locator('#tab-community').click()
         expect_active('community')
         assert not page.locator('#page-community').evaluate('element => element.classList.contains("page-enter")')
         terminal = page.locator('.terminal-screen').bounding_box()
         assert terminal is not None
         swipe(round(terminal['x'] + 5), round(terminal['y'] + 4), 160, steps=6, delay_ms=12)
-        expect_active('archive')
-        assert not page.locator('#page-archive').evaluate('element => element.classList.contains("page-enter")')
+        expect_active('changes')
+        assert page.locator('#page-archive').count() == 0 and page.locator('#tab-archive').count() == 0
         context.close()
 
         # Desktop drags only navigate from empty, text-free safe areas; text, controls, and click state stay native.
@@ -1807,7 +1640,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert expect_active_name == 'true' and desktop_page.evaluate('document.activeElement.id') == 'tab-latest'
         desktop_page.keyboard.press('Home')
         assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
-        for page_name in ('overview', 'latest', 'center', 'archive', 'community'):
+        for page_name in ('overview', 'latest', 'center', 'changes', 'community'):
             desktop_page.locator(f'#tab-{page_name}').click()
             desktop_page.locator(f'#tab-{page_name}').focus()
             desktop_page.keyboard.press('Shift+Tab')
@@ -1844,130 +1677,195 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
 
 
 def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview: dict) -> dict:
-    """Verify new static discovery views and a user-triggered, fail-closed retry."""
+    # Verify truthful Latest, legacy route disposition, observed Changes, and fail-closed history retry.
     navigation_issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
-    page = browser.new_page(viewport={'width': 1280, 'height': 900})
-    browser_issue_track(page, navigation_issues, origin)
-    expected_latest = [record['id'] for record in overview['records']]
+    page = browser.new_page(viewport={'width':1280,'height':900})
+    browser_issue_track(page,navigation_issues,origin)
+    expected_latest=[record['id'] for record in overview['records']]
+    production_history=json.loads((ROOT/'snapshot'/manifest['history']['path']).read_bytes())
     try:
-        page.goto(f'{origin}/?page=overview', wait_until='load')
-        expect(page.locator('#overview-status')).to_contain_text('CVE records', timeout=30_000)
+        page.goto(f'{origin}/?page=overview',wait_until='load')
+        expect(page.locator('#overview-status')).to_contain_text('CVE records',timeout=30_000)
         expect(page.locator('#source-check-age')).to_contain_text('Approximate snapshot age at page load')
-        assert page.locator('#source-check-list .source-check-row').count() == len(manifest['source_status'])
-        for index, source in enumerate(manifest['source_status']):
-            row = page.locator('#source-check-list .source-check-row').nth(index)
+        assert page.locator('#source-check-list .source-check-row').count()==len(manifest['source_status'])
+        for i,source in enumerate(manifest['source_status']):
+            row=page.locator('#source-check-list .source-check-row').nth(i)
             expect(row.locator('.source-check-row__identity strong')).to_have_text(source['name'])
-            expect(row.locator('.source-check-row__result')).to_have_attribute(
-                'data-outcome', 'success' if source['ok'] else 'unavailable'
-            )
-            assert row.locator('.source-check-row__result time').count() == int(bool(source.get('checked_at')))
+            expect(row.locator('.source-check-row__result')).to_have_attribute('data-outcome','success' if source['ok'] else 'unavailable')
+            assert row.locator('.source-check-row__result time').count()==int(bool(source.get('checked_at')))
 
-        page.goto(f'{origin}/?page=latest', wait_until='load')
-        expect(page.locator('#latest-page-status')).to_contain_text('verified latest records', timeout=30_000)
-        assert page.locator('.latest-page-item__id').all_text_contents() == expected_latest
-        assert page.locator('#latest-record-count').inner_text() == nfmt(len(expected_latest))
-        assert page.locator('.latest-page-item__id').evaluate_all('links => links.map(link => link.getAttribute("href"))') == [
-            f'?page=center&cve={cve_id}' for cve_id in expected_latest
-        ]
-        assert page.locator('#latest-generated-at').get_attribute('datetime') == manifest['generated_at']
-        page.screenshot(path=str(SCREENSHOTS / '05-latest-desktop.png'))
+        page.goto(f'{origin}/?page=latest',wait_until='load')
+        expect(page.locator('#latest-page-status')).to_contain_text('verified latest records',timeout=30_000)
+        assert page.locator('.latest-page-item__id').all_text_contents()==expected_latest
+        assert page.locator('#latest-record-count').inner_text()==nfmt(len(expected_latest))
+        assert page.locator('.latest-page-item__id').evaluate_all('links=>links.map(link=>link.getAttribute("href"))')==[
+            f'?page=center&cve={cve_id}' for cve_id in expected_latest]
+        assert page.locator('#latest-generated-at').get_attribute('datetime')==manifest['generated_at']
+        assert page.locator('#latest-activity-at').get_attribute('datetime')==overview['records'][0]['activity_at']
+        page.screenshot(path=str(SCREENSHOTS/'05-latest-desktop.png'),animations='disabled')
 
-        source_name = next(source for record in overview['records'] for source in record['sources'])
+        source_name=next(source for record in overview['records'] for source in record['sources'])
         page.locator('#latest-filter-source').select_option(source_name)
-        source_expected = [record['id'] for record in overview['records'] if source_name in record['sources']]
-        assert page.locator('.latest-page-item__id').all_text_contents() == source_expected
+        source_expected=[record['id'] for record in overview['records'] if source_name in record['sources']]
+        assert page.locator('.latest-page-item__id').all_text_contents()==source_expected
         page.locator('#latest-filter-source').select_option('all')
         page.locator('#latest-filter-epss').fill('0')
-        epss_expected = [record['id'] for record in overview['records'] if record['epss'] is not None]
-        assert page.locator('.latest-page-item__id').all_text_contents() == epss_expected
+        epss_expected=[record['id'] for record in overview['records'] if record['epss'] is not None]
+        assert page.locator('.latest-page-item__id').all_text_contents()==epss_expected
         page.locator('#latest-filter-epss').fill('')
         page.locator('#latest-filter-kev').check()
-        kev_expected = [record['id'] for record in overview['records'] if record['kev_date_added'] is not None]
-        assert page.locator('.latest-page-item__id').all_text_contents() == kev_expected
+        kev_expected=[record['id'] for record in overview['records'] if record['kev_date_added'] is not None]
+        assert page.locator('.latest-page-item__id').all_text_contents()==kev_expected
         page.locator('#latest-filter-kev').uncheck()
         page.locator('#latest-filter-search').fill(expected_latest[0])
-        assert page.locator('.latest-page-item__id').all_text_contents() == [expected_latest[0]]
+        assert page.locator('.latest-page-item__id').all_text_contents()==[expected_latest[0]]
         page.locator('#latest-filter-search').fill('')
-        assert page.locator('.latest-page-item__id').all_text_contents() == expected_latest
+        assert page.locator('.latest-page-item__id').all_text_contents()==expected_latest
 
-        page.goto(f'{origin}/?page=archive', wait_until='load')
-        expect(page.locator('#archive-status')).to_contain_text('The validated manifest lists', timeout=30_000)
-        assert page.locator('#archive-day-list > li').count() == len(manifest['days'])
-        start, end = page.locator('#archive-window-start').get_attribute('datetime'), page.locator('#archive-window-end').get_attribute('datetime')
-        assert start == manifest['window']['start'][:10] and end == manifest['window']['end'][:10], (start, end)
-        target_day = next(day for day in reversed(manifest['days']) if day['count'])
-        target_url = f'?page=center&from={target_day["date"]}&to={target_day["date"]}'
-        target_link = page.locator(f'#archive-day-list a[href="{target_url}"]')
-        assert target_link.count() == 1, f'Archive date does not link to its exact Explore filter: {target_url}'
-        target_link.click()
-        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
-        expect(page.locator('#date-from')).to_have_value(target_day['date'])
-        expect(page.locator('#date-to')).to_have_value(target_day['date'])
-        expect(page).to_have_url(f'{origin}/{target_url}')
-        page.go_back(wait_until='load')
-        expect(page.locator('#archive-day-list > li')).to_have_count(len(manifest['days']))
-        page.locator('#tab-latest').click()
-        expect(page.locator('#page-latest')).to_be_visible()
-        expect(page).to_have_url(f'{origin}/?page=latest')
-        page.go_back(wait_until='load')
-        expect(page.locator('#page-archive')).to_be_visible()
-        page.screenshot(path=str(SCREENSHOTS / '06-archive-desktop.png'))
+        # Old archive bookmarks become Explore date filters; there is no phantom Archive page or nav tab.
+        legacy_day=next(day for day in manifest['days'] if day['count'])['date']
+        page.goto(f'{origin}/?page=archive&from={legacy_day}&to={legacy_day}',wait_until='load')
+        expect(page.locator('#page-center')).to_be_visible()
+        expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']),timeout=120_000)
+        expect(page.locator('#date-from')).to_have_value(legacy_day)
+        expect(page.locator('#date-to')).to_have_value(legacy_day)
+        expect(page).to_have_url(f'{origin}/?page=center&from={legacy_day}&to={legacy_day}')
+        assert page.locator('#page-archive').count()==0 and page.locator('#tab-archive').count()==0
+        page.screenshot(path=str(SCREENSHOTS/'06-explore-legacy-route-desktop.png'),animations='disabled')
     finally:
         page.close()
 
-    retry_issues = {'page_errors': [], 'console_errors': [], 'request_failures': [], 'external_requests': []}
-    retry_page = browser.new_page(viewport={'width': 1280, 'height': 900})
-    browser_issue_track(retry_page, retry_issues, origin)
-    attempts = {'count': 0}
-
-    def abort_first_overview(route) -> None:
-        attempts['count'] += 1
-        if attempts['count'] == 1:
-            route.abort()
-        else:
-            route.continue_()
-
-    retry_page.route('**/snapshot/data/overview.json', abort_first_overview)
+    # The shipped history remains exact and empty until captures can genuinely be compared.
+    production_page=browser.new_page(viewport={'width':1280,'height':900})
+    browser_issue_track(production_page,navigation_issues,origin)
     try:
-        retry_page.goto(f'{origin}/?page=archive', wait_until='load')
-        expect(retry_page.locator('#page-overview [data-snapshot-state]')).to_contain_text('Overview index verification failed', timeout=30_000)
-        expect(retry_page.locator('#archive-page-retry')).to_be_visible()
-        expect(retry_page.locator('#source-check-list .source-check-row')).to_have_count(len(manifest['source_status']))
-        expect(retry_page.locator('#archive-day-list .archive-day-item')).to_have_count(len(manifest['days']))
-        expect(retry_page.locator('#archive-status')).to_contain_text('The validated manifest lists')
-        expect(retry_page.locator('#archive-status')).to_contain_text('Overview index could not be verified')
-        expect(retry_page.locator('#latest-page-list .latest-page-item')).to_have_count(0)
-        expect(retry_page.locator('#latest-list .latest-preview-row')).to_have_count(0)
-        expect(retry_page.locator('#overview-total')).to_have_text('Unavailable')
-        retry_page.locator('#archive-page-retry').click()
-        expect(retry_page.locator('#archive-status')).to_contain_text('The validated manifest lists', timeout=30_000)
-        expect(retry_page.locator('#archive-day-list > li')).to_have_count(len(manifest['days']))
-        assert attempts['count'] == 2, f'Try again did not issue exactly one fresh Overview sidecar request: {attempts}'
-        assert retry_page.evaluate('document.activeElement.id') == 'archive-status', 'Successful retry did not announce completion to the focused user.'
-        expect(retry_page.locator('#archive-page-retry')).to_be_hidden()
-        assert len(retry_issues['request_failures']) == 1 and retry_issues['request_failures'][0].endswith('/snapshot/data/overview.json'), retry_issues['request_failures']
-        retry_issues['request_failures'].clear()  # The one captured failure was the intentional first-attempt abort.
-        assert not retry_issues['page_errors'], retry_issues['page_errors']
-        expected_abort_console = [message for message in retry_issues['console_errors'] if 'net::ERR_FAILED' in message]
-        assert len(expected_abort_console) == 1 and len(retry_issues['console_errors']) == 1, retry_issues['console_errors']
-        retry_issues['console_errors'].clear()  # Chromium reports the intentional abort once as a resource-load diagnostic.
-        assert not retry_issues['request_failures'], retry_issues['request_failures']
-        assert not retry_issues['external_requests'], retry_issues['external_requests']
+        production_page.goto(f'{origin}/?page=center',wait_until='load')
+        expect(production_page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']),timeout=120_000)
+        production_page.locator('#tab-changes').click()
+        expect(production_page.locator('#page-changes')).to_be_visible()
+        expect(production_page.locator('#change-event-count')).to_have_text(nfmt(len(production_history['events'])),timeout=30_000)
+        if not production_history['events']:
+            expect(production_page.locator('#change-event-list')).to_contain_text('No changes are shown until two complete captures can be compared.')
+            expect(production_page.locator('#change-window-note')).to_contain_text('baseline capture')
+        else:
+            expect(production_page.locator('#change-event-list .change-event-row')).to_have_count(len(production_history['events']))
+    finally:
+        production_page.close()
+
+    # Synthetic records below exist only in this browser fixture; the repository history remains untouched.
+    index_payload=json.loads((ROOT/'snapshot'/manifest['search_index']['path']).read_bytes())
+    rows=index_payload['records']
+    assert len(rows)>=3
+    synthetic_history=json.loads(json.dumps(production_history))
+    observed=manifest['generated_at']
+    synthetic_history['events']=[
+        {'id':rows[0]['id'],'type':'CVSS_CHANGED','observed_at':observed,'source_time':rows[0]['modified'] or rows[0]['activity_at'],'source':'NVD last modified','from':5.0,'to':8.0},
+        {'id':rows[1]['id'],'type':'KEV_ADDED','observed_at':observed,'source_time':None,'source':'CISA KEV','from':None,'to':{'date_added':observed[:10]}},
+        {'id':rows[2]['id'],'type':'CVE_REOBSERVED','observed_at':observed,'source_time':rows[2]['activity_at'],'source':'NVD last modified','from':{'previous_window':'outside the retained 30-day feed'},'to':{'note':'A source reports recent activity; the prior full record is outside the retained 30-day feed window, so individual field differences cannot be reconstructed.'}},
+    ]
+    synthetic_history_raw=json.dumps(synthetic_history,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode('utf-8')
+    synthetic_manifest=json.loads(json.dumps(manifest))
+    synthetic_manifest['history']['bytes']=len(synthetic_history_raw)
+    synthetic_manifest['history']['sha256']=hashlib.sha256(synthetic_history_raw).hexdigest()
+    synthetic_manifest['history']['event_count']=len(synthetic_history['events'])
+    synthetic_manifest_raw=json.dumps(synthetic_manifest,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode('utf-8')
+    synthetic_page=browser.new_page(viewport={'width':1280,'height':900})
+    browser_issue_track(synthetic_page,navigation_issues,origin)
+    synthetic_page.route('**/snapshot/manifest.json',lambda route:route.fulfill(status=200,content_type='application/json; charset=utf-8',body=synthetic_manifest_raw))
+    synthetic_page.route(f"**/snapshot/{manifest['history']['path']}",lambda route:route.fulfill(status=200,content_type='application/json; charset=utf-8',body=synthetic_history_raw))
+    try:
+        synthetic_page.goto(f'{origin}/?page=center',wait_until='load')
+        expect(synthetic_page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']),timeout=120_000)
+        synthetic_page.locator('#tab-changes').click()
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(3,timeout=30_000)
+        expect(synthetic_page.locator('#change-event-count')).to_have_text('3')
+        first_event=synthetic_page.locator('#change-event-list .change-event').first
+        if len(rows[0]['title']) == 180:
+            displayed_title = synthetic_page.locator('.change-event__title').first.text_content() or ''
+            assert displayed_title.endswith('…'), displayed_title
+        expect(first_event).to_contain_text('Observed')
+        expect(first_event).to_contain_text('Source time')
+        expect(first_event).to_contain_text('NVD last modified')
+        synthetic_page.screenshot(path=str(SCREENSHOTS/'07-changes-desktop.png'),animations='disabled')
+
+        synthetic_page.locator('[data-change-filter="CVSS_CHANGED"]').click()
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        expect(synthetic_page.locator('[data-change-filter="CVSS_CHANGED"]')).to_have_attribute('aria-pressed','true')
+        synthetic_page.locator('[data-change-filter="KEV"]').click()
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        expect(synthetic_page.locator('.change-type')).to_contain_text('KEV ADDED')
+        synthetic_page.locator('[data-change-filter="all"]').click()
+        synthetic_page.locator('#change-search').fill(rows[2]['id'])
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        synthetic_page.locator('#change-search').fill('')
+        synthetic_page.locator('#change-from').fill(observed[:10])
+        synthetic_page.locator('#change-to').fill(observed[:10])
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(3)
+        synthetic_page.locator('#change-search').fill('CVE_REOBSERVED')
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        expect(synthetic_page.locator('.change-event__diff')).to_contain_text('outside the retained 30-day feed')
+        expect(synthetic_page.locator('.change-event__diff')).to_contain_text('cannot be reconstructed')
+        synthetic_page.locator('#change-search').fill('')
+        synthetic_page.locator('.change-event__id').first.click()
+        expect(synthetic_page.locator('#detail-heading')).to_have_text(rows[0]['id'],timeout=60_000)
+        expect(synthetic_page.locator('#detail-history')).to_be_visible(timeout=30_000)
+        if len(rows[0]['title']) == 180:
+            displayed_detail_title = synthetic_page.locator('#detail-summary').text_content() or ''
+            assert displayed_detail_title.endswith('…'), displayed_detail_title
+        expect(synthetic_page.locator('#detail-content')).to_contain_text('CVSS CHANGED')
+        synthetic_page.go_back(wait_until='domcontentloaded')
+        expect(synthetic_page.locator('#page-changes')).to_be_visible()
+        assert not synthetic_page.locator('#tab-archive').count() and not synthetic_page.locator('#page-archive').count()
+    finally:
+        synthetic_page.close()
+
+    # History network failure displays no events, and a user retry restores only the hash-verified sidecar.
+    retry_issues={'page_errors':[],'console_errors':[],'request_failures':[],'external_requests':[]}
+    retry_page=browser.new_page(viewport={'width':1280,'height':900})
+    browser_issue_track(retry_page,retry_issues,origin)
+    attempts={'count':0}
+    def abort_first_history(route):
+        attempts['count']+=1
+        if attempts['count']==1: route.abort()
+        else: route.continue_()
+    retry_page.route(f"**/snapshot/{manifest['history']['path']}",abort_first_history)
+    try:
+        retry_page.goto(f'{origin}/?page=center',wait_until='load')
+        expect(retry_page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']),timeout=120_000)
+        retry_page.locator('#tab-changes').click()
+        expect(retry_page.locator('#changes-retry')).to_be_visible(timeout=30_000)
+        expect(retry_page.locator('#change-event-list')).to_contain_text('Change history could not be verified. No events are displayed.')
+        assert retry_page.locator('#change-event-list .change-event-row').count()==0
+        retry_page.locator('#changes-retry').click()
+        expect(retry_page.locator('#change-event-count')).to_have_text(nfmt(len(production_history['events'])),timeout=30_000)
+        expect(retry_page.locator('#changes-retry')).to_be_hidden()
+        assert retry_page.evaluate('document.activeElement.id')=='change-page-status'
+        assert attempts['count']==2,attempts
+        assert len(retry_issues['request_failures'])==1 and retry_issues['request_failures'][0].endswith('/'+manifest['history']['path']),retry_issues['request_failures']
+        retry_issues['request_failures'].clear()
+        expected_abort=[message for message in retry_issues['console_errors'] if 'net::ERR_FAILED' in message]
+        assert len(expected_abort)==1 and len(retry_issues['console_errors'])==1,retry_issues['console_errors']
+        retry_issues['console_errors'].clear()
+        assert not retry_issues['page_errors'] and not retry_issues['external_requests'],retry_issues
     finally:
         retry_page.close()
 
-    assert not navigation_issues['page_errors'], navigation_issues['page_errors']
-    assert not navigation_issues['console_errors'], navigation_issues['console_errors']
-    assert not navigation_issues['request_failures'], navigation_issues['request_failures']
-    assert not navigation_issues['external_requests'], navigation_issues['external_requests']
+    assert not navigation_issues['page_errors'],navigation_issues['page_errors']
+    assert not navigation_issues['console_errors'],navigation_issues['console_errors']
+    assert not navigation_issues['request_failures'],navigation_issues['request_failures']
+    assert not navigation_issues['external_requests'],navigation_issues['external_requests']
     return {
-        'latest_ids_match_verified_overview_sidecar': expected_latest,
-        'archive_days_match_validated_rolling_manifest': len(manifest['days']),
-        'archive_links_restore_exact_utc_date_filters': True,
-        'retry_attempts': attempts['count'],
-        'failed_retry_state_has_no_partial_records': True,
-        'successful_retry_restores_archive_and_focus': True,
-        'external_requests': 0,
+        'latest_ids_match_verified_activity_order':expected_latest,
+        'newest_activity_matches_overview_timestamp':True,
+        'legacy_archive_bookmark_redirects_to_explore_with_dates':True,
+        'archive_navigation_removed':True,
+        'production_history_event_count':len(production_history['events']),
+        'empty_history_not_fabricated':not production_history['events'],
+        'synthetic_only_changes_filter_search_and_provenance_checks':True,
+        'history_retry_attempts':attempts['count'],
+        'history_failure_has_no_partial_events':True,
+        'retry_restores_focus_to_live_status':True,
+        'external_requests':0,
     }
 
 
@@ -2002,8 +1900,8 @@ def main() -> None:
             overview_page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             browser_issue_track(overview_page, issues, origin)
             overview_requests: list[str] = []
-            overview_page.on('request', lambda request: overview_requests.append(request.url)
-                             if '/snapshot/data/' in request.url and not request.url.endswith(('/overview.json', '/epss.json')) else None)
+            overview_page.on('request', lambda request: overview_requests.append(urlsplit(request.url).path.removeprefix('/snapshot/'))
+                             if '/snapshot/data/' in request.url and not request.url.endswith(('/overview.json', '/epss.json', '/search-index.json', '/history.json')) else None)
             overview_page.goto(f'{origin}/', wait_until='load')
             expect(overview_page.locator('#overview-status')).to_contain_text(f'{nfmt(expected_count)} CVE records')
             expect(overview_page.locator('#overview-status')).to_have_attribute('aria-busy', 'false')
@@ -2040,9 +1938,10 @@ def main() -> None:
             overview_page.locator('#explore-cves').click()
             expect(overview_page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
             expect(overview_page.locator('.record-row')).to_have_count(min(24, expected_count))
-            assert len(overview_requests) >= len(manifest['days'])
+            expected_detail_path = f"data/{overview['records'][0]['window_date']}.json"
+            assert overview_requests == [expected_detail_path], f'Explore requested unexpected full detail shards: {overview_requests}'
             overview_page.close()
-            print('PASS: data-derived Overview KPIs/chart/source checks, captured timestamp, no eager shard fetch, complete lazy Explore, deep links, and focus restoration.')
+            print('PASS: data-derived Overview KPIs/chart/source checks, index-first Explore, one lazy detail shard, deep links, and focus restoration.')
 
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             browser_issue_track(page, issues, origin)
@@ -2114,8 +2013,8 @@ def main() -> None:
             expect(why_section).to_contain_text('CVSS' if isinstance(sample.get('score'), (int, float)) else 'No numeric CVSS score')
             expect(why_section).to_contain_text('FIRST EPSS')
             expect(why_section).to_contain_text('CISA KEV')
-            assert page.locator('.detail-tabs .detail-tab').all_text_contents() == ['Summary', 'Why This Matters', 'Record', 'Signals', 'Affected', 'References', 'Sources']
-            for section_id in ('detail-why', 'detail-record', 'detail-signals', 'detail-affected', 'detail-references', 'detail-sources'):
+            assert page.locator('.detail-tabs .detail-tab').all_text_contents() == ['Summary', 'Why This Matters', 'Record', 'Signals', 'Affected', 'References', 'Sources', 'History']
+            for section_id in ('detail-why', 'detail-record', 'detail-signals', 'detail-affected', 'detail-references', 'detail-sources', 'detail-history'):
                 tab = page.locator(f'.detail-tabs .detail-tab[href="#{section_id}"]')
                 tab.click()
                 expect(page.locator(f'#{section_id}')).to_be_visible()
@@ -2137,7 +2036,7 @@ def main() -> None:
             print('Loader QA details:', json.dumps(loader_results, sort_keys=True))
 
             cache_results = run_http_cache_tests(browser, manifest)
-            print('PASS: HTTP cache revalidation, changed-hash retry, expired ETag, malformed/tampered fail-closed behavior, and zero unnecessary repeat JSON bodies.')
+            print('PASS: manifest ETag revalidation, cache-first repeat load, explicit network reload, changed-hash retry, and malformed/tampered fail-closed behavior.')
             print('HTTP cache QA details:', json.dumps(cache_results, sort_keys=True))
 
             # A correctly re-hashed malicious text fixture remains text, never active markup.
@@ -2153,9 +2052,18 @@ def main() -> None:
                 'label': label_payload, 'url': 'https://example.com/security/advisory', 'source': 'NVD'
             }, *(victim.get('refs') or [])[:11]]
             override_manifest, override_shard, override_day = snapshot_override(manifest, latest_day, malicious_rows)
+            malicious_index = json.loads((ROOT / 'snapshot' / manifest['search_index']['path']).read_bytes())
+            index_victim = next(row for row in malicious_index['records'] if row['id'] == victim_id)
+            index_victim['title'] = title_payload
+            index_victim['summary'] = ' '.join(description_payload.split())[:320]
+            malicious_index_body = json.dumps(malicious_index, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+            overridden_manifest = json.loads(override_manifest)
+            overridden_manifest['search_index']['bytes'] = len(malicious_index_body)
+            overridden_manifest['search_index']['sha256'] = hashlib.sha256(malicious_index_body).hexdigest()
+            override_manifest = json.dumps(overridden_manifest, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
             xss_page = browser.new_page(viewport={'width': 1280, 'height': 900})
             browser_issue_track(xss_page, issues, origin)
-            install_snapshot_override(xss_page, override_manifest, override_shard, override_day)
+            install_snapshot_override(xss_page, override_manifest, override_shard, override_day, malicious_index_body)
             xss_page.goto(f'{origin}/?page=center', wait_until='load')
             expect(xss_page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
             xss_page.locator('#record-search').fill(victim_id)
@@ -2173,31 +2081,35 @@ def main() -> None:
             # Tampering without changing the authenticated manifest hash fails closed and shows no partial rows.
             tampered_rows = json.loads((ROOT / 'snapshot' / latest_day['path']).read_text(encoding='utf-8'))
             tampered_rows[0]['title'] = f"{tampered_rows[0]['title']} altered"
+            tampered_id = tampered_rows[0]['id']
             tampered_body = json.dumps(tampered_rows, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
             tamper_page = browser.new_page(viewport={'width': 1280, 'height': 900})
             browser_issue_track(tamper_page, issues, origin)
             tamper_page.route(f'**/snapshot/data/{latest_day["date"]}.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=tampered_body))
-            tamper_page.goto(f'{origin}/?page=center', wait_until='load')
-            expect(tamper_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
-            expect(tamper_page.locator('#record-list .record-row')).to_have_count(0)
-            expect(tamper_page.locator('#result-status')).to_contain_text('No partial records are shown')
-            expect(tamper_page.locator('#snapshot-loader')).to_be_hidden()
-            assert tamper_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
-            assert 'SHA-256' not in tamper_page.locator('#result-status').inner_text()
+            tamper_page.goto(f'{origin}/?page=center&search={tampered_id}', wait_until='load')
+            expect(tamper_page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
+            expect(tamper_page.locator('#record-list .record-row')).to_have_count(1)
+            tamper_page.locator('.record-open').click()
+            expect(tamper_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+            expect(tamper_page.locator('.detail-load-error')).to_contain_text('failed integrity verification')
+            assert tamper_page.locator('#detail-heading').count() == 0
+            assert tamper_page.locator('#detail-content img, #detail-content svg, #detail-content script').count() == 0
             tamper_page.close()
 
             # A correctly digested resource with an invalid record schema fails visibly, not as loading.
             invalid_rows = json.loads((ROOT / 'snapshot' / latest_day['path']).read_text(encoding='utf-8'))
             invalid_rows[0]['title'] = ''
+            invalid_id = invalid_rows[0]['id']
             schema_manifest, schema_shard, schema_day = snapshot_override(manifest, latest_day, invalid_rows)
             schema_page = browser.new_page(viewport={'width': 1280, 'height': 900})
             browser_issue_track(schema_page, issues, origin)
             install_snapshot_override(schema_page, schema_manifest, schema_shard, schema_day)
-            schema_page.goto(f'{origin}/?page=center', wait_until='load')
-            expect(schema_page.locator('#result-status')).to_contain_text('could not be verified', timeout=120_000)
-            expect(schema_page.locator('#snapshot-loader')).to_be_hidden()
-            assert schema_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
-            assert schema_page.locator('#record-list .record-row').count() == 0
+            schema_page.goto(f'{origin}/?page=center&search={invalid_id}', wait_until='load')
+            expect(schema_page.locator('#snapshot-total')).to_have_text(nfmt(expected_count), timeout=120_000)
+            expect(schema_page.locator('#record-list .record-row')).to_have_count(1)
+            schema_page.locator('.record-open').click()
+            expect(schema_page.locator('.detail-load-error')).to_be_visible(timeout=30_000)
+            assert schema_page.locator('#detail-heading').count() == 0
             schema_page.close()
 
             # Oversized manifest response must be rejected without rendering any records.
@@ -2212,19 +2124,19 @@ def main() -> None:
             assert oversized_page.locator('#feed-view').get_attribute('aria-busy') == 'false'
             expect(oversized_page.locator('#record-list .record-row')).to_have_count(0)
             oversized_page.close()
-            print('PASS: bad digest, bad schema, oversized manifest/resource and source failures leave loading for the explicit retry state with no partial records.')
+            print('PASS: bad digests, invalid detail schema, oversized manifest/resources and source failures fail visibly without rendering unverified partial data.')
 
             # Exercise every page at mobile and desktop widths without external requests.
             page.locator('#tab-overview').click()
             width_metrics = {}
             for width in (320, 360, 375, 390, 414, 768, 1024, 1280, 1440):
                 width_metrics[width] = {}
-                for tab in ('overview', 'latest', 'center', 'archive', 'community'):
+                for tab in ('overview', 'latest', 'center', 'changes', 'community'):
                     page.locator(f'#tab-{tab}').click()
                     width_metrics[width][tab] = width_audit(page, width)
-            search_release_metrics = center_search_release_audit(browser, origin, issues, expected_count, manifest)
-            print('PASS: the notched CVE search rail shrinks, releases before feed content, and returns to the retained input without obscuring records.')
-            print('Search release metrics:', json.dumps(search_release_metrics, sort_keys=True))
+            stable_search_metrics = stable_search_toolbar_audit(browser, origin, issues, expected_count, manifest)
+            print('PASS: the sticky Explore search toolbar keeps one stable geometry; focus, filtering and result layout remain usable while scrolling.')
+            print('Search release metrics:', json.dumps(stable_search_metrics, sort_keys=True))
             url_state_metrics = run_shareable_search_state_tests(browser, origin, issues, manifest)
             print('PASS: shareable search/filter state, advisory lookup, explicit KEV/vendor filtering, route/deep-link restoration, wordmark navigation, and Escape focus behavior.')
             print('URL state QA details:', json.dumps(url_state_metrics, sort_keys=True))
@@ -2240,7 +2152,7 @@ def main() -> None:
             print('PASS: all five pages fit 320–1440 CSS px; Community is reachable, accessible, and uses safe external links.')
 
             discovery_metrics = run_discovery_and_retry_tests(browser, origin, manifest, overview)
-            print('PASS: captured source status, Latest links, rolling Archive filters, and fail-closed explicit retry.')
+            print('PASS: captured source status, Latest links, truthful Changes and legacy-route disposition, and fail-closed explicit retry.')
             print('Discovery QA details:', json.dumps(discovery_metrics, sort_keys=True))
 
             swipe_results = run_swipe_navigation_tests(browser, origin, manifest)

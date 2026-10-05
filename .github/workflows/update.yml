@@ -44,6 +44,7 @@ jobs:
       - name: Check source syntax
         run: |
           node --check app.js
+          node --check sw.js
           node --check community.js
           python -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_community_ansi_shadow.py
 

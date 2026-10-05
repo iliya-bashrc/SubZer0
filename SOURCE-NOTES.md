@@ -1,44 +1,56 @@
 # Data provenance and trust boundaries
 
-## Snapshot provenance
+## Current checked-in capture
 
-The current checked-in snapshot has `generated_at` **2026-10-04T17:08:24Z** and covers the rolling 30-day window **2026-09-04T17:08:24Z through 2026-10-04T17:08:24Z**. It contains **14,903 unique CVE records** in 31 date shards, including **40 CISA KEV listings** in the window. The manifest is [`snapshot/manifest.json`](snapshot/manifest.json); the full JSON records are under [`snapshot/data/`](snapshot/data/). The manifest records successful source checks at the generation time; the local validation record was checked at **2026-10-04T17:12:35Z** and confirms **33,869,716 JSON bytes**.
+The verified static capture in this branch is dated **2026-10-05T14:41:08Z**. Its manifest declares **14,614 unique CVEs** across 31 UTC day shards. The FIRST EPSS sidecar contains **14,456 score entries** for **2026-10-04**; the remaining records are unscored in that score set, not assigned zero probability. The compact search index is a deterministic derivative of the checked-in full records. After its schema-v2 rebuild, every source day-shard SHA-256 still matches its manifest declaration; no upstream source record, publication time, capture time or EPSS value was rewritten.
 
-The 2026-10-03 security-review migration preserved the then-current daily-shard and EPSS files byte-for-byte, retained that snapshot's original `generated_at`, and added a derived Overview sidecar. That historical migration was not an upstream refresh. The later checked-in snapshot has its own manifest-recorded source checks and newly validated shard/EPSS bytes; no upstream refresh was run during this 2026-10-04 review.
+The 30-day history sidecar is an honest initial comparison baseline with **zero material events** and no earlier retained observation set. Its baseline keeps the complete source capture timestamp, record count, score date and completeness; it does not invent a SubZer0 observation time for legacy data. A full KEV comparison catalog is also not reconstructed from absent history. Future events become observable only through complete comparisons from this baseline onward. See the [manifest](snapshot/manifest.json), [validation record](snapshot/VALIDATION.json), and [data contract](DATA-CONTRACT.md) for exact hashes, sizes, sidecar counts and schema rules.
 
-A subsequent scheduled refresh obtains records from the official [NVD CVE API 2.0](https://services.nvd.nist.gov/rest/json/cves/2.0), [GitHub Security Advisory Database](https://api.github.com/advisories) and [CISA KEV catalog](https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json), with scores from [FIRST EPSS](https://epss.empiricalsecurity.com/epss_scores-current.csv.gz) and an optional [FIRST API](https://api.first.org/data/v1/epss) fallback. The app served in a browser does not contact those services; it reads only the static snapshot from its own origin.
+No upstream vulnerability-feed refresh was run for this implementation. Source integration and change detection were tested with deterministic local fixtures. The public Pages deployment therefore remains the previously published main-branch application until a reviewed implementation branch is merged and Pages publishes it; local branch behavior is not represented as already live.
 
-The offline verifier records manifest and shard hashes, exact byte and row counts, total CVE/severity/KEV counts, EPSS coverage and data-size limits. The producer stages a complete replacement and validates it before swapping directories. If installation of the staged directory fails, it restores the prior snapshot; if that recovery rename also fails, it preserves the old directory at a reported backup path. The browser independently checks the manifest-declared SHA-256 values before rendering. These hashes detect accidental corruption or a shard that disagrees with its manifest; they do **not** authenticate the source against an attacker able to replace both the manifest and files on the same Pages origin.
+## Sources and update semantics
 
-## Snapshot totals and source meaning
+The scheduled updater collects from the official [NVD CVE API 2.0](https://services.nvd.nist.gov/rest/json/cves/2.0), [GitHub Security Advisory Database](https://api.github.com/advisories), the complete [CISA Known Exploited Vulnerabilities catalog](https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json), and FIRST EPSS via the [daily compressed CSV](https://epss.empiricalsecurity.com/epss_scores-current.csv.gz) with the [FIRST EPSS API](https://api.first.org/data/v1/epss) as fallback. The application shown in a browser calls none of these upstream APIs; it reads same-origin static files.
 
-| Source CVSS category | Count | Center treatment |
-|---|---:|---|
-| Critical | 1,444 | Critical, red |
-| High | 6,192 | High, orange |
-| Medium | 4,816 | Medium, gold |
-| Low | 935 | Low, icy blue |
-| None | 1,503 | Neutral Unrated; source category retained |
-| Unknown | 13 | Neutral Unrated; source category retained |
-| CISA KEV listings | 40 | Separate catalog evidence |
+NVD records are queried by last-modified time for the rolling window. GitHub advisories use the official `modified` date filter and cursor pagination. Their original CVE/advisory publication timestamps and NVD/GitHub source update timestamps remain distinct fields. The record's activity date is selected from the most recent eligible NVD, advisory or KEV activity timestamp; CISA `dateAdded` is a catalog date rather than a KEV modification timestamp. The original publication date of an older modified CVE remains unchanged.
 
-“Unrated” is a browsing group only; it does not replace the source's `None` or `Unknown` value. A supplied numeric CVSS value is kept distinct from a missing score. The project does not invent or calculate a combined “SubZer0 priority score.”
+Every full capture checks API response shape, identifiers, pagination totals/cursors, time ranges and configured byte/count bounds. CISA's full current catalog is obtained, not inferred from its intersection with a rolling feed. FIRST scores are retained with their score-set date and source timestamp. A core-source failure, empty result, incomplete page traversal, malformed response, invalid score or failed staged validation aborts the update and preserves the previous complete snapshot. EPSS may be retained as stale/unavailable only when its status explicitly says so.
 
-The signal layers are intentionally independent:
+## Timeline and change-history semantics
 
-- **CVSS** is the severity score/category supplied by a CVE record.
-- **EPSS** is FIRST's probability estimate and percentile; the score-set date and staleness are shown.
-- **CISA KEV** records catalog membership and the catalog's supplied date, product and action fields.
-- **GitHub advisories** and user-started repository searches are leads, not proof of a working exploit or current exploitation.
+The UI distinguishes **source time**, **SubZer0 observation time** and **published snapshot time**:
 
-## EPSS freshness
+| Time | Meaning | Example field |
+|---|---|---|
+| Source time | Timestamp/date supplied by NVD, GitHub, CISA or FIRST | `published`, `modified`, `updated_at`, `dateAdded`, EPSS `source_updated_at` |
+| Observation time | Time a workflow observed a difference between complete captures | History event `observed_at` |
+| Capture time | Time represented by the complete static snapshot | `manifest.generated_at` |
 
-The snapshot contains **14,749 EPSS score entries** for 14,903 CVE records. The captured EPSS score date is **2026-10-04**, with source timestamp **2026-10-04T12:00:21Z**; the checked-in manifest and validation report mark this set **current** under the project's 36-hour freshness policy. The app shows the score-set date and distinguishes stale scores when applicable. The other **154 records are unscored** in this captured EPSS file; a missing entry means **unscored**, not zero probability.
+History compares complete snapshots, records meaningful evidence-backed differences, and is retained for 30 days. New publication requires source publication later than the preceding complete capture. A recently modified record whose original publication predates that capture and whose old detail is outside the rolling feed is marked **re-observed**, not newly created; the UI explains that field-level comparison is unavailable. Changes in a complete CISA catalog are compared with a separately retained full-catalog baseline once that baseline exists. The updater never infers CVE deletion from its absence in a rolling feed.
 
-The updater treats EPSS as optional data: if the daily CSV and API fallback both fail validation or are unavailable, it may retain the previous score set but records it as stale/unavailable. A stale score is never reported as current. The NVD, GitHub and CISA core sources are required; an empty, malformed, inconsistent or incomplete core response aborts the refresh.
+FIRST EPSS additions, removals and material value differences are identified separately from CVSS changes. To avoid a noisy event log, score-to-score changes require an absolute move of at least 0.01 or a twofold move once the larger value reaches 0.05; the complete score sidecar still retains the raw daily values. A CISA KEV entry comparison may have no source modification time, because the catalog provides a date-added field rather than a change timestamp; the event remains labeled with its actual observation time and `source_time: null`.
 
-## Trust boundaries and browser behavior
+## Signal meaning and data limits
 
-Snapshot titles, descriptions, products, labels, references and catalog text are untrusted data. The interface creates DOM nodes and assigns content with `textContent`; it does not interpret snapshot strings as HTML. Links accept parsed HTTP or HTTPS URLs only, reject credentials and active schemes, and open new tabs with `noopener noreferrer`. Reference navigation occurs only after a person activates a link; ordinary data fetching is same-origin.
+- **CVSS** is the supplied severity score/category, not an exploitation-probability estimate.
+- **FIRST EPSS** is a dated probability estimate and percentile; missing scores are unscored, not zero.
+- **CISA KEV** is catalog membership with the source's supplied date and action fields; absence does not prove that exploitation never occurred.
+- **GitHub advisories and external references** are source-attributed research leads, not proof of a working exploit.
+- This validated record schema has no reliable CWE field. The dossier says when a CWE is not supplied rather than fabricating one.
+- No combined SubZer0 risk/prioritization score is invented.
 
-The Pages application has a restrictive same-origin Content Security Policy in its HTML, no inline JavaScript, and explicit client-side limits for manifests, shards, total snapshot bytes, record counts, request duration and shard concurrency. GitHub Pages does not provide a repository-controlled HTTP response-header configuration here, so CSP protections that can only be delivered as HTTP headers—especially `frame-ancestors`—cannot be enforced by the HTML meta policy. The audit documents this hosting limitation.
+## Trust boundaries
+
+Snapshot text is untrusted. The UI creates text nodes rather than parsing it as HTML. URLs are parsed, limited to HTTP or HTTPS, reject embedded credentials and active schemes, and open external links with `noopener noreferrer`. Search uses a bounded compact index; full references, descriptions and configurations live only in integrity-checked detail shards.
+
+The offline producer and browser validate path allowlists, schemas, duplicates, exact lengths, record counts, score ranges and SHA-256 digests. An atomic staging/commit preserves the prior snapshot if a complete candidate fails. The same-origin manifest digest protects against accidental corruption and mismatched cache entries; it is **not** a digital signature and does not authenticate a manifest against an attacker who can replace the manifest and files together.
+
+The site uses a restrictive same-origin Content Security Policy in its HTML and has no inline script. GitHub Pages does not expose configurable response headers through this branch-based setup, so a meta policy cannot provide `frame-ancestors`; this remains a hosting-level limitation.
+
+## References
+
+- [NVD CVE API documentation](https://nvd.nist.gov/developers/vulnerabilities)
+- [GitHub REST global security advisories](https://docs.github.com/rest/security-advisories/global-advisories)
+- [CISA KEV catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+- [FIRST EPSS](https://www.first.org/epss/)
+- [Snapshot/data contract](DATA-CONTRACT.md)

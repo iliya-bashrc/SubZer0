@@ -1,36 +1,43 @@
-# CVE center design and implementation notes
+# Current product and interface design
 
-The established SubZer0 black-metal surface remains the base. The CVE center in this independent copy browses the validated rolling snapshot: the full snapshot and KEV totals, a manifest-driven EPSS freshness notice, severity-count tabs, live search, explicit affected-vendor and CISA KEV filters, optional activity-date filtering, user-sized pages, and bounded pagination. The first result page is already populated; this is not a long-term history archive.
+SubZer0 keeps its dark steel and black-metal identity while making the vulnerability data the primary visual hierarchy. The current application is a static same-origin HTML/CSS/JavaScript experience; there is no backend, no Cloudflare dependency and no browser-side connection to upstream vulnerability APIs.
 
-`feed.css` is loaded after the inherited `styles.css` and `severity-effects.css`; its layout rules are scoped to the center/page record components. The captured shards are fetched only after the user opens CVE center, avoiding the full local parse cost on the Overview and Community. Their content and Community action flow are retained; global page navigation now updates the shareable route, and the Community wrapper nesting is balanced. The tab controls keep their existing roles and behavior; their wrapper now also hosts the compact Search return action, with only the necessary responsive header styling added to `styles.css`. The regression script continues to compare the preserved sections and styles to the approved preview.
+## Page architecture
 
-## Record browsing
+The five primary destinations, in swipe and navigation order, are **Overview**, **Latest**, **Explore** (`page=center` in stable URLs), **Changes**, and **Community**. Archive is not a page or tab: a legacy `?page=archive` bookmark resolves to Explore while preserving valid date filters.
 
-- Records are sorted by feed activity time, newest first, and shown with original date basis.
-- Search covers CVE identifier, title, description, date basis, source labels, explicit affected vendor/product/version/CPE values, KEV vendor/product values, advisory identifiers/URLs, and reference labels/sources/URLs. A complete CVE ID is an exact match; shorter terms search substrings.
-- The vendor filter matches only explicit `affected[].vendor` and `kev.vendor` values. It does not infer product ownership or backfill missing source relationships.
-- Page, CVE, search, severity, KEV, vendor, activity-date, page-size and one-based page-index state is shareable in query parameters. Page changes create history entries; filter edits replace the current entry, and Back/Forward restores the saved route and filters.
-- Severity counts are from the verified manifest. Neutral Unrated combines `None` and `Unknown` only for filtering; detail views show original CVSS state.
-- Date filters default to the manifest window. The snapshot-wide count remains visible while result counts and ranges update.
-- Pagination mounts only the chosen 24/48/96 page, reducing DOM size and animation work even though the full captured dataset is available to search locally.
+Overview uses only the manifest and small verified sidecars to explain snapshot totals, recorded source checks and capture age. Latest displays up to 50 actual records sorted by the newest in-window source activity timestamp and uses the verified Overview index. Changes is a separately hash-verified, filterable 30-day comparison log. An empty, unestablished baseline remains visibly empty; source dates are not converted into invented prior observations.
 
-## Motion and color
+## Explore and search
 
-The black-metal palette maps **Critical → red, High → orange, Medium → gold, Low → icy blue, Unrated → neutral**. Each record has three restrained severity-colored flecks. Their `transform`/opacity drift is slow, remains clipped inside the card, does not change card dimensions, and is paused until the row crosses the viewport observer threshold. Off-screen flecks are paused; a visible-row check caught and corrected the `animation` shorthand's default play-state during QA. Reduced-motion preference disables the motion while retaining a subtle still fleck/bloom. These effects are decorative and do not imply attacks or live updates.
+Explore first validates the current manifest, a schema-v2 compact search index and EPSS. It does not parse every full record shard to show or filter results. The 14,614-row checked-in index is **13,428,927 bytes**; the manifest, Python validator, app and service worker share a 16 MiB ceiling. Full details are loaded by the selected record's activity-day shard only after the user opens a dossier.
 
-## Accessibility and mobile
+Index search covers the CVE ID, title, a short description summary, source labels, compact product/vendor/version hints, KEV labels and validated GHSA IDs. It does not claim to search every word in full descriptions, references or CPE/configuration trees before a dossier is opened. Native filters and query state are shareable through the URL. Pagination mounts only the selected 24/48/96 rows; virtualization or a third-party search library is not added without evidence that these measured bounds require it.
 
-- Search has an accessible name, `/` shortcut, a visible focus indication, and a header return action while the field is offscreen.
-- Native search, date, severity, vendor, KEV, select and button controls remain usable by keyboard and touch. Tab navigation retains arrow/Home/End movement; `Escape` blurs Search without clearing its query, closes the Activity disclosure and returns focus to its summary, or closes CVE details; Back returns focus to the opening record.
-- Detail state uses headings, definitions and lists; each score/catalog/advisory source is attributed separately.
-- Empty results announce a result status and offer Clear filters. Date-form validation is inline and preserves an explicit From/To ordering.
-- Main interaction targets are at least 44 CSS pixels on the Android-like viewports used for QA. Long descriptions and labels wrap rather than creating horizontal overflow.
-- Motion is purely cosmetic; no control requires hover or animation to reveal information.
+The single **sticky research toolbar** remains under the global header. Search has no scroll-driven shrink/release state and no synthetic “return to search” button. The `/` shortcut focuses the same search input; query and filter state remain visible/recoverable through browser history. Search/list rendering and initial verified-index rendering are instrumented with bounded Performance API measures; [PERFORMANCE.md](PERFORMANCE.md) records the local Chromium measurements.
 
-Tested in headless Chromium with Android-like mobile emulation, not a physical handset. The full-feed suite checks widths 320, 360, 375, 390, 414, 768, 1024, 1280 and 1440 CSS pixels. See [`verify_full_feed.py`](verify_full_feed.py) and [`README.md`](README.md) for the exercised cases.
+## Evidence dossier and history
 
-## 2026-10-04 full-update review boundaries
+A dossier separates Summary, Why This Matters, Record, Signals, Affected products, References, Sources and History. CVSS severity, FIRST EPSS, CISA KEV and advisory evidence remain separate; missing values are explicitly missing. Source publication/modification dates and SubZer0's capture/observation dates are not substituted for one another. Full detail is taken from a size-bounded, manifest-hash-verified daily shard before it is rendered.
 
-- In the checked-in 2026-10-04 snapshot, **10,783 of 14,903 records have no structured `affected` products**. CPE and product filtering therefore use supplied fields only and cannot be complete for this archive.
-- The updater defines `material_change_events()` and `build_change_history()`, but the active `write_snapshot()` path never calls them. No history or facets sidecar is published, and `verify_data_snapshot.py` rejects `history` and `facets` manifest keys. There is no working snapshot-diff or “What Changed?” view.
-- Adding a validated, lazy-loaded historical archive needs a new data contract, real retained snapshots, integrity rules, size budgets, eviction/retention behavior and UI tests. It is deferred rather than represented with invented events or metrics. Any future diff must distinguish a rolling-window expiry from a true source removal.
+History events are computed between complete captures. True new publication, re-observation of older modified records, field-level record differences, material EPSS changes and full-catalog CISA KEV differences have distinct event meanings. The rolling-feed omission of a CVE is never treated as deletion. The current capture has no prior retained observation set, so the implementation presents its baseline without fabricated change history.
+
+## Visual system and motion
+
+- **Signal colors:** Critical → restrained red, High → orange, Medium → gold, Low → icy blue. Unrated remains neutral, not a false score.
+- **Hierarchy:** stable display headings and readable body copy lead; CVE IDs, score values, timestamps, provenance and source links are visibly distinct secondary facts.
+- **Controls:** native inputs/selects/buttons, explicit focus rings, labels and live status regions. The filter/search rail retains its geometry rather than transitioning through scroll states.
+- **Responsive layout:** safe-area-aware mobile navigation, compact filter stacking, wrapping long IDs/labels, and touch-sized controls. Detail and list cards do not require hover.
+- **Motion:** bounded transition/decorative effects only; `prefers-reduced-motion` retains the same information and navigation without unnecessary motion.
+
+Pointer swipe moves only between adjacent destinations. It follows the finger, has a non-wrapping edge, and excludes buttons, links, inputs, selection gestures and active detail interactions. Vertical scroll and pinch zoom remain native. Keyboard tab navigation and URL/browser history remain the source of truth for page state.
+
+## Offline and integrity behavior
+
+The online manifest is checked before a cached snapshot payload can be trusted. Service-worker CacheStorage may return a same-origin payload candidate, but the app still checks exact size, digest and schema before rendering. An explicit retry bypasses a stale cached candidate after a digest mismatch. Offline fallback states the age of the capture; an uncached full-detail shard yields a clear failure and no partial dossier.
+
+SHA-256 in the manifest detects accidental byte mismatch, not a coordinated replacement of both content and manifest on the same origin. Feed-controlled text is assigned as text, HTTP(S) references reject credentials and active schemes, and external links use `noopener noreferrer`. GitHub Pages does not offer this repository a configurable `frame-ancestors` response header; see the [security and trust notes](SOURCE-NOTES.md).
+
+## Verification boundaries
+
+The full-feed Playwright suite exercises the checked-in records at desktop/mobile viewport sizes, including page navigation, legacy-route migration, keyboard/touch interactions, filters, query state, lazy shard loading, service-worker caching, offline behavior, digest/schema/size failures and captured performance metrics. This is headless browser/device emulation, not a formal screen-reader audit or a physical-device certification. The visual captures are reviewed separately from the automated assertions.

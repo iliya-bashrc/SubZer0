@@ -37,17 +37,13 @@
           <button class="nav-tab" id="tab-center" type="button" role="tab" aria-selected="false" aria-controls="page-center" tabindex="-1" data-page="center">
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.3"/><path d="m12.5 12.5 4 4"/></svg><span>Explore</span>
           </button>
-          <button class="nav-tab" id="tab-archive" type="button" role="tab" aria-selected="false" aria-controls="page-archive" tabindex="-1" data-page="archive">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="13" rx="1"/><path d="M6.5 2.5v3M13.5 2.5v3M3 8h14M6 11h2M10 11h2M6 14h2"/></svg><span>Archive</span>
+          <button class="nav-tab" id="tab-changes" type="button" role="tab" aria-selected="false" aria-controls="page-changes" tabindex="-1" data-page="changes">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h7M4 15h4"/><path d="m13 12 2 2 3-4"/></svg><span>Changes</span>
           </button>
           <button class="nav-tab" id="tab-community" type="button" role="tab" aria-selected="false" aria-controls="page-community" tabindex="-1" data-page="community">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 5-4 5 4 5M14 5l4 5-4 5M11.5 3 8.5 17"/></svg><span>Community</span>
           </button>
         </nav>
-        <button class="header-search-return" id="header-search-return" type="button" aria-label="Return to CVE search" aria-keyshortcuts="/" title="Return to CVE search (/ )" hidden>
-          <svg class="header-search-return__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-          <span class="header-search-return__label">Search</span><kbd class="header-search-return__shortcut" aria-hidden="true">/</kbd>
-        </button>
       </div>
       <span class="preview-mark"><span aria-hidden="true"></span>Captured snapshot</span>
     </div>
@@ -130,6 +126,7 @@
           <div><p class="section-context">Hash-verified Overview index</p><h1>Latest</h1><p class="discovery-intro">Scan the newest records from the captured snapshot. Open a record in Explore for full, shard-verified evidence.</p></div>
           <p class="discovery-count"><strong id="latest-record-count">—</strong><span>records in index</span></p>
         </header>
+        <section class="latest-observed-changes" aria-labelledby="latest-changes-heading"><div class="section-heading-row"><div><h2 id="latest-changes-heading">Recently observed changes</h2><p>Only changes measured between complete captures are shown.</p></div><a class="text-link" href="?page=changes" data-page-link="changes">All changes</a></div><ol class="latest-change-list" id="latest-change-list" aria-label="Latest verified change events"><li class="discovery-placeholder">Change history has not been verified yet.</li></ol></section>
         <dl class="latest-capture-facts">
           <div><dt>Snapshot generated</dt><dd><time id="latest-generated-at">Awaiting verification</time></dd></div>
           <div><dt>Newest activity</dt><dd><time id="latest-activity-at">Awaiting verification</time></dd></div>
@@ -149,22 +146,39 @@
       </div>
     </section>
 
-    <section class="page page-archive" id="page-archive" role="tabpanel" aria-labelledby="tab-archive" tabindex="-1" hidden>
-      <div class="discovery-wrap archive-page-wrap">
+    <section class="page page-changes" id="page-changes" role="tabpanel" aria-labelledby="tab-changes" tabindex="-1" hidden>
+      <div class="discovery-wrap changes-wrap">
         <header class="discovery-heading">
-          <div><p class="section-context">Manifest-listed UTC dates</p><h1>Archive</h1><p class="discovery-intro">Browse the dates included in the current rolling snapshot. This is a bounded date index, not a permanent archive.</p></div>
-          <div class="archive-window" aria-label="Current captured window"><span>Snapshot window</span><p><time id="archive-window-start">Awaiting verification</time><span aria-hidden="true"> — </span><time id="archive-window-end">Awaiting verification</time></p></div>
+          <div><p class="section-context">Observed between verified captures</p><h1>Changes</h1><p class="discovery-intro">A 30-day record of meaningful differences between complete snapshots. Source timestamps and SubZer0 observation times are kept separate.</p></div>
+          <p class="discovery-count"><strong id="change-event-count">—</strong><span>verified events</span></p>
         </header>
-        <p class="archive-status" id="archive-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Waiting for the validated manifest…</p>
-        <ol class="archive-day-list" id="archive-day-list" aria-busy="true" aria-label="Manifest-listed UTC day summaries"><li class="discovery-placeholder">Day summaries will appear after manifest verification.</li></ol>
-        <button class="secondary-action overview-retry" id="archive-page-retry" type="button" hidden>Try again</button>
+        <p class="change-window-note" id="change-window-note">Change history is loaded only after its manifest hash is verified.</p>
+        <div class="change-controls">
+          <label for="change-search">Find an event<input id="change-search" type="search" maxlength="200" placeholder="CVE ID, title or change type" autocomplete="off"></label>
+          <label for="change-from">Observed from<input id="change-from" type="date"></label>
+          <label for="change-to">Observed to<input id="change-to" type="date"></label>
+          <div class="change-filter-list" role="group" aria-label="Filter change events">
+            <button type="button" data-change-filter="all" aria-pressed="true">All</button>
+            <button type="button" data-change-filter="NEW_CVE" aria-pressed="false">New</button>
+            <button type="button" data-change-filter="CVE_UPDATED" aria-pressed="false">Updated</button>
+            <button type="button" data-change-filter="KEV" aria-pressed="false">KEV</button>
+            <button type="button" data-change-filter="CVSS_CHANGED" aria-pressed="false">CVSS</button>
+            <button type="button" data-change-filter="EPSS_CHANGED" aria-pressed="false">EPSS</button>
+            <button type="button" data-change-filter="AFFECTED_PRODUCTS_CHANGED" aria-pressed="false">Products</button>
+            <button type="button" data-change-filter="REFERENCE_CHANGED" aria-pressed="false">References</button>
+            <button type="button" data-change-filter="ADVISORY_CHANGED" aria-pressed="false">Advisories</button>
+          </div>
+        </div>
+        <ol class="change-event-list" id="change-event-list" aria-label="Verified changes" aria-busy="true"><li class="discovery-placeholder">Verifying change history…</li></ol>
+        <p class="discovery-status" id="change-page-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Waiting for the validated history file…</p>
+        <button class="secondary-action changes-retry" id="changes-retry" type="button" hidden>Try again</button>
       </div>
     </section>
 
     <section class="page page-center" id="page-center" role="tabpanel" aria-labelledby="tab-center" tabindex="-1" hidden>
       <div class="center-wrap">
         <header class="center-heading">
-          <div><p class="section-context">A dated local archive · Not live</p><h1>Explore</h1><p class="center-intro">Search and filter records from the verified 30-day snapshot. Follow source evidence separately from severity and probability.</p></div>
+          <div><p class="section-context">Verified 30-day capture · Not live</p><h1>Explore</h1><p class="center-intro">Search a compact, verified index; full evidence loads only when you open a record.</p></div>
           <div class="snapshot-summary" aria-label="Snapshot totals"><p><strong id="snapshot-total">—</strong><span>records</span></p><p><strong id="snapshot-kev-total">—</strong><span>KEV records</span></p><p><strong id="snapshot-epss-total">—</strong><span>EPSS scored</span></p></div>
         </header>
 
@@ -192,17 +206,16 @@
           <p class="severity-note">Unrated groups source None/Unknown; the original CVSS value remains unchanged.</p>
         </section>
 
-        <div class="center-search-anchor" aria-hidden="true"></div>
-        <div class="center-dock">
+        <section class="research-toolbar" id="research-toolbar" aria-label="Explore search">
           <div class="search-wrap">
             <label class="search-label" for="record-search">Search the verified snapshot</label>
             <div class="search-field-wrap">
               <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-              <input id="record-search" type="search" placeholder="CVE ID, product or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, product names, summaries and descriptions" aria-keyshortcuts="/">
+              <input id="record-search" type="search" placeholder="CVE ID, vendor/product or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, supplied vendors and products, summary text, and source labels" aria-keyshortcuts="/">
               <kbd aria-hidden="true">/</kbd>
             </div>
           </div>
-        </div>
+        </section>
 
         <div class="filter-controls" id="filter-controls">
           <details class="date-filter" id="date-filter"><summary id="date-summary">Activity date · loading window</summary>
@@ -221,9 +234,9 @@
         <div class="feed-view" id="feed-view" aria-busy="true">
           <div class="feed-meta"><p class="result-status" id="result-status" role="status" aria-live="polite" aria-atomic="true">Loading the captured local snapshot…</p><span class="sort-note">Newest activity first</span></div>
           <section class="snapshot-loader" id="snapshot-loader" aria-labelledby="snapshot-loader-title" aria-describedby="snapshot-loader-copy" hidden>
-            <div class="snapshot-loader__intro"><span class="snapshot-loader__mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 2.5 29.5 16 16 29.5 2.5 16 16 2.5Z"/><path d="M16 8v16M9.1 12l13.8 8M22.9 12 9.1 20"/></svg></span><div><p class="snapshot-loader__context">Local snapshot</p><h2 id="snapshot-loader-title">Verifying the CVE archive</h2><p id="snapshot-loader-copy">Records appear only after every required file is complete and verified.</p></div></div>
+            <div class="snapshot-loader__intro"><span class="snapshot-loader__mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 2.5 29.5 16 16 29.5 2.5 16 16 2.5Z"/><path d="M16 8v16M9.1 12l13.8 8M22.9 12 9.1 20"/></svg></span><div><p class="snapshot-loader__context">Local snapshot</p><h2 id="snapshot-loader-title">Verifying the search index</h2><p id="snapshot-loader-copy">Search results appear only after the compact index and score set pass integrity checks.</p></div></div>
             <p class="snapshot-loader__status" id="snapshot-loader-status" role="status" aria-live="polite" aria-atomic="true">Waiting for the snapshot manifest.</p>
-            <div class="snapshot-loader__checks"><div class="snapshot-loader__check"><span>Snapshot manifest</span><span class="snapshot-loader__state" id="snapshot-manifest-state">Waiting</span></div><div class="snapshot-loader__check"><span>EPSS score file</span><span class="snapshot-loader__state" id="snapshot-epss-state">Waiting for daily shards</span></div><div class="snapshot-loader__meter"><div class="snapshot-loader__check snapshot-loader__check--meter"><label for="snapshot-shard-progress">Daily shards</label><span class="snapshot-loader__count" id="snapshot-shard-count" role="status" aria-live="polite" aria-atomic="true">Waiting for manifest</span></div><progress class="snapshot-loader__progress" id="snapshot-shard-progress" max="1" value="0" aria-label="Daily shards verified" hidden></progress></div></div>
+            <div class="snapshot-loader__checks"><div class="snapshot-loader__check"><span>Snapshot manifest</span><span class="snapshot-loader__state" id="snapshot-manifest-state">Waiting</span></div><div class="snapshot-loader__check"><span>EPSS score file</span><span class="snapshot-loader__state" id="snapshot-epss-state">Waiting for search index</span></div><div class="snapshot-loader__meter"><div class="snapshot-loader__check snapshot-loader__check--meter"><label for="snapshot-shard-progress">Index records</label><span class="snapshot-loader__count" id="snapshot-shard-count" role="status" aria-live="polite" aria-atomic="true">Waiting for manifest</span></div><progress class="snapshot-loader__progress" id="snapshot-shard-progress" max="1" value="0" aria-label="Search-index records verified" hidden></progress></div></div>
           </section>
           <div class="record-list" id="record-list" role="list" aria-label="CVE records from the captured local snapshot" aria-busy="true"></div>
           <nav class="pagination" id="pagination" aria-label="CVE record pages" hidden><button class="page-button" id="page-prev" type="button" aria-label="Go to previous page">Previous</button><span class="page-indicator" id="page-indicator" aria-live="polite">Page 1 of 1</span><button class="page-button" id="page-next" type="button" aria-label="Go to next page">Next</button></nav>
