@@ -45,6 +45,33 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(calls[0]["lastModStartDate"], ["2026-09-01T00:00:00.000"])
         self.assertEqual(calls[0]["lastModEndDate"], ["2026-09-30T00:00:00.000"])
 
+    def test_nvd_restarts_complete_query_once_when_total_changes(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        calls = []
+        sleeps = []
+        first_attempt = {
+            0: {"totalResults": 2, "startIndex": 0, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]},
+            1: {"totalResults": 3, "startIndex": 1, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0002"}}]},
+        }
+        stable_attempt = {
+            offset: {"totalResults": 3, "startIndex": offset, "resultsPerPage": 1,
+                     "vulnerabilities": [{"cve": {"id": f"CVE-2026-000{offset + 1}"}}]}
+            for offset in range(3)
+        }
+
+        def request(url, headers=None):
+            params = parse_qs(urlparse(url).query)
+            offset = int(params["startIndex"][0])
+            calls.append(offset)
+            return (first_attempt if len(calls) <= 2 else stable_attempt)[offset], {}
+
+        records, total, pages = feed.iter_nvd(start, end, request, sleeps.append, page_size=1)
+        self.assertEqual(([item["cve"]["id"] for item in records], total, pages),
+                         (["CVE-2026-0001", "CVE-2026-0002", "CVE-2026-0003"], 3, 3))
+        self.assertEqual(calls, [0, 1, 0, 1, 2])
+        self.assertEqual(len(sleeps), 4)
+
     def test_nvd_can_query_publication_window_explicitly(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         end = datetime(2026, 9, 30, tzinfo=timezone.utc)
@@ -60,8 +87,10 @@ class PaginationTests(unittest.TestCase):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         end = datetime(2026, 9, 30, tzinfo=timezone.utc)
         pages = iter([
-            ({"totalResults": 2, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]}, {}),
-            ({"totalResults": 3, "vulnerabilities": [{"cve": {"id": "CVE-2026-0002"}}]}, {}),
+            ({"totalResults": 2, "startIndex": 0, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]}, {}),
+            ({"totalResults": 3, "startIndex": 1, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0002"}}]}, {}),
+            ({"totalResults": 2, "startIndex": 0, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]}, {}),
+            ({"totalResults": 3, "startIndex": 1, "resultsPerPage": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0002"}}]}, {}),
         ])
         with self.assertRaises(feed.FeedError):
             feed.iter_nvd(start, end, lambda *args, **kwargs: next(pages), lambda _: None, page_size=1)
@@ -142,6 +171,48 @@ class NormalizationTests(unittest.TestCase):
         }
         with self.assertRaises(feed.FeedError):
             feed.build_records([], [bad], [], datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 30, tzinfo=timezone.utc))
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        ghsa = {"ghsa_id": "GHSA-vector", "cve_id": "CVE-2026-0012", "published_at": "2026-09-12T00:00:00Z",
+                "html_url": "https://github.com/advisories/GHSA-vector",
+                "cvss_severities": {"cvss_v3": {"score": 8.1, "vector_string": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"}}}
+        record = feed.build_records([], [ghsa], [], start, end)[0]
+        self.assertEqual((record["cvss_version"], record["cvss_source"]), ("3.1", "GitHub Advisory Database"))
+        self.assertTrue(record["cvss_vector"].startswith("CVSS:3.1/"))
+
+    def test_nvd_unprefixed_cvss2_vector_is_preserved(self):
+        vector = "AV:N/AC:M/Au:N/C:P/I:P/A:P"
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        cve = {
+            "id": "CVE-2026-0014", "published": "2026-09-12T00:00:00Z",
+            "lastModified": "2026-09-13T00:00:00Z",
+            "metrics": {"cvssMetricV2": [{"cvssData": {"baseScore": 5.0, "version": "2.0", "vectorString": vector}}]},
+        }
+        record = feed.build_records([{"cve": cve}], [], [], start, end)[0]
+        self.assertEqual((record["cvss_version"], record["cvss_vector"], record["cvss_source"]), ("2.0", vector, "NVD"))
+        prefixed = f"CVSS:2.0/{vector}"
+        self.assertEqual(feed._checked_cvss_vector(prefixed, "2.0", "fixture"), prefixed)
+        with self.assertRaisesRegex(feed.FeedError, "unsupported CVSS 2.0 vector"):
+            feed._checked_cvss_vector("AV:X/AC:M/Au:N/C:P/I:P/A:P", "2.0", "fixture")
+
+    def test_long_cvss4_vector_is_preserved_with_a_hard_bound(self):
+        vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H/E:A/CR:H/IR:H/AR:H/MAV:N/MAC:L/MAT:N/MPR:L/MUI:P/MVC:H/MVI:H/MVA:H/MSC:H/MSI:H/MSA:H/S:P/AU:N/R:A/V:D/RE:M/U:Green"
+        self.assertGreater(len(vector), 128)
+        self.assertLessEqual(len(vector), feed.MAX_CVSS_VECTOR_CHARS)
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        cve = {
+            "id": "CVE-2026-0013", "published": "2026-09-12T00:00:00Z",
+            "lastModified": "2026-09-13T00:00:00Z",
+            "metrics": {"cvssMetricV40": [{"cvssData": {"baseScore": 9.7, "version": "4.0", "vectorString": vector}}]},
+        }
+        record = feed.build_records([{"cve": cve}], [], [], start, end)[0]
+        self.assertEqual(record["cvss_vector"], vector)
+        self.assertEqual(record["cvss_version"], "4.0")
+        cve["metrics"]["cvssMetricV40"][0]["cvssData"]["vectorString"] = vector + "A" * (feed.MAX_CVSS_VECTOR_CHARS + 1 - len(vector))
+        with self.assertRaisesRegex(feed.FeedError, "character bound"):
+            feed.build_records([{"cve": cve}], [], [], start, end)
 
     def test_sources_merge_once_and_preserve_cvss_kev_and_attribution(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -150,7 +221,7 @@ class NormalizationTests(unittest.TestCase):
             "id": "CVE-2026-1001", "published": "2026-09-10T11:00:00.123",
             "lastModified": "2026-09-12T12:00:00",
             "descriptions": [{"lang": "en", "value": "A serious flaw in Acme Router."}],
-            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8}}]},
+            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "version": "3.1", "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}}]},
             "references": [{"url": "http://vendor.example/security/advisory"}],
         }}]
         advisory = {
@@ -180,6 +251,8 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(record["kev"]["date_added"], "2026-09-15")
         self.assertIn("http://vendor.example/security/advisory", [item["url"] for item in record["refs"]])
         self.assertEqual(record["primary_url"], "https://nvd.nist.gov/vuln/detail/CVE-2026-1001")
+        self.assertEqual((record["cvss_version"], record["cvss_source"]), ("3.1", "NVD"))
+        self.assertEqual(record["cvss_vector"], "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
 
     def test_modified_cve_keeps_older_publication_date(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -194,6 +267,28 @@ class NormalizationTests(unittest.TestCase):
 
 
 class ChangeHistoryTests(unittest.TestCase):
+    def test_overview_change_preview_uses_real_events_and_preserves_both_times(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        record = feed.build_records([{"cve": {
+            "id": "CVE-2026-8110", "published": "2026-09-10T11:00:00Z",
+            "lastModified": "2026-09-18T11:00:00Z", "descriptions": [{"lang": "en", "value": "Source title."}],
+        }}], [], [], start, end)[0]
+        observed = "2026-09-30T20:00:00Z"
+        source_time = "2026-09-28T08:15:00Z"
+        history = {"events": [
+            {"id": record["id"], "type": "CVSS_CHANGED", "observed_at": observed, "source_time": source_time,
+             "source": "NVD", "from": 4.0, "to": 8.0},
+            {"id": "CVE-2020-9999", "type": "NEW_CVE", "observed_at": observed, "source_time": None,
+             "source": "NVD", "from": None, "to": {}},
+        ]}
+        overview = feed.build_overview([record], end, {"scores": {}}, history)
+        self.assertEqual(len(overview["recent_changes"]), 1)
+        self.assertEqual(overview["recent_changes"][0]["id"], record["id"])
+        self.assertEqual(overview["recent_changes"][0]["observed_at"], observed)
+        self.assertEqual(overview["recent_changes"][0]["source_time"], source_time)
+        self.assertEqual(overview["recent_changes"][0]["source"], "NVD")
+
     def test_new_cve_and_reobserved_modified_cve_are_not_conflated(self):
         observed = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
         previous_capture = datetime(2026, 10, 4, 12, tzinfo=timezone.utc)
@@ -331,10 +426,18 @@ class PipelineFailureTests(unittest.TestCase):
             self.assertTrue((output / "VALIDATION.json").is_file())
             self.assertTrue((output / "data" / "overview.json").is_file())
             self.assertTrue((output / "data" / "epss.json").is_file())
+            self.assertTrue((output / "data" / "search-index.json.gz").is_file())
             self.assertEqual(manifest["totals"]["cves"], 1)
             self.assertFalse((Path(temporary) / "api").exists())
             data_names = {path.name for path in (output / "data").iterdir()}
-            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json", "search-index.json", "history.json"})
+            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json", "search-index.json.gz", "history.json"})
+            packed = (output / "data" / "search-index.json.gz").read_bytes()
+            uncompressed = gzip.decompress(packed)
+            self.assertEqual(hashlib.sha256(packed).hexdigest(), manifest["search_index"]["sha256"])
+            self.assertEqual(len(packed), manifest["search_index"]["bytes"])
+            self.assertEqual(hashlib.sha256(uncompressed).hexdigest(), manifest["search_index"]["uncompressed_sha256"])
+            self.assertEqual(len(uncompressed), manifest["search_index"]["uncompressed_bytes"])
+            self.assertEqual(manifest["overview"]["recent_change_count"], 0)
 
     def test_core_source_failure_or_empty_result_preserves_every_prior_snapshot_byte(self):
         now = self._now()

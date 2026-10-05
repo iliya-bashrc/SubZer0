@@ -37,10 +37,20 @@ EPSS_CSV = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 EPSS_API = "https://api.first.org/data/v1/epss"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
 GHSA_RE = re.compile(r"^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$", re.I)
+CVSS_VECTOR_RE = re.compile(r"^CVSS:(?:3\.0|3\.1|4\.0)/[A-Za-z0-9:._/-]+$")
+CVSS2_VECTOR_RE = re.compile(
+    r"^(?:CVSS:2\.0/)?AV:[NAL]/AC:[LMH]/Au:[NSM]/C:[NPC]/I:[NPC]/A:[NPC]"
+    r"(?:/E:(?:ND|U|POC|F|H))?(?:/RL:(?:ND|OF|TF|W|U))?(?:/RC:(?:ND|UC|UR|C))?"
+    r"(?:/CDP:(?:ND|N|L|LM|MH|H))?(?:/TD:(?:ND|N|L|M|H))?"
+    r"(?:/CR:(?:ND|L|M|H))?(?:/IR:(?:ND|L|M|H))?(?:/AR:(?:ND|L|M|H))?$"
+)
+MAX_CVSS_VECTOR_CHARS = 512
+CVSS_VERSIONS = {"2.0", "3.0", "3.1", "4.0"}
 NAIVE_SOURCE_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$")
 SOURCE_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?$")
 MAX_NVD_PAGE = 2000
 MAX_NVD_RESULTS = 100_000
+NVD_TOTAL_RESTARTS = 1
 MAX_GHSA_ITEMS = 25_000
 MAX_GHSA_PAGES = 250
 MAX_KEV_ITEMS = 10_000
@@ -66,6 +76,10 @@ EPSS_SOURCE = {"name": "FIRST EPSS", "url": "https://www.first.org/epss/data"}
 
 class FeedError(RuntimeError):
     """Raised when a complete trustworthy snapshot could not be assembled."""
+
+
+class NvdResultSetChangedError(FeedError):
+    """Signals an upstream result-count change that may be resolved by a full retry."""
 
 
 def utc_now() -> datetime:
@@ -251,6 +265,27 @@ def iter_nvd(
     api_key: str | None = None,
     date_field: str = "modified",
 ) -> tuple[list[dict[str, Any]], int, int]:
+    """Fetch a complete NVD result set, restarting once if pagination observes a concurrent change."""
+    for attempt in range(NVD_TOTAL_RESTARTS + 1):
+        try:
+            return _iter_nvd_once(start, end, request_fn, sleep_fn, page_size, api_key, date_field)
+        except NvdResultSetChangedError:
+            if attempt >= NVD_TOTAL_RESTARTS:
+                raise
+            print("NVD totalResults changed during pagination; restarting the entire bounded query once.", file=sys.stderr)
+            sleep_fn(NVD_PAGE_PAUSE_SECONDS)
+    raise FeedError("NVD result set could not be stabilized")
+
+
+def _iter_nvd_once(
+    start: datetime,
+    end: datetime,
+    request_fn: Callable[..., tuple[Any, Any]],
+    sleep_fn: Callable[[float], None],
+    page_size: int,
+    api_key: str | None,
+    date_field: str,
+) -> tuple[list[dict[str, Any]], int, int]:
     """Fetch every offset page using NVD publication or last-modified timestamps."""
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("NVD window start must be earlier than end")
@@ -284,7 +319,7 @@ def iter_nvd(
         if total_results is None:
             total_results = reported_total
         elif reported_total != total_results:
-            raise FeedError("NVD result total changed during pagination")
+            raise NvdResultSetChangedError("NVD result total changed during pagination")
         metadata = payload.get("resultsPerPage")
         if metadata is not None and (
             isinstance(metadata, bool) or not isinstance(metadata, int)
@@ -646,11 +681,37 @@ def _add_ref(
 
 
 def _cvss(cve: dict[str, Any]) -> float | None:
+    return _cvss_evidence(cve)[0]
+
+
+def _checked_cvss_vector(value: Any, version: str, source: str) -> str:
+    if version not in CVSS_VERSIONS:
+        raise FeedError(f"{source} returned an unsupported CVSS version")
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise FeedError(f"{source} returned a non-text CVSS vector")
+    if len(value) > MAX_CVSS_VECTOR_CHARS:
+        raise FeedError(f"{source} returned a CVSS vector outside the configured character bound")
+    if version == "2.0":
+        if not CVSS2_VECTOR_RE.fullmatch(value):
+            raise FeedError(f"{source} returned an unsupported CVSS 2.0 vector")
+        return value
+    if not CVSS_VECTOR_RE.fullmatch(value):
+        raise FeedError(f"{source} returned an unsupported CVSS vector")
+    if value.split("/", 1)[0] != f"CVSS:{version}":
+        raise FeedError(f"{source} returned a CVSS vector with mismatched version evidence")
+    return value
+
+
+def _cvss_evidence(cve: dict[str, Any]) -> tuple[float | None, str, str, str]:
     metrics = cve.get("metrics") or {}
     for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
         values = metrics.get(key) or []
         if values:
-            value = (values[0].get("cvssData") or {}).get("baseScore")
+            metric = values[0] if isinstance(values[0], dict) else {}
+            data = metric.get("cvssData") or {}
+            value = data.get("baseScore")
             if value is not None:
                 try:
                     score = float(value)
@@ -658,8 +719,11 @@ def _cvss(cve: dict[str, Any]) -> float | None:
                     raise FeedError("NVD returned a non-numeric CVSS base score")
                 if not math.isfinite(score) or not 0 <= score <= 10:
                     raise FeedError("NVD returned an out-of-range CVSS base score")
-                return score
-    return None
+                version = str(data.get("version") or {"cvssMetricV40": "4.0", "cvssMetricV31": "3.1",
+                                                       "cvssMetricV30": "3.0", "cvssMetricV2": "2.0"}[key])
+                vector = _checked_cvss_vector(data.get("vectorString"), version, "NVD")
+                return score, version, vector, "NVD"
+    return None, "", "", ""
 
 
 def _version_range(match: dict[str, Any], version: str) -> str:
@@ -728,6 +792,9 @@ def _record(cve_id: str, published: str | None = None) -> dict[str, Any]:
         "title": "",
         "desc": "",
         "score": None,
+        "cvss_version": "",
+        "cvss_vector": "",
+        "cvss_source": "",
         "sev": "unknown",
         "published": published,
         "modified": None,
@@ -790,11 +857,14 @@ def build_records(
         activity_dt, activity_at, date_basis = max(candidates, key=lambda item: item[0])
         record = records.setdefault(cve_id, _record(cve_id, published))
         description = _description(cve.get("descriptions"))
-        score = _cvss(cve)
+        score, cvss_version, cvss_vector, cvss_source = _cvss_evidence(cve)
         record.update({
             "title": _title(description, cve_id),
             "desc": description or "No English summary is available in the source record.",
             "score": score,
+            "cvss_version": cvss_version,
+            "cvss_vector": cvss_vector,
+            "cvss_source": cvss_source,
             "sev": severity_for(score),
             "published": published,
             "modified": modified,
@@ -862,7 +932,7 @@ def build_records(
             record["desc"] = description
             record["title"] = _title(summary or description, cve_id)
         cvss = advisory.get("cvss_severities") or {}
-        scores: list[float] = []
+        scores: list[tuple[float, str, str]] = []
         if not isinstance(cvss, dict):
             raise FeedError("GitHub returned malformed CVSS severity metadata")
         for key in ("cvss_v4", "cvss_v3"):
@@ -877,9 +947,12 @@ def build_records(
             score_value = float(value)
             if not math.isfinite(score_value) or not 0 <= score_value <= 10:
                 raise FeedError("GitHub returned an out-of-range CVSS base score")
-            scores.append(score_value)
+            version = "4.0" if key == "cvss_v4" else "3.1"
+            vector = _checked_cvss_vector(details.get("vector_string"), version, "GitHub")
+            scores.append((score_value, version, vector))
         if record["score"] is None and scores:
-            record["score"] = max(scores)
+            record["score"], record["cvss_version"], record["cvss_vector"] = max(scores, key=lambda item: item[0])
+            record["cvss_source"] = "GitHub Advisory Database"
             record["sev"] = severity_for(record["score"])
         _add_source(record, "GitHub Advisory Database")
         html_url = advisory.get("html_url") or advisory.get("url")
@@ -972,17 +1045,30 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-OVERVIEW_SCHEMA_VERSION = 2
-SEARCH_INDEX_SCHEMA_VERSION = 2
+def _gzip_bytes(raw: bytes) -> bytes:
+    """Return deterministic gzip bytes without wall-clock or platform header variance."""
+    compressed = bytearray(gzip.compress(raw, compresslevel=9, mtime=0))
+    if len(compressed) >= 10 and compressed[:3] == b"\x1f\x8b\x08":
+        compressed[9] = 255
+    return bytes(compressed)
+
+
+OVERVIEW_SCHEMA_VERSION = 3
+SEARCH_INDEX_SCHEMA_VERSION = 3
 LATEST_PREVIEW_LIMIT = 50
+INDEX_SEVERITIES = ("critical", "high", "medium", "low", "none", "unknown")
+INDEX_DATE_BASES = ("CVE publication", "GitHub advisory publication", "NVD last modified",
+                    "GitHub advisory updated", "CISA KEV date added")
+INDEX_SOURCE_BITS = {"NVD": 1, "GitHub Advisory Database": 2, "CISA KEV": 4}
 
 
 def build_overview(
     records: list[dict[str, Any]],
     generated_at: datetime,
     epss_snapshot: dict[str, Any] | None = None,
+    history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded, data-derived Latest index without adding a browser feed request."""
+    """Build a bounded Overview index and a small, observed-only recent-change preview."""
     def order(record: dict[str, Any]) -> tuple[datetime, str]:
         stamp = parse_datetime(record.get("activity_at"))
         if stamp is None:
@@ -1004,10 +1090,36 @@ def build_overview(
             raise FeedError(f"EPSS value for {record['id']} is malformed while building the Overview index")
         summary["epss"] = dict(epss_value) if epss_value is not None else None
         summaries.append(summary)
+    record_by_id = {str(record.get("id") or ""): record for record in records}
+    priority = {"NEW_CVE": 0, "CVE_REOBSERVED": 1, "KEV_ADDED": 2, "KEV_CHANGED": 2,
+                "KEV_REMOVED": 2, "CVSS_CHANGED": 3, "EPSS_CHANGED": 4,
+                "AFFECTED_PRODUCTS_CHANGED": 5, "VERSION_RANGE_CHANGED": 5,
+                "DESCRIPTION_CHANGED": 6, "TITLE_CHANGED": 6, "ADVISORY_ADDED": 7,
+                "REFERENCE_ADDED": 8}
+    eligible = [event for event in (history or {}).get("events", [])
+                if isinstance(event, dict) and event.get("id") in record_by_id and event.get("type") in priority]
+    eligible.sort(key=lambda event: (parse_datetime(str(event.get("observed_at") or "")) or datetime.min.replace(tzinfo=timezone.utc),
+                                     -priority.get(str(event.get("type")), 99), str(event.get("id") or "")), reverse=True)
+    recent_changes = []
+    seen_changed_ids: set[str] = set()
+    for event in eligible:
+        cve_id = str(event.get("id") or "")
+        if cve_id in seen_changed_ids:
+            continue
+        record = record_by_id[cve_id]
+        recent_changes.append({
+            "id": cve_id, "title": str(record.get("title") or cve_id), "type": event["type"],
+            "observed_at": event["observed_at"], "source_time": event.get("source_time"),
+            "source": str(event.get("source") or "Verified source comparison"),
+        })
+        seen_changed_ids.add(cve_id)
+        if len(recent_changes) == 5:
+            break
     return {
         "schema_version": OVERVIEW_SCHEMA_VERSION,
         "generated_at": iso_z(generated_at),
         "records": summaries,
+        "recent_changes": recent_changes,
     }
 
 
@@ -1316,6 +1428,12 @@ def _normalize_kev_catalog(items: list[dict[str, Any]] | None) -> list[dict[str,
     return result
 
 
+def _record_source_label(*records: dict[str, Any]) -> str:
+    order = ("NVD", "GitHub Advisory Database", "CISA KEV")
+    labels = {label for record in records for label in (record.get("sources") or []) if label in order}
+    return " + ".join(label for label in order if label in labels) or "Verified source comparison"
+
+
 def material_change_events(
     previous_records: list[dict[str, Any]],
     current_records: list[dict[str, Any]],
@@ -1346,20 +1464,21 @@ def material_change_events(
         published = parse_datetime(str(record.get("published") or ""))
         activity = parse_datetime(str(record.get("activity_at") or ""))
         source_time = record.get("activity_at") if isinstance(record.get("activity_at"), str) else None
+        source_label = _record_source_label(record)
         if previous_core_snapshot_at and published and published > previous_core_snapshot_at:
             emit(cve_id, "NEW_CVE", None, {"title": record.get("title"), "published": record.get("published")},
-                 record.get("published"), "SubZer0 snapshot comparison")
+                 record.get("published"), source_label)
         elif (previous_core_snapshot_at and activity and activity > previous_core_snapshot_at and
               record.get("date_basis") in {"NVD last modified", "GitHub advisory updated"}):
             emit(cve_id, "CVE_REOBSERVED", {"previous_window": "outside the retained 30-day feed"},
                  {"title": record.get("title"), "activity_at": source_time,
                   "date_basis": record.get("date_basis"),
                   "note": "A source reports recent activity; the prior full record is outside the retained feed window, so individual field differences cannot be reconstructed."},
-                 source_time, str(record.get("date_basis") or "Source modification")[:64])
+                 source_time, source_label)
 
     fields = (
-        ("score", "CVSS_CHANGED"), ("desc", "DESCRIPTION_CHANGED"),
-        ("title", "TITLE_CHANGED"), ("affected", "AFFECTED_PRODUCTS_CHANGED"),
+        ("desc", "DESCRIPTION_CHANGED"), ("title", "TITLE_CHANGED"),
+        ("affected", "AFFECTED_PRODUCTS_CHANGED"),
         ("sources", "SOURCE_METADATA_CHANGED"), ("published", "SOURCE_METADATA_CHANGED"),
         ("modified", "SOURCE_METADATA_CHANGED"), ("date_basis", "SOURCE_METADATA_CHANGED"),
     )
@@ -1367,10 +1486,17 @@ def material_change_events(
         old, new = old_by_id[cve_id], new_by_id[cve_id]
         record_events = 0
         source_time = new.get("modified") if isinstance(new.get("modified"), str) else None
+        source_label = _record_source_label(old, new)
+        cvss_fields = ("score", "cvss_version", "cvss_vector", "cvss_source")
+        old_cvss = {field: old.get(field) for field in cvss_fields}
+        new_cvss = {field: new.get(field) for field in cvss_fields}
+        if _canonical_change(old_cvss) != _canonical_change(new_cvss):
+            emit(cve_id, "CVSS_CHANGED", old_cvss, new_cvss, source_time, source_label)
+            record_events += 1
         for field, kind in fields:
             before, after = old.get(field), new.get(field)
             if _canonical_change(before) != _canonical_change(after):
-                emit(cve_id, kind, before, after, source_time, "SubZer0 snapshot comparison")
+                emit(cve_id, kind, before, after, source_time, source_label)
                 record_events += 1
         old_affected = old.get("affected") if isinstance(old.get("affected"), list) else []
         new_affected = new.get("affected") if isinstance(new.get("affected"), list) else []
@@ -1380,7 +1506,7 @@ def material_change_events(
                         for item in new_affected if isinstance(item, dict)}
         if any(_canonical_change(old_products[key].get("versions")) != _canonical_change(new_products[key].get("versions"))
                for key in old_products.keys() & new_products.keys()):
-            emit(cve_id, "VERSION_RANGE_CHANGED", old_affected, new_affected, source_time, "SubZer0 snapshot comparison")
+            emit(cve_id, "VERSION_RANGE_CHANGED", old_affected, new_affected, source_time, source_label)
             record_events += 1
 
         for field, added_type, removed_type in (("refs", "REFERENCE_ADDED", "REFERENCE_REMOVED"),
@@ -1390,10 +1516,14 @@ def material_change_events(
             before_by_key = {json.dumps(_canonical_change(item), ensure_ascii=False, sort_keys=True, separators=(",", ":")): item for item in before_rows}
             after_by_key = {json.dumps(_canonical_change(item), ensure_ascii=False, sort_keys=True, separators=(",", ":")): item for item in after_rows}
             for key in sorted(after_by_key.keys() - before_by_key.keys()):
-                emit(cve_id, added_type, None, after_by_key[key], source_time, "Merged source record comparison")
+                changed = after_by_key[key]
+                source = str(changed.get("source") or ("GitHub Advisory Database" if field == "advisories" else source_label))
+                emit(cve_id, added_type, None, changed, source_time, source)
                 record_events += 1
             for key in sorted(before_by_key.keys() - after_by_key.keys()):
-                emit(cve_id, removed_type, before_by_key[key], None, source_time, "Merged source record comparison")
+                changed = before_by_key[key]
+                source = str(changed.get("source") or ("GitHub Advisory Database" if field == "advisories" else source_label))
+                emit(cve_id, removed_type, changed, None, source_time, source)
                 record_events += 1
 
         old_kev, new_kev = old.get("kev"), new.get("kev")
@@ -1430,7 +1560,7 @@ def material_change_events(
                      str((current_epss or {}).get("source_updated_at") or "") or None, "FIRST EPSS")
                 record_events += 1
         if record_events:
-            emit(cve_id, "CVE_UPDATED", None, {"changes": record_events}, source_time, "SubZer0 snapshot comparison")
+            emit(cve_id, "CVE_UPDATED", None, {"changes": record_events}, source_time, source_label)
 
     if previous_kev_catalog is not None and current_kev_catalog is not None:
         old_kev = {_cve_id(item.get("cveID")): item for item in previous_kev_catalog
@@ -1517,26 +1647,24 @@ def build_change_history(
     return result
 
 
-def build_search_index(records: list[dict[str, Any]], epss_snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Produce a bounded summary index; descriptions, full references and configurations stay in detail shards."""
-    scores = (epss_snapshot or {}).get("scores") or {}
+def build_search_index(records: list[dict[str, Any]], epss_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Pack only list/search fields; full CVSS, EPSS, KEV and reference evidence stays in sidecars."""
+    del epss_snapshot  # EPSS is stored once in its independently verified sidecar.
     rows = []
     for record in sorted(records, key=lambda item: (str(item.get("activity_at") or ""), str(item.get("id") or "")), reverse=True):
         affected = record.get("affected") if isinstance(record.get("affected"), list) else []
         # Preserve all bounded vendor/product labels and a short version hint for up to three products.
-        compact_affected = []
+        compact_affected: list[list[str]] = []
         for index, item in enumerate(affected[:8]):
             if not isinstance(item, dict):
                 continue
-            compact = {key: item.get(key, "") for key in ("vendor", "product") if isinstance(item.get(key, ""), str)}
+            vendor = item.get("vendor", "") if isinstance(item.get("vendor", ""), str) else ""
+            product = item.get("product", "") if isinstance(item.get("product", ""), str) else ""
+            version_hint = ""
             if index < 3 and isinstance(item.get("versions"), str):
                 version_hint = " ".join(item["versions"].split())[:160]
-                if version_hint:
-                    compact["versions"] = version_hint
-            if compact:
-                compact_affected.append(compact)
-        kev = record.get("kev") if isinstance(record.get("kev"), dict) else None
-        compact_kev = ({key: kev.get(key) for key in ("date_added", "vendor", "product") if key in kev} if kev else None)
+            if vendor or product:
+                compact_affected.append([vendor, product, version_hint])
         advisory_ids = []
         for advisory in (record.get("advisories") or []):
             if not isinstance(advisory, dict) or not isinstance(advisory.get("url"), str):
@@ -1546,17 +1674,16 @@ def build_search_index(records: list[dict[str, Any]], epss_snapshot: dict[str, A
             if parsed_url.scheme == "https" and parsed_url.netloc.lower() == "github.com" and GHSA_RE.fullmatch(candidate_id):
                 advisory_ids.append(candidate_id.upper())
         advisory_ids = list(dict.fromkeys(advisory_ids))[:8]
-        rows.append({
-            "id": record["id"], "title": record["title"],
-            "summary": " ".join(str(record.get("desc") or "").split())[:320],
-            "score": record.get("score"), "sev": record["sev"], "kev": compact_kev,
-            "published": record.get("published"), "modified": record.get("modified"),
-            "window_date": record["window_date"], "activity_at": record["activity_at"],
-            "date_basis": record["date_basis"], "sources": record["sources"],
-            "affected": compact_affected, "advisory_ids": advisory_ids,
-            "detail_path": f"data/{record['window_date']}.json",
-            "epss": scores.get(record["id"]),
-        })
+        if record["sev"] not in INDEX_SEVERITIES or record["date_basis"] not in INDEX_DATE_BASES:
+            raise FeedError(f"Cannot encode unknown severity or date basis for {record.get('id')}")
+        severity_code = INDEX_SEVERITIES.index(record["sev"])
+        date_basis_code = INDEX_DATE_BASES.index(record["date_basis"])
+        source_mask = sum(bit for source, bit in INDEX_SOURCE_BITS.items() if source in record["sources"])
+        rows.append([
+            record["id"], record["title"], " ".join(str(record.get("desc") or "").split())[:320],
+            record.get("score"), severity_code, isinstance(record.get("kev"), dict),
+            record["activity_at"], date_basis_code, source_mask, compact_affected, advisory_ids,
+        ])
     return {"schema_version": SEARCH_INDEX_SCHEMA_VERSION, "generated_at": records[0].get("activity_at") if records else "", "records": rows}
 
 def _commit_snapshot(staged_root: Path, output_dir: Path) -> None:
@@ -1623,11 +1750,12 @@ def write_snapshot(
                 raise FeedError(f"Manifest digest mismatch for {day}")
             (data_root / f"{day}.json").write_bytes(raw)
 
-        overview = build_overview(records, generated_at, epss_snapshot)
+        overview = build_overview(records, generated_at, epss_snapshot, history)
         overview_bytes = _json_bytes(overview)
         index = build_search_index(records, epss_snapshot)
         index["generated_at"] = iso_z(generated_at)
         index_bytes = _json_bytes(index)
+        compressed_index_bytes = _gzip_bytes(index_bytes)
         if history is None:
             # Direct snapshot builds establish one real baseline and no historical events.
             history = {"schema_version": 1, "retention_days": 30,
@@ -1642,6 +1770,7 @@ def write_snapshot(
             "bytes": len(overview_bytes),
             "sha256": hashlib.sha256(overview_bytes).hexdigest(),
             "count": len(overview["records"]),
+            "recent_change_count": len(overview["recent_changes"]),
         }
         epss_bytes = _json_bytes(epss_snapshot)
         epss_meta = manifest.get("epss")
@@ -1649,15 +1778,20 @@ def write_snapshot(
             raise FeedError("Manifest is missing EPSS provenance")
         epss_meta["bytes"] = len(epss_bytes)
         epss_meta["sha256"] = hashlib.sha256(epss_bytes).hexdigest()
-        manifest["search_index"] = {"schema_version": SEARCH_INDEX_SCHEMA_VERSION, "path": "data/search-index.json", "bytes": len(index_bytes),
-                                    "sha256": hashlib.sha256(index_bytes).hexdigest(), "count": len(index["records"])}
+        manifest["search_index"] = {
+            "schema_version": SEARCH_INDEX_SCHEMA_VERSION, "path": "data/search-index.json.gz",
+            "compression": "gzip", "bytes": len(compressed_index_bytes),
+            "sha256": hashlib.sha256(compressed_index_bytes).hexdigest(),
+            "uncompressed_bytes": len(index_bytes), "uncompressed_sha256": hashlib.sha256(index_bytes).hexdigest(),
+            "count": len(index["records"]),
+        }
         manifest["history"] = {"schema_version": 1, "path": "data/history.json", "bytes": len(history_bytes),
                                "sha256": hashlib.sha256(history_bytes).hexdigest(), "retention_days": 30,
                                "event_count": len(history["events"]), "snapshot_count": len(history["snapshots"]),
                                "kev_catalog_count": len(history.get("kev_catalog", []))}
         (data_root / "overview.json").write_bytes(overview_bytes)
         (data_root / "epss.json").write_bytes(epss_bytes)
-        (data_root / "search-index.json").write_bytes(index_bytes)
+        (data_root / "search-index.json.gz").write_bytes(compressed_index_bytes)
         (data_root / "history.json").write_bytes(history_bytes)
         _write_json(stage_root / "manifest.json", manifest)
 

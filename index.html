@@ -110,6 +110,18 @@
           </section>
         </div>
 
+        <section class="overview-intelligence" aria-label="Severity and observed changes">
+          <section class="overview-severity" aria-labelledby="overview-severity-heading">
+            <div class="section-heading-row"><div><h2 id="overview-severity-heading">Severity in this capture</h2><p>CVSS base-score categories across the 30-day activity window.</p></div><a href="?page=center" class="text-link" data-page-link="center">Explore by severity</a></div>
+            <div class="overview-severity-bar" id="overview-severity-bar" role="img" aria-label="Severity distribution will appear after verification" aria-busy="true"></div>
+            <ul class="overview-severity-legend" id="overview-severity-legend" aria-label="CVSS severity counts"></ul>
+          </section>
+          <section class="overview-changes" aria-labelledby="overview-changes-heading">
+            <div class="section-heading-row"><div><h2 id="overview-changes-heading">Recently observed changes</h2><p>Differences between complete published captures; not inferred from timestamps.</p></div><a href="?page=changes" class="text-link" data-page-link="changes">All changes</a></div>
+            <ol class="overview-change-list" id="overview-change-list" aria-busy="true" aria-label="Most recent verified changes"><li class="overview-change-placeholder">Waiting for verified change data…</li></ol>
+          </section>
+        </section>
+
         <section class="snapshot-rail" aria-labelledby="latest-heading">
           <div class="snapshot-heading"><div><h2 id="latest-heading">Latest records</h2><p>Ordered by activity date in the current capture.</p></div><a href="?page=latest" class="text-link" data-page-link="latest">View all latest</a></div>
           <ol class="latest-list" id="latest-list" aria-busy="true" aria-label="Newest records from the verified snapshot"></ol>
@@ -149,7 +161,7 @@
     <section class="page page-changes" id="page-changes" role="tabpanel" aria-labelledby="tab-changes" tabindex="-1" hidden>
       <div class="discovery-wrap changes-wrap">
         <header class="discovery-heading">
-          <div><p class="section-context">Observed between verified captures</p><h1>Changes</h1><p class="discovery-intro">A 30-day record of meaningful differences between complete snapshots. Source timestamps and SubZer0 observation times are kept separate.</p></div>
+          <div><p class="section-context">Observed between verified captures</p><h1>Changes</h1><p class="discovery-intro">A rolling view of meaningful differences between complete snapshots. Up to 30 days of observed changes are retained; source and observation times stay separate.</p></div>
           <p class="discovery-count"><strong id="change-event-count">—</strong><span>verified events</span></p>
         </header>
         <p class="change-window-note" id="change-window-note">Change history is loaded only after its manifest hash is verified.</p>
@@ -170,6 +182,7 @@
           </div>
         </div>
         <ol class="change-event-list" id="change-event-list" aria-label="Verified changes" aria-busy="true"><li class="discovery-placeholder">Verifying change history…</li></ol>
+        <nav class="change-pagination" id="change-pagination" aria-label="Change event pages" hidden><button type="button" class="page-button" id="change-page-prev">Previous</button><span class="page-indicator" id="change-page-indicator" aria-live="polite">Page 1 of 1</span><button type="button" class="page-button" id="change-page-next">Next</button></nav>
         <p class="discovery-status" id="change-page-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Waiting for the validated history file…</p>
         <button class="secondary-action changes-retry" id="changes-retry" type="button" hidden>Try again</button>
       </div>
@@ -221,13 +234,16 @@
           <details class="date-filter" id="date-filter"><summary id="date-summary">Activity date · loading window</summary>
             <form class="date-form" id="date-form"><label for="date-from">From<input id="date-from" type="date" required></label><label for="date-to">To<input id="date-to" type="date" required></label><button class="date-apply" type="submit">Apply dates</button></form>
           </details>
-          <div class="filter-extra-controls" role="group" aria-label="Additional CVE filters">
+          <details class="filter-drawer" id="filter-drawer" open>
+            <summary id="filter-drawer-summary"><span>Filters</span><span class="filter-drawer-count" id="filter-drawer-count">Options</span></summary>
+            <div class="filter-extra-controls" role="group" aria-label="Additional CVE filters">
             <label class="vendor-filter" for="vendor-filter"><span>Vendor</span><input id="vendor-filter" type="search" maxlength="200" placeholder="Affected vendor" autocomplete="off" spellcheck="false" aria-label="Filter by explicitly supplied affected or CISA KEV vendor"></label>
             <label class="source-filter" for="source-filter"><span>Source</span><select id="source-filter"><option value="all">All sources</option><option value="NVD">NVD</option><option value="GitHub Advisory Database">GitHub advisories</option><option value="CISA KEV">CISA KEV</option></select></label>
             <label class="epss-filter" for="epss-min"><span>EPSS minimum</span><span class="percent-input"><input id="epss-min" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="Any" aria-describedby="epss-filter-hint"><span>%</span></span><span class="sr-only" id="epss-filter-hint">Records without an EPSS score are excluded when a minimum is set.</span></label>
             <label class="cvss-filter" for="cvss-min"><span>CVSS minimum</span><input id="cvss-min" type="number" min="0" max="10" step="0.1" inputmode="decimal" placeholder="Any" aria-describedby="cvss-filter-hint"><span class="sr-only" id="cvss-filter-hint">Records without a numeric CVSS score are excluded when a minimum is set. This score filter is separate from the severity categories.</span></label>
             <label class="kev-filter" for="kev-only"><input id="kev-only" type="checkbox"><span>CISA KEV only</span></label>
-          </div>
+            </div>
+          </details>
           <label class="page-size-control" for="page-size">Rows<select id="page-size"><option value="24" selected>24</option><option value="48">48</option><option value="96">96</option></select></label>
         </div>
 

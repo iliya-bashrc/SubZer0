@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'subzero-offline-v3';
+const CACHE_NAME = 'subzero-offline-v4';
 const CACHE_PREFIX = 'subzero-offline-';
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname;
@@ -31,7 +31,7 @@ function relativePath(url) {
 function snapshotByteLimit(path) {
   if (path === 'snapshot/manifest.json') return 512 * 1024;
   if (path === 'snapshot/data/overview.json') return 64 * 1024;
-  if (path === 'snapshot/data/search-index.json') return 16 * 1024 * 1024;
+  if (path === 'snapshot/data/search-index.json.gz') return 3 * 1024 * 1024;
   if (path === 'snapshot/data/history.json') return 8 * 1024 * 1024;
   if (path === 'snapshot/data/epss.json') return 4 * 1024 * 1024;
   if (/^snapshot\/data\/\d{4}-\d{2}-\d{2}\.json$/.test(path)) return 16 * 1024 * 1024;

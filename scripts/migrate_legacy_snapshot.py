@@ -54,7 +54,7 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
                 return verifier.validate_snapshot(root)
             except verifier.SnapshotValidationError as exc:
                 raise producer.FeedError(f"Snapshot already advertises a current Overview sidecar but fails validation: {exc}") from exc
-        if old_schema != 1 or overview_meta.get("schema_version") not in (None, 1):
+        if old_schema not in {1, 2} or overview_meta.get("schema_version") not in (None, 1, 2):
             raise producer.FeedError("Existing Overview sidecar is neither the supported legacy schema nor the current schema")
         upgrade_existing_overview = True
 
@@ -66,10 +66,11 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
     expected_paths: set[str] = {"data/epss.json"}
     if upgrade_existing_overview:
         expected_paths.add("data/overview.json")
-    has_search_index = (data_root / "search-index.json").is_file()
+    legacy_index_path = next((name for name in ("search-index.json", "search-index.json.gz") if (data_root / name).is_file()), None)
+    has_search_index = legacy_index_path is not None
     has_history = (data_root / "history.json").is_file()
     if has_search_index:
-        expected_paths.add("data/search-index.json")
+        expected_paths.add(f"data/{legacy_index_path}")
     if has_history:
         expected_paths.add("data/history.json")
     for summary in days:
@@ -121,23 +122,6 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
     generated_at = producer.parse_datetime(manifest.get("generated_at"))
     if generated_at is None:
         raise producer.FeedError("Legacy manifest generated_at is invalid")
-    overview_raw = producer._json_bytes(producer.build_overview(records, generated_at, epss_payload))
-    overview = producer.build_overview(records, generated_at, epss_payload)
-    manifest["overview"] = {
-        "schema_version": producer.OVERVIEW_SCHEMA_VERSION,
-        "path": "data/overview.json",
-        "bytes": len(overview_raw),
-        "sha256": hashlib.sha256(overview_raw).hexdigest(),
-        "count": len(overview["records"]),
-    }
-    index = producer.build_search_index(records, epss_payload)
-    index["generated_at"] = producer.iso_z(generated_at)
-    index_raw = producer._json_bytes(index)
-    if has_search_index:
-        old_index_meta = manifest.get("search_index")
-        old_index_raw = verifier._contained_bytes(root, "data/search-index.json", verifier.MAX_INDEX_BYTES)
-        if isinstance(old_index_meta, dict) and old_index_meta.get("sha256") and hashlib.sha256(old_index_raw).hexdigest().lower() != str(old_index_meta["sha256"]).lower():
-            raise producer.FeedError("Existing search-index sidecar SHA-256 mismatch")
     if has_history:
         history_raw = verifier._contained_bytes(root, "data/history.json", verifier.MAX_HISTORY_BYTES)
         old_history_meta = manifest.get("history")
@@ -152,14 +136,47 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
                                 "epss_score_date": str(epss_payload.get("score_date") or ""),
                                 "record_count": len(records), "complete": True},
                    "snapshots": [], "events": []}
-        history_raw = producer._json_bytes(history)
     history.setdefault("baseline", None)
     history_raw = producer._json_bytes(history)
+
+    if has_search_index:
+        old_index_meta = manifest.get("search_index")
+        expected_index_path = f"data/{legacy_index_path}"
+        old_index_limit = verifier.MAX_INDEX_BYTES if legacy_index_path.endswith(".gz") else 20 * 1024 * 1024
+        old_index_raw = verifier._contained_bytes(root, expected_index_path, old_index_limit)
+        if legacy_index_path.endswith(".gz"):
+            _, _, _ = verifier._verify_gzip_blob(root, old_index_meta, expected_index_path,
+                                                  verifier.MAX_INDEX_BYTES, verifier.MAX_INDEX_UNCOMPRESSED_BYTES,
+                                                  "legacy search_index")
+        elif isinstance(old_index_meta, dict):
+            if old_index_meta.get("bytes") is not None and old_index_meta["bytes"] != len(old_index_raw):
+                raise producer.FeedError("Existing search-index sidecar byte-count mismatch")
+            if old_index_meta.get("sha256") and hashlib.sha256(old_index_raw).hexdigest().lower() != str(old_index_meta["sha256"]).lower():
+                raise producer.FeedError("Existing search-index sidecar SHA-256 mismatch")
+
+    overview = producer.build_overview(records, generated_at, epss_payload, history)
+    overview_raw = producer._json_bytes(overview)
+    manifest["overview"] = {
+        "schema_version": producer.OVERVIEW_SCHEMA_VERSION,
+        "path": "data/overview.json",
+        "bytes": len(overview_raw),
+        "sha256": hashlib.sha256(overview_raw).hexdigest(),
+        "count": len(overview["records"]),
+        "recent_change_count": len(overview["recent_changes"]),
+    }
+    index = producer.build_search_index(records, epss_payload)
+    index["generated_at"] = producer.iso_z(generated_at)
+    index_raw = producer._json_bytes(index)
+    compressed_index_raw = producer._gzip_bytes(index_raw)
+
     manifest.pop("facets", None)
     manifest.pop("search_index", None)
     manifest.pop("history", None)
-    manifest["search_index"] = {"schema_version": producer.SEARCH_INDEX_SCHEMA_VERSION, "path": "data/search-index.json", "bytes": len(index_raw),
-                                "sha256": hashlib.sha256(index_raw).hexdigest(), "count": len(index["records"])}
+    manifest["search_index"] = {"schema_version": producer.SEARCH_INDEX_SCHEMA_VERSION, "path": "data/search-index.json.gz",
+                                "compression": "gzip", "bytes": len(compressed_index_raw),
+                                "sha256": hashlib.sha256(compressed_index_raw).hexdigest(),
+                                "uncompressed_bytes": len(index_raw), "uncompressed_sha256": hashlib.sha256(index_raw).hexdigest(),
+                                "count": len(index["records"])}
     manifest["history"] = {"schema_version": 1, "path": "data/history.json", "bytes": len(history_raw),
                            "sha256": hashlib.sha256(history_raw).hexdigest(), "retention_days": 30,
                            "event_count": len(history["events"]), "snapshot_count": len(history["snapshots"]),
@@ -173,7 +190,7 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
             (stage_data / f"{summary['date']}.json").write_bytes(raw)
         (stage_data / "epss.json").write_bytes(epss_raw)
         (stage_data / "overview.json").write_bytes(overview_raw)
-        (stage_data / "search-index.json").write_bytes(index_raw)
+        (stage_data / "search-index.json.gz").write_bytes(compressed_index_raw)
         (stage_data / "history.json").write_bytes(history_raw)
         (stage_root / "manifest.json").write_bytes(producer._json_bytes(manifest))
         try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import functools
+import gzip
 import hashlib
 import http.server
 import json
@@ -65,7 +66,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if response is not None:
             status_code, body = response
             self.send_response(status_code)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Type', 'application/gzip' if path.endswith('.gz') else 'application/json; charset=utf-8')
             self.send_header('Cache-Control', 'no-store')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
@@ -142,6 +143,45 @@ def nfmt(value: int) -> str:
     return f"{value:,}"
 
 
+def read_search_index(manifest: dict) -> dict:
+    config = manifest['search_index']
+    compressed = (ROOT / 'snapshot' / config['path']).read_bytes()
+    assert len(compressed) == config['bytes']
+    assert hashlib.sha256(compressed).hexdigest() == config['sha256']
+    raw = gzip.decompress(compressed) if config.get('compression') == 'gzip' else compressed
+    if config.get('compression') == 'gzip':
+        assert len(raw) == config['uncompressed_bytes']
+        assert hashlib.sha256(raw).hexdigest() == config['uncompressed_sha256']
+    return json.loads(raw)
+
+
+def decode_search_rows(payload: dict) -> list[dict]:
+    if payload.get('schema_version') != 3:
+        return payload['records']
+    severities = ('critical', 'high', 'medium', 'low', 'none', 'unknown')
+    date_bases = ('CVE publication', 'GitHub advisory publication', 'NVD last modified',
+                  'GitHub advisory updated', 'CISA KEV date added')
+    source_bits = ((1, 'NVD'), (2, 'GitHub Advisory Database'), (4, 'CISA KEV'))
+    decoded = []
+    for row in payload['records']:
+        if not isinstance(row, list) or len(row) != 11:
+            raise AssertionError('Packed search-index row does not match the v3 eleven-column schema.')
+        cve_id, title, summary, score, severity_code, kev, activity_at, basis_code, source_mask, affected, advisories = row
+        decoded.append({
+            'id': cve_id, 'title': title, 'summary': summary, 'score': score,
+            'sev': severities[severity_code], 'kev': kev, 'activity_at': activity_at,
+            'date_basis': date_bases[basis_code],
+            'sources': [name for bit, name in source_bits if source_mask & bit],
+            'affected': [{'vendor': item[0], 'product': item[1], 'versions': item[2]} for item in affected],
+            'advisory_ids': advisories, 'detail_path': f"data/{activity_at[:10]}.json",
+        })
+    return decoded
+
+
+def read_decoded_search_rows(manifest: dict) -> list[dict]:
+    return decode_search_rows(read_search_index(manifest))
+
+
 def load_contract() -> tuple[dict, dict, dict[str, dict]]:
     manifest = json.loads((ROOT / 'snapshot' / 'manifest.json').read_text(encoding='utf-8'))
     overview = json.loads((ROOT / 'snapshot' / 'data' / 'overview.json').read_text(encoding='utf-8'))
@@ -173,10 +213,10 @@ def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count
         is_mobile=True, has_touch=True, service_workers='allow')
     page = context.new_page()
     browser_issue_track(page, issues, origin)
-    index = json.loads((ROOT / 'snapshot' / manifest['search_index']['path']).read_bytes())
+    index = read_decoded_search_rows(manifest)
     history = json.loads((ROOT / 'snapshot' / manifest['history']['path']).read_bytes())
-    cached_record = index['records'][0]
-    missing_record = next(row for row in index['records'] if row['detail_path'] != cached_record['detail_path'])
+    cached_record = index[0]
+    missing_record = next(row for row in index if row['detail_path'] != cached_record['detail_path'])
     cached_shard_path = f"snapshot/{cached_record['detail_path']}"
     missing_shard_path = f"snapshot/{missing_record['detail_path']}"
     try:
@@ -194,7 +234,7 @@ def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count
         page.locator('.record-open').first.click()
         expect(page.locator('#detail-heading')).to_have_text(cached_record['id'], timeout=30_000)
         page.wait_for_function('''async (expected) => {
-          const cache=await caches.open('subzero-offline-v3');
+          const cache=await caches.open('subzero-offline-v4');
           const keys=await cache.keys();
           const paths=new Set(keys.map(request=>new URL(request.url).pathname));
           return expected.every(path=>paths.has(new URL(path,`${location.origin}/`).pathname));
@@ -204,7 +244,7 @@ def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count
             'snapshot/manifest.json',f"snapshot/{manifest['overview']['path']}",f"snapshot/{manifest['search_index']['path']}",
             f"snapshot/{manifest['epss']['path']}",f"snapshot/{manifest['history']['path']}",cached_shard_path])
         cache_audit = page.evaluate('''async ({cachedPath, missingPath}) => {
-          const cache=await caches.open('subzero-offline-v3');
+          const cache=await caches.open('subzero-offline-v4');
           const keys=await cache.keys();
           const paths=new Set(keys.map(request=>new URL(request.url).pathname));
           const fullShardPaths=[...paths].filter(path=>path.includes('/snapshot/data/') && /^[0-9]{4}-[0-9]{2}-[0-9]{2}[.]json$/.test(path.split('/').pop()));
@@ -480,7 +520,7 @@ def install_snapshot_override(page, manifest_body: bytes, shard_body: bytes, day
     page.route('**/snapshot/manifest.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=manifest_body))
     page.route(f'**/snapshot/data/{day}.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=shard_body))
     if index_body is not None:
-        page.route('**/snapshot/data/search-index.json', lambda route: route.fulfill(status=200, content_type='application/json; charset=utf-8', body=index_body))
+        page.route('**/snapshot/data/search-index.json.gz', lambda route: route.fulfill(status=200, content_type='application/gzip', body=index_body))
 
 
 def new_scenario() -> dict:
@@ -513,8 +553,8 @@ def run_snapshot_loader_tests(browser, manifest: dict) -> dict:
     manifest_path = 'snapshot/manifest.json'
     index_path = f"snapshot/{manifest['search_index']['path']}"
     epss_path = f"snapshot/{manifest['epss']['path']}"
-    index_payload = json.loads((ROOT / 'snapshot' / manifest['search_index']['path']).read_bytes())
-    target = index_payload['records'][0]
+    index_rows = read_decoded_search_rows(manifest)
+    target = index_rows[0]
     target_id = target['id']
     target_path = f"snapshot/{target['detail_path']}"
     detail_day = next(day for day in manifest['days'] if day['path'] == target['detail_path'])
@@ -684,8 +724,8 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
     epss_path = f"snapshot/{manifest['epss']['path']}"
     history_path = f"snapshot/{manifest['history']['path']}"
     manifest_raw = (ROOT / manifest_path).read_bytes()
-    index_payload = json.loads((ROOT / index_path).read_bytes())
-    index_by_id = {row['id']: row for row in index_payload['records']}
+    index_rows = read_decoded_search_rows(manifest)
+    index_by_id = {row['id']: row for row in index_rows}
     overview_ids = {item['id'] for item in json.loads((ROOT / 'snapshot' / manifest['overview']['path']).read_bytes())['records']}
 
     target_day = target_rows = target = None
@@ -788,7 +828,9 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
         results['measured_performance'] = {
             'initial_index_plus_epss_bytes': cold_data_bytes,
             'index_bytes': manifest['search_index']['bytes'],
-            'index_budget_bytes': 16 * 1024 * 1024,
+            'index_uncompressed_bytes': manifest['search_index']['uncompressed_bytes'],
+            'index_budget_bytes': 3 * 1024 * 1024,
+            'index_compression_ratio': round(manifest['search_index']['bytes'] / manifest['search_index']['uncompressed_bytes'], 4),
             'detail_shard_bytes_on_open': detail_events[0]['body_bytes'],
             'initial_index_load_seconds': round(cold_elapsed, 3),
             'detail_open_seconds': detail_latency_ms / 1000,
@@ -856,7 +898,7 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
     malformed=b'{not valid JSON'
     malformed_manifest=json.loads(json.dumps(manifest))
     malformed_day=next(day for day in malformed_manifest['days'] if day['count'])
-    malformed_record=next(row for row in index_payload['records'] if row['detail_path']==malformed_day['path'])
+    malformed_record=next(row for row in index_rows if row['detail_path']==malformed_day['path'])
     malformed_day['bytes']=len(malformed); malformed_day['sha256']=hashlib.sha256(malformed).hexdigest()
     malformed_manifest_raw=json.dumps(malformed_manifest,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode('utf-8')
     malformed_path=f"snapshot/{malformed_day['path']}"
@@ -1735,7 +1777,7 @@ def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview
     finally:
         page.close()
 
-    # The shipped history remains exact and empty until captures can genuinely be compared.
+    # Production history is derived from complete captures; intercepted synthetic events below remain test-only.
     production_page=browser.new_page(viewport={'width':1280,'height':900})
     browser_issue_track(production_page,navigation_issues,origin)
     try:
@@ -1748,18 +1790,32 @@ def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview
             expect(production_page.locator('#change-event-list')).to_contain_text('No changes are shown until two complete captures can be compared.')
             expect(production_page.locator('#change-window-note')).to_contain_text('baseline capture')
         else:
-            expect(production_page.locator('#change-event-list .change-event-row')).to_have_count(len(production_history['events']))
+            expect(production_page.locator('#change-event-list .change-event-row')).to_have_count(min(40, len(production_history['events'])))
+        production_page.screenshot(path=str(SCREENSHOTS/'07-changes-captured-desktop.png'),animations='disabled')
+        production_page.set_viewport_size({'width':390,'height':844})
+        if production_history['events']:
+            production_id=production_history['events'][0]['id']
+            production_page.locator('#change-search').fill(production_id)
+            expect(production_page.locator('#change-event-list .change-event-row')).not_to_have_count(0)
+            assert production_page.evaluate('new URLSearchParams(location.search).get("changeSearch")') == production_id
+            production_page.locator('#change-search').fill('')
+        mobile_changes=production_page.evaluate('''() => ({viewport:innerWidth,document:document.documentElement.scrollWidth,
+          searchHeight:document.querySelector('#change-search').getBoundingClientRect().height,
+          filterHeight:document.querySelector('[data-change-filter="all"]').getBoundingClientRect().height})''')
+        assert mobile_changes['document'] <= mobile_changes['viewport'], mobile_changes
+        assert mobile_changes['searchHeight'] >= 40 and mobile_changes['filterHeight'] >= 40, mobile_changes
+        production_page.evaluate('window.scrollTo(0,document.body.scrollHeight); window.scrollTo(0,0);')
+        production_page.screenshot(path=str(SCREENSHOTS/'07-changes-captured-mobile.png'),animations='disabled')
     finally:
         production_page.close()
 
     # Synthetic records below exist only in this browser fixture; the repository history remains untouched.
-    index_payload=json.loads((ROOT/'snapshot'/manifest['search_index']['path']).read_bytes())
-    rows=index_payload['records']
+    rows=read_decoded_search_rows(manifest)
     assert len(rows)>=3
     synthetic_history=json.loads(json.dumps(production_history))
     observed=manifest['generated_at']
     synthetic_history['events']=[
-        {'id':rows[0]['id'],'type':'CVSS_CHANGED','observed_at':observed,'source_time':rows[0]['modified'] or rows[0]['activity_at'],'source':'NVD last modified','from':5.0,'to':8.0},
+        {'id':rows[0]['id'],'type':'CVSS_CHANGED','observed_at':observed,'source_time':rows[0].get('modified') or rows[0]['activity_at'],'source':'NVD last modified','from':5.0,'to':8.0},
         {'id':rows[1]['id'],'type':'KEV_ADDED','observed_at':observed,'source_time':None,'source':'CISA KEV','from':None,'to':{'date_added':observed[:10]}},
         {'id':rows[2]['id'],'type':'CVE_REOBSERVED','observed_at':observed,'source_time':rows[2]['activity_at'],'source':'NVD last modified','from':{'previous_window':'outside the retained 30-day feed'},'to':{'note':'A source reports recent activity; the prior full record is outside the retained 30-day feed window, so individual field differences cannot be reconstructed.'}},
     ]
@@ -1791,21 +1847,37 @@ def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview
         synthetic_page.locator('[data-change-filter="CVSS_CHANGED"]').click()
         expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
         expect(synthetic_page.locator('[data-change-filter="CVSS_CHANGED"]')).to_have_attribute('aria-pressed','true')
+        assert synthetic_page.evaluate('new URLSearchParams(location.search).get("changeType")') == 'CVSS_CHANGED'
         synthetic_page.locator('[data-change-filter="KEV"]').click()
         expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
-        expect(synthetic_page.locator('.change-type')).to_contain_text('KEV ADDED')
+        expect(synthetic_page.locator('#change-event-list .change-event-row:visible .change-type')).to_have_text('KEV ADDED')
+        assert synthetic_page.evaluate('new URLSearchParams(location.search).get("changeType")') == 'KEV'
         synthetic_page.locator('[data-change-filter="all"]').click()
         synthetic_page.locator('#change-search').fill(rows[2]['id'])
         expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        assert synthetic_page.evaluate('new URLSearchParams(location.search).get("changeSearch")') == rows[2]['id']
         synthetic_page.locator('#change-search').fill('')
         synthetic_page.locator('#change-from').fill(observed[:10])
         synthetic_page.locator('#change-to').fill(observed[:10])
         expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(3)
+        assert synthetic_page.evaluate('new URLSearchParams(location.search).get("changeFrom")') == observed[:10]
+        assert synthetic_page.evaluate('new URLSearchParams(location.search).get("changeTo")') == observed[:10]
+        synthetic_page.locator('#change-search').fill(rows[2]['id'])
+        share_state = synthetic_page.evaluate('Object.fromEntries(new URLSearchParams(location.search))')
+        synthetic_page.reload(wait_until='load')
+        expect(synthetic_page.locator('#change-search')).to_have_value(rows[2]['id'])
+        expect(synthetic_page.locator('#change-from')).to_have_value(observed[:10])
+        expect(synthetic_page.locator('#change-to')).to_have_value(observed[:10])
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        assert synthetic_page.evaluate('Object.fromEntries(new URLSearchParams(location.search))') == share_state
         synthetic_page.locator('#change-search').fill('CVE_REOBSERVED')
         expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
         expect(synthetic_page.locator('.change-event__diff')).to_contain_text('outside the retained 30-day feed')
         expect(synthetic_page.locator('.change-event__diff')).to_contain_text('cannot be reconstructed')
         synthetic_page.locator('#change-search').fill('')
+        synthetic_page.locator('[data-change-filter="CVSS_CHANGED"]').click()
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        expect(synthetic_page.locator('.change-event__id').first).to_have_text(rows[0]['id'])
         synthetic_page.locator('.change-event__id').first.click()
         expect(synthetic_page.locator('#detail-heading')).to_have_text(rows[0]['id'],timeout=60_000)
         expect(synthetic_page.locator('#detail-history')).to_be_visible(timeout=30_000)
@@ -1815,6 +1887,22 @@ def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview
         expect(synthetic_page.locator('#detail-content')).to_contain_text('CVSS CHANGED')
         synthetic_page.go_back(wait_until='domcontentloaded')
         expect(synthetic_page.locator('#page-changes')).to_be_visible()
+        synthetic_page.go_forward(wait_until='domcontentloaded')
+        expect(synthetic_page.locator('#detail-heading')).to_have_text(rows[0]['id'],timeout=30_000)
+        synthetic_page.go_back(wait_until='domcontentloaded')
+        expect(synthetic_page.locator('#page-changes')).to_be_visible()
+        synthetic_page.locator('[data-change-filter="all"]').click()
+        synthetic_page.set_viewport_size({'width':390,'height':844})
+        expect(synthetic_page.locator('#change-search')).to_be_visible()
+        synthetic_page.locator('#change-search').fill(rows[2]['id'])
+        expect(synthetic_page.locator('#change-event-list .change-event-row')).to_have_count(1)
+        mobile_changes = synthetic_page.evaluate('''() => ({viewport:innerWidth,document:document.documentElement.scrollWidth,
+          searchHeight:document.querySelector('#change-search').getBoundingClientRect().height,
+          filterHeight:document.querySelector('[data-change-filter="all"]').getBoundingClientRect().height})''')
+        assert mobile_changes['document'] <= mobile_changes['viewport'], mobile_changes
+        assert mobile_changes['searchHeight'] >= 40 and mobile_changes['filterHeight'] >= 40, mobile_changes
+        synthetic_page.evaluate('window.scrollTo(0,document.body.scrollHeight); window.scrollTo(0,0);')
+        synthetic_page.screenshot(path=str(SCREENSHOTS/'07-changes-mobile.png'),animations='disabled')
         assert not synthetic_page.locator('#tab-archive').count() and not synthetic_page.locator('#page-archive').count()
     finally:
         synthetic_page.close()
@@ -1860,7 +1948,8 @@ def run_discovery_and_retry_tests(browser, origin: str, manifest: dict, overview
         'legacy_archive_bookmark_redirects_to_explore_with_dates':True,
         'archive_navigation_removed':True,
         'production_history_event_count':len(production_history['events']),
-        'empty_history_not_fabricated':not production_history['events'],
+        'production_history_observation_times':sorted({event['observed_at'] for event in production_history['events']}),
+        'production_history_source_provenance_valid':all(isinstance(event.get('source'),str) and event['source'] and event.get('observed_at') for event in production_history['events']),
         'synthetic_only_changes_filter_search_and_provenance_checks':True,
         'history_retry_attempts':attempts['count'],
         'history_failure_has_no_partial_events':True,
@@ -1901,7 +1990,7 @@ def main() -> None:
             browser_issue_track(overview_page, issues, origin)
             overview_requests: list[str] = []
             overview_page.on('request', lambda request: overview_requests.append(urlsplit(request.url).path.removeprefix('/snapshot/'))
-                             if '/snapshot/data/' in request.url and not request.url.endswith(('/overview.json', '/epss.json', '/search-index.json', '/history.json')) else None)
+                             if '/snapshot/data/' in request.url and not request.url.endswith(('/overview.json', '/epss.json', '/search-index.json.gz', '/history.json')) else None)
             overview_page.goto(f'{origin}/', wait_until='load')
             expect(overview_page.locator('#overview-status')).to_contain_text(f'{nfmt(expected_count)} CVE records')
             expect(overview_page.locator('#overview-status')).to_have_attribute('aria-busy', 'false')
@@ -2052,14 +2141,17 @@ def main() -> None:
                 'label': label_payload, 'url': 'https://example.com/security/advisory', 'source': 'NVD'
             }, *(victim.get('refs') or [])[:11]]
             override_manifest, override_shard, override_day = snapshot_override(manifest, latest_day, malicious_rows)
-            malicious_index = json.loads((ROOT / 'snapshot' / manifest['search_index']['path']).read_bytes())
-            index_victim = next(row for row in malicious_index['records'] if row['id'] == victim_id)
-            index_victim['title'] = title_payload
-            index_victim['summary'] = ' '.join(description_payload.split())[:320]
-            malicious_index_body = json.dumps(malicious_index, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+            malicious_index = read_search_index(manifest)
+            index_victim = next(row for row in malicious_index['records'] if row[0] == victim_id)
+            index_victim[1] = title_payload
+            index_victim[2] = ' '.join(description_payload.split())[:320]
+            malicious_index_raw = json.dumps(malicious_index, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+            malicious_index_body = gzip.compress(malicious_index_raw, compresslevel=9, mtime=0)
             overridden_manifest = json.loads(override_manifest)
             overridden_manifest['search_index']['bytes'] = len(malicious_index_body)
             overridden_manifest['search_index']['sha256'] = hashlib.sha256(malicious_index_body).hexdigest()
+            overridden_manifest['search_index']['uncompressed_bytes'] = len(malicious_index_raw)
+            overridden_manifest['search_index']['uncompressed_sha256'] = hashlib.sha256(malicious_index_raw).hexdigest()
             override_manifest = json.dumps(overridden_manifest, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
             xss_page = browser.new_page(viewport={'width': 1280, 'height': 900})
             browser_issue_track(xss_page, issues, origin)

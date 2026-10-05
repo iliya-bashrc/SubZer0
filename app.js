@@ -7,7 +7,8 @@
   const LIMITS = Object.freeze({
     manifestBytes: 512 * 1024,
     overviewBytes: 64 * 1024,
-    indexBytes: 16 * 1024 * 1024,
+    indexBytes: 3 * 1024 * 1024,
+    indexUncompressedBytes: 12 * 1024 * 1024,
     historyBytes: 8 * 1024 * 1024,
     shardBytes: 16 * 1024 * 1024,
     epssBytes: 4 * 1024 * 1024,
@@ -23,9 +24,15 @@
   const LATEST_PREVIEW_LIMIT = 50;
   const PAGE_SIZES = new Set([24, 48, 96]);
   const CVE_ID_RE = /^CVE-\d{4,}-\d+$/i;
+  const CVSS_VECTOR_RE = /^CVSS:(?:3\.0|3\.1|4\.0)\/[A-Za-z0-9:._/-]+$/;
+  const CVSS2_VECTOR_RE = /^(?:CVSS:2\.0\/)?AV:[NAL]\/AC:[LMH]\/Au:[NSM]\/C:[NPC]\/I:[NPC]\/A:[NPC](?:\/E:(?:ND|U|POC|F|H))?(?:\/RL:(?:ND|OF|TF|W|U))?(?:\/RC:(?:ND|UC|UR|C))?(?:\/CDP:(?:ND|N|L|LM|MH|H))?(?:\/TD:(?:ND|N|L|M|H))?(?:\/CR:(?:ND|L|M|H))?(?:\/IR:(?:ND|L|M|H))?(?:\/AR:(?:ND|L|M|H))?$/;
+  const MAX_CVSS_VECTOR_CHARS = 512;
   const GHSA_ID_RE = /^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/i;
   const BASE_SEVERITIES = ['critical', 'high', 'medium', 'low'];
   const VALID_SEVERITIES = new Set([...BASE_SEVERITIES, 'unrated']);
+  const INDEX_SEVERITIES = ['critical', 'high', 'medium', 'low', 'none', 'unknown'];
+  const INDEX_DATE_BASES = ['CVE publication', 'GitHub advisory publication', 'NVD last modified', 'GitHub advisory updated', 'CISA KEV date added'];
+  const INDEX_SOURCE_BITS = Object.freeze([[1, 'NVD'], [2, 'GitHub Advisory Database'], [4, 'CISA KEV']]);
   const initialUrlParams = new URLSearchParams(window.location.search);
   const readUrlText = (key, params = initialUrlParams) => (params.get(key) || '').trim().slice(0, 200);
   const readPercentFilter = (value) => {
@@ -75,6 +82,9 @@
   const overviewLatestList = $('#latest-list');
   const activityChart = $('#activity-chart');
   const activityChartData = $('#activity-chart-data');
+  const overviewSeverityBar = $('#overview-severity-bar');
+  const overviewSeverityLegend = $('#overview-severity-legend');
+  const overviewChangeList = $('#overview-change-list');
   const overviewRetryButtons = $$('.overview-retry');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
@@ -93,6 +103,8 @@
   const dateFrom = $('#date-from');
   const dateTo = $('#date-to');
   const dateFilter = $('#date-filter');
+  const filterDrawer = $('#filter-drawer');
+  const filterDrawerCount = $('#filter-drawer-count');
   const dateSummary = $('#date-summary');
   const vendorFilterInput = $('#vendor-filter');
   const kevOnlyInput = $('#kev-only');
@@ -104,6 +116,8 @@
   const pageIndicator = $('#page-indicator');
   const pagePrevious = $('#page-prev');
   const pageNext = $('#page-next');
+  const narrowFilters = window.matchMedia('(max-width: 720px)');
+  filterDrawer.open = !narrowFilters.matches;
 
   let manifest = null;
   let manifestPromise = null;
@@ -113,11 +127,16 @@
   let noticedSnapshotGeneratedAt = '';
   let dismissedSnapshotGeneratedAt = '';
   let records = [];
+  let recordsById = new Map();
   let latestSummaryRecords = [];
   let historyData = null;
   let historyPromise = null;
   let historyLoadError = false;
-  let activeChangeFilter = 'all';
+  const CHANGE_PAGE_SIZE = 40;
+  let activeChangeFilter = ['all', 'NEW_CVE', 'CVE_UPDATED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
+    'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED', 'ADVISORY_CHANGED'].includes(initialUrlParams.get('changeType'))
+    ? initialUrlParams.get('changeType') : 'all';
+  let changePageIndex = /^[1-9]\d{0,3}$/.test(initialUrlParams.get('changePage') || '') ? Number(initialUrlParams.get('changePage')) - 1 : 0;
   let detailShardCache = new Map();
   let detailRequestSerial = 0;
   let searchDebounceTimer = 0;
@@ -455,7 +474,8 @@
 
   function updateAddressBar({ pushHistory = false } = {}) {
     const url = new URL(window.location.href);
-    ['page', 'cve', 'search', 'severity', 'kev', 'vendor', 'source', 'epssMin', 'cvssMin', 'from', 'to', 'size', 'pageIndex']
+    ['page', 'cve', 'search', 'severity', 'kev', 'vendor', 'source', 'epssMin', 'cvssMin', 'from', 'to', 'size', 'pageIndex',
+      'changeSearch', 'changeType', 'changeFrom', 'changeTo', 'changePage']
       .forEach((key) => url.searchParams.delete(key));
     if (activePage !== 'overview' || activeCveId) url.searchParams.set('page', activePage);
     const query = searchInput.value.trim().slice(0, 200);
@@ -479,6 +499,16 @@
     }
     if (pageSize !== 24) url.searchParams.set('size', String(pageSize));
     if (pageIndex > 0) url.searchParams.set('pageIndex', String(pageIndex + 1));
+    const changeSearch = $('#change-search')?.value.trim().slice(0, 200) || '';
+    const validChangeFilters = new Set(['all', 'NEW_CVE', 'CVE_UPDATED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
+      'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED', 'ADVISORY_CHANGED']);
+    if (changeSearch) url.searchParams.set('changeSearch', changeSearch);
+    if (validChangeFilters.has(activeChangeFilter) && activeChangeFilter !== 'all') url.searchParams.set('changeType', activeChangeFilter);
+    const changeFrom = $('#change-from')?.value || '';
+    const changeTo = $('#change-to')?.value || '';
+    if (isCanonicalDate(changeFrom)) url.searchParams.set('changeFrom', changeFrom);
+    if (isCanonicalDate(changeTo)) url.searchParams.set('changeTo', changeTo);
+    if (changePageIndex > 0) url.searchParams.set('changePage', String(changePageIndex + 1));
     const nextAddress = `${url.pathname}${url.search}${url.hash}`;
     const currentAddress = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (nextAddress !== currentAddress) {
@@ -510,6 +540,17 @@
     initialPageSize = PAGE_SIZES.has(requestedSize) ? requestedSize : 24;
     requestedPageIndex = params.get('pageIndex') || '';
     initialPageIndex = /^[1-9]\d{0,4}$/.test(requestedPageIndex) ? Number(requestedPageIndex) - 1 : 0;
+    const validChangeFilters = new Set(['all', 'NEW_CVE', 'CVE_UPDATED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
+      'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED', 'ADVISORY_CHANGED']);
+    activeChangeFilter = validChangeFilters.has(params.get('changeType')) ? params.get('changeType') : 'all';
+    changePageIndex = /^[1-9]\d{0,3}$/.test(params.get('changePage') || '') ? Number(params.get('changePage')) - 1 : 0;
+    const changeSearchInput = $('#change-search');
+    if (changeSearchInput) changeSearchInput.value = readUrlText('changeSearch', params);
+    const changeFromInput = $('#change-from');
+    const changeToInput = $('#change-to');
+    if (changeFromInput) changeFromInput.value = isCanonicalDate(params.get('changeFrom')) ? params.get('changeFrom') : '';
+    if (changeToInput) changeToInput.value = isCanonicalDate(params.get('changeTo')) ? params.get('changeTo') : '';
+    $$('[data-change-filter]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.changeFilter === activeChangeFilter)));
 
     activeCveId = requestedCveId;
     activeSeverity = requestedSeverity;
@@ -552,7 +593,7 @@
 
     if (requestedCveId) {
       if (nextPage === 'center') {
-        const record = records.find((candidate) => candidate.id === requestedCveId);
+        const record = recordsById.get(requestedCveId);
         const currentHeadingId = $('#detail-heading')?.textContent;
         if (record && (detailView.hidden || currentHeadingId !== requestedCveId)) {
           openDetails(record, recordButtons.get(requestedCveId));
@@ -648,13 +689,15 @@
     for (const [config, expectedPath, maxBytes] of [
       [overview, 'data/overview.json', LIMITS.overviewBytes],
       [epss, 'data/epss.json', LIMITS.epssBytes],
-      [searchIndex, 'data/search-index.json', LIMITS.indexBytes],
+      [searchIndex, 'data/search-index.json.gz', LIMITS.indexBytes],
       [history, 'data/history.json', LIMITS.historyBytes]
     ]) {
       if (!config || config.path !== expectedPath || !isCount(config.bytes, maxBytes) || config.bytes === 0 || !SHA256_RE.test(safeString(config.sha256))) throw new Error('A manifest sidecar has invalid integrity metadata.');
       totalBytes += config.bytes;
     }
-    if (searchIndex.schema_version !== 2 || !isCount(searchIndex.count, LIMITS.records) || searchIndex.count !== totals.cves ||
+    if (searchIndex.schema_version !== 3 || searchIndex.compression !== 'gzip' ||
+        !isCount(searchIndex.uncompressed_bytes, LIMITS.indexUncompressedBytes) || searchIndex.uncompressed_bytes === 0 ||
+        !SHA256_RE.test(safeString(searchIndex.uncompressed_sha256)) || !isCount(searchIndex.count, LIMITS.records) || searchIndex.count !== totals.cves ||
         history.schema_version !== 1 || history.retention_days !== 30 || !isCount(history.event_count, 10_000) || !isCount(history.snapshot_count, 800) || !isCount(history.kev_catalog_count, 5_000) ||
         totalBytes > LIMITS.snapshotBytes || !isCount(epss.scored_cves, totals.cves) || epss.records !== totals.cves) throw new Error('Manifest sidecar or total-snapshot limits are invalid.');
     if (typeof epss.score_date !== 'string' || (epss.score_date && !isCanonicalDate(epss.score_date)) || typeof epss.source_updated_at !== 'string' || typeof epss.updated_at !== 'string' || !isCanonicalTimestamp(epss.updated_at)) throw new Error('Manifest EPSS dates are invalid.');
@@ -680,7 +723,8 @@
     const canonicalSourceName = (name) => name === 'CISA Known Exploited Vulnerabilities catalog' ? 'CISA KEV' : name;
     if (!Array.isArray(candidate.sources) || candidate.sources.length !== 4 || candidate.sources.some((source) => !source || typeof source.name !== 'string' || !safeExternalUrl(source.url)) ||
         new Set(candidate.sources.map((source) => source.name)).size !== 4 || candidate.sources.some((source) => !statusNames.has(canonicalSourceName(source.name)))) throw new Error('Manifest source provenance is invalid.');
-    if (overview.schema_version !== 2 || !isCount(overview.count, LATEST_PREVIEW_LIMIT) || overview.count !== Math.min(LATEST_PREVIEW_LIMIT, totals.cves)) throw new Error('Manifest Overview schema or count is invalid.');
+    if (overview.schema_version !== 3 || !isCount(overview.count, LATEST_PREVIEW_LIMIT) || overview.count !== Math.min(LATEST_PREVIEW_LIMIT, totals.cves) ||
+        !isCount(overview.recent_change_count, 5)) throw new Error('Manifest Overview schema or count is invalid.');
     return candidate;
   }
 
@@ -740,15 +784,41 @@
     if (actual.toLowerCase() !== config.sha256.toLowerCase()) throw new SnapshotIntegrityError('Snapshot integrity verification failed.');
   }
 
+  async function inflateGzipBytes(bytes, maximum) {
+    if (typeof window.DecompressionStream !== 'function') throw new Error('This browser cannot open the compressed search snapshot. Update the browser and retry.');
+    const stream = new Blob([bytes]).stream().pipeThrough(new window.DecompressionStream('gzip'));
+    const reader = stream.getReader();
+    const chunks = [];
+    let length = 0;
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        length += result.value.byteLength;
+        if (length > maximum) {
+          await reader.cancel();
+          throw new Error('Decompressed snapshot exceeds its byte limit.');
+        }
+        chunks.push(result.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const output = new Uint8Array(length);
+    let offset = 0;
+    chunks.forEach((chunk) => { output.set(chunk, offset); offset += chunk.byteLength; });
+    return output;
+  }
+
   async function storeVerifiedOfflineBytes(path, bytes) {
     if (!window.isSecureContext || !navigator.serviceWorker?.controller || !('caches' in window)) return;
     try {
       const url = new URL(path, document.baseURI);
       if (url.origin !== window.location.origin || !url.pathname.startsWith(new URL('.', document.baseURI).pathname)) return;
-      const cache = await caches.open('subzero-offline-v3');
+      const cache = await caches.open('subzero-offline-v4');
       await cache.put(new Request(url.href, { method: 'GET' }), new Response(bytes.slice(), {
         status: 200,
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': String(bytes.byteLength) }
+        headers: { 'Content-Type': url.pathname.endsWith('.gz') ? 'application/gzip' : 'application/json; charset=utf-8', 'Content-Length': String(bytes.byteLength) }
       }));
       const dayPattern = /\/snapshot\/data\/(\d{4}-\d{2}-\d{2})\.json$/;
       if (!dayPattern.test(url.pathname)) return;
@@ -766,18 +836,25 @@
     trackCacheFallback = true, storeOffline = true, retainBytes = false, validate = null
   } = {}) {
     const path = `${SNAPSHOT_BASE}${config.path}`;
-    let bytes = await fetchBytes(path, maximum, cache, { trackCacheFallback });
+    let artifactBytes = await fetchBytes(path, maximum, cache, { trackCacheFallback });
     try {
-      await verifyBlob(bytes, config);
+      await verifyBlob(artifactBytes, config);
     } catch (error) {
       if (!(error instanceof SnapshotIntegrityError)) throw error;
-      bytes = await fetchBytes(path, maximum, FETCH_CACHE.retry, { trackCacheFallback });
-      await verifyBlob(bytes, config);
+      artifactBytes = await fetchBytes(path, maximum, FETCH_CACHE.retry, { trackCacheFallback });
+      await verifyBlob(artifactBytes, config);
     }
-    const payload = parseJsonBytes(bytes);
+    let jsonBytes = artifactBytes;
+    if (config.compression === 'gzip') {
+      jsonBytes = await inflateGzipBytes(artifactBytes, LIMITS.indexUncompressedBytes);
+      await verifyBlob(jsonBytes, { bytes: config.uncompressed_bytes, sha256: config.uncompressed_sha256 });
+    } else if (config.compression) {
+      throw new Error('Snapshot compression format is unsupported.');
+    }
+    const payload = parseJsonBytes(jsonBytes);
     const accepted = validate ? validate(payload) : payload;
-    if (storeOffline) await storeVerifiedOfflineBytes(path, bytes);
-    return retainBytes ? { payload: accepted, bytes } : accepted;
+    if (storeOffline) await storeVerifiedOfflineBytes(path, artifactBytes);
+    return retainBytes ? { payload: accepted, bytes: artifactBytes } : accepted;
   }
 
   async function checkForUpdatedSnapshot({ force = false } = {}) {
@@ -842,6 +919,11 @@
     if (!isValidText(record.title, 512) || !isValidText(record.desc, 65_536, false, true)) throw new Error('Snapshot record text is invalid.');
     if (record.score !== null && (typeof record.score !== 'number' || !Number.isFinite(record.score) || record.score < 0 || record.score > 10)) throw new Error('Snapshot contains an invalid CVSS value.');
     if (!['critical', 'high', 'medium', 'low', 'none', 'unknown'].includes(record.sev) || record.sev !== severityForScore(record.score)) throw new Error('Snapshot severity does not match its CVSS value.');
+    if (Object.hasOwn(record, 'cvss_version') && record.cvss_version !== '' && !['2.0', '3.0', '3.1', '4.0'].includes(record.cvss_version)) throw new Error('Snapshot CVSS version is invalid.');
+    if (Object.hasOwn(record, 'cvss_vector') && (!isValidText(record.cvss_vector, MAX_CVSS_VECTOR_CHARS, true) || (record.cvss_vector && !(record.cvss_version === '2.0' ? CVSS2_VECTOR_RE.test(record.cvss_vector) : CVSS_VECTOR_RE.test(record.cvss_vector))))) throw new Error('Snapshot CVSS vector is invalid.');
+    if (Object.hasOwn(record, 'cvss_source') && !['', 'NVD', 'GitHub Advisory Database'].includes(record.cvss_source)) throw new Error('Snapshot CVSS scoring source is invalid.');
+    if (record.cvss_vector && record.cvss_version !== '2.0' && record.cvss_vector.split('/', 1)[0] !== `CVSS:${record.cvss_version}`) throw new Error('Snapshot CVSS vector and version disagree.');
+    if (record.cvss_source && record.score === null) throw new Error('Snapshot CVSS source is present without a numeric score.');
     for (const field of ['published', 'modified']) if (record[field] !== null && !isSourceTimestamp(record[field])) throw new Error('Snapshot contains an invalid source timestamp.');
     if (!isCanonicalDate(record.window_date) || record.window_date !== expectedDay || !isSourceTimestamp(record.activity_at) || new Date(activityMilliseconds(record)).toISOString().slice(0, 10) !== expectedDay) throw new Error('Snapshot activity date does not match its shard.');
     if (!isValidText(record.date_basis, 128) || !safeExternalUrl(record.primary_url)) throw new Error('Snapshot record source details are invalid.');
@@ -863,8 +945,9 @@
   }
 
   function validateOverview(payload, candidate) {
-    if (!payload || typeof payload !== 'object' || payload.schema_version !== 2 || payload.generated_at !== candidate.generated_at ||
-        !Array.isArray(payload.records) || payload.records.length !== Math.min(LATEST_PREVIEW_LIMIT, candidate.totals.cves)) throw new Error('Overview snapshot is invalid.');
+    if (!payload || typeof payload !== 'object' || payload.schema_version !== 3 || payload.generated_at !== candidate.generated_at ||
+        !Array.isArray(payload.records) || payload.records.length !== Math.min(LATEST_PREVIEW_LIMIT, candidate.totals.cves) ||
+        !Array.isArray(payload.recent_changes) || payload.recent_changes.length !== candidate.overview.recent_change_count || payload.recent_changes.length > 5) throw new Error('Overview snapshot is invalid.');
     const expectedKeys = new Set(['id', 'title', 'sev', 'score', 'window_date', 'activity_at', 'date_basis', 'sources', 'kev_date_added', 'epss']);
     const seen = new Set();
     let previousActivity = Number.POSITIVE_INFINITY;
@@ -886,6 +969,20 @@
           Object.keys(record.epss).length !== 2 || typeof record.epss.score !== 'number' || !Number.isFinite(record.epss.score) ||
           record.epss.score < 0 || record.epss.score > 1 || typeof record.epss.percentile !== 'number' || !Number.isFinite(record.epss.percentile) ||
           record.epss.percentile < 0 || record.epss.percentile > 1)) throw new Error('Overview EPSS data is invalid.');
+    });
+    const seenChanges = new Set();
+    const previewTypes = new Set(['NEW_CVE', 'CVE_REOBSERVED', 'KEV_ADDED', 'KEV_CHANGED', 'KEV_REMOVED',
+      'CVSS_CHANGED', 'EPSS_CHANGED', 'AFFECTED_PRODUCTS_CHANGED', 'VERSION_RANGE_CHANGED',
+      'DESCRIPTION_CHANGED', 'TITLE_CHANGED', 'ADVISORY_ADDED', 'REFERENCE_ADDED']);
+    payload.recent_changes.forEach((event) => {
+      if (!event || typeof event !== 'object' || Array.isArray(event) ||
+          Object.keys(event).length !== 6 || !Object.hasOwn(event, 'id') || !Object.hasOwn(event, 'title') ||
+          !Object.hasOwn(event, 'type') || !Object.hasOwn(event, 'observed_at') || !Object.hasOwn(event, 'source_time') || !Object.hasOwn(event, 'source') ||
+          !CVE_ID_RE.test(safeString(event.id)) || event.id !== event.id.toUpperCase() || seenChanges.has(event.id) ||
+          !isValidText(event.title, 512) || !previewTypes.has(event.type) || !isCanonicalTimestamp(event.observed_at) ||
+          Date.parse(event.observed_at) > Date.parse(candidate.generated_at) || !isValidText(event.source, 128) ||
+          !(event.source_time === null || isCanonicalTimestamp(event.source_time) || isCanonicalDate(event.source_time))) throw new Error('Overview change preview is invalid.');
+      seenChanges.add(event.id);
     });
     return payload;
   }
@@ -987,7 +1084,7 @@
       const heading = document.createElement('div'); heading.className = 'change-event__heading';
       const link = document.createElement('a'); link.className = 'change-event__id'; link.href = `?page=center&cve=${encodeURIComponent(event.id)}`; link.textContent = event.id;
       heading.append(link, Object.assign(document.createElement('span'), { className: `change-type change-type--${event.type.toLowerCase()}`, textContent: changeTypeLabel(event.type) }));
-      const indexRecord = records.find((record) => record.id === event.id);
+      const indexRecord = recordsById.get(event.id);
       if (indexRecord) addText(article, 'p', 'change-event__title', displayTitle(indexRecord.title));
       addText(article, 'p', 'change-event__diff', changeValueText(event));
       const meta = document.createElement('div'); meta.className = 'change-event__meta';
@@ -1009,20 +1106,43 @@
     const list = $('#change-event-list'); if (!list || !historyData) return;
     const query = ($('#change-search').value || '').trim().toLocaleLowerCase();
     const from = $('#change-from').value; const to = $('#change-to').value;
+    const observedDays = historyData.events.map((event) => event.observed_at.slice(0, 10)).filter(isCanonicalDate).sort();
+    const fromInput = $('#change-from');
+    const toInput = $('#change-to');
+    if (observedDays.length) {
+      fromInput.min = observedDays[0]; fromInput.max = observedDays.at(-1);
+      toInput.min = observedDays[0]; toInput.max = observedDays.at(-1);
+    }
     const events = historyData.events.filter((event) => {
       const typeMatches = activeChangeFilter === 'all' || (activeChangeFilter === 'KEV' ? event.type.startsWith('KEV_') : activeChangeFilter === 'REFERENCE_CHANGED' ? event.type.startsWith('REFERENCE_') : activeChangeFilter === 'ADVISORY_CHANGED' ? event.type.startsWith('ADVISORY_') : activeChangeFilter === 'AFFECTED_PRODUCTS_CHANGED' ? ['AFFECTED_PRODUCTS_CHANGED', 'VERSION_RANGE_CHANGED'].includes(event.type) : event.type === activeChangeFilter);
       const date = event.observed_at.slice(0, 10); const dateMatches = (!from || date >= from) && (!to || date <= to);
-      const record = records.find((candidate) => candidate.id === event.id);
+      const record = recordsById.get(event.id);
       const text = [event.id, event.type, event.source, changeValueText(event), record?.title, record?.summary, record?.sources, record?.affected].filter(Boolean).join(' ').toLocaleLowerCase();
       return typeMatches && dateMatches && (!query || text.includes(query));
     });
+    events.sort((left, right) => right.observed_at.localeCompare(left.observed_at) || left.id.localeCompare(right.id));
     $('#change-event-count').textContent = nf.format(events.length);
     $('#change-window-note').textContent = historyData.baseline
-      ? `Changes retained for 30 days · baseline capture ${formatTimestamp(historyData.baseline.core_snapshot_at, 'time unavailable')} · older observed changes are not available.`
-      : 'Changes retained for 30 days · observed time is distinct from source time and capture publication time.';
-    renderChangeEvents(list, events, historyData.events.length ? 'No verified change events match these filters.' : 'No changes are shown until two complete captures can be compared.');
-    $('#change-page-status').textContent = `Showing ${nf.format(events.length)} of ${nf.format(historyData.events.length)} verified change events.`;
+      ? `Up to 30 days retained · comparisons start at baseline capture ${formatTimestamp(historyData.baseline.core_snapshot_at, 'time unavailable')} · earlier changes were not observed.`
+      : 'Up to 30 days retained · source times and observation times are shown separately.';
+    const pageCount = Math.max(1, Math.ceil(events.length / CHANGE_PAGE_SIZE));
+    changePageIndex = Math.min(changePageIndex, pageCount - 1);
+    const start = changePageIndex * CHANGE_PAGE_SIZE;
+    const pageEvents = events.slice(start, start + CHANGE_PAGE_SIZE);
+    renderChangeEvents(list, pageEvents, historyData.events.length ? 'No verified change events match these filters.' : 'No changes are shown until two complete captures can be compared.');
+    const pagination = $('#change-pagination');
+    const previous = $('#change-page-prev');
+    const next = $('#change-page-next');
+    const indicator = $('#change-page-indicator');
+    pagination.hidden = pageCount <= 1;
+    previous.disabled = changePageIndex === 0;
+    next.disabled = changePageIndex >= pageCount - 1;
+    indicator.textContent = `Page ${changePageIndex + 1} of ${pageCount}`;
+    $('#change-page-status').textContent = events.length
+      ? `Showing ${nf.format(start + 1)}–${nf.format(Math.min(start + pageEvents.length, events.length))} of ${nf.format(events.length)} matching events · ${nf.format(historyData.events.length)} verified events retained.`
+      : `Showing 0 matching events · ${nf.format(historyData.events.length)} verified events retained.`;
     $('#changes-retry').hidden = true;
+    updateAddressBar();
   }
 
   function renderChangesError() {
@@ -1175,6 +1295,77 @@
     end.textContent = formatDate(entries.at(-1).date);
   }
 
+  function renderOverviewSeverity(candidate) {
+    const total = candidate.totals.cves;
+    const categories = [
+      { key: 'critical', label: 'Critical', count: candidate.totals.critical },
+      { key: 'high', label: 'High', count: candidate.totals.high },
+      { key: 'medium', label: 'Medium', count: candidate.totals.medium },
+      { key: 'low', label: 'Low', count: candidate.totals.low },
+      { key: 'unrated', label: 'Unrated', count: candidate.totals.none + candidate.totals.unknown }
+    ];
+    overviewSeverityBar.replaceChildren();
+    categories.forEach((category) => {
+      if (!category.count) return;
+      const segment = document.createElement('span');
+      segment.className = `overview-severity-segment ${category.key}`;
+      segment.dataset.severity = category.key;
+      segment.style.flexBasis = `${(category.count / total) * 100}%`;
+      segment.setAttribute('aria-hidden', 'true');
+      overviewSeverityBar.append(segment);
+    });
+    overviewSeverityBar.setAttribute('aria-busy', 'false');
+    overviewSeverityBar.dataset.verified = 'true';
+    overviewSeverityBar.setAttribute('aria-label', `CVSS severity distribution: ${categories.map((item) => `${item.label} ${nf.format(item.count)}`).join(', ')}; ${nf.format(total)} records total.`);
+    overviewSeverityLegend.replaceChildren();
+    categories.forEach((category) => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.className = `overview-severity-link ${category.key}`;
+      link.href = `?page=center&severity=${encodeURIComponent(category.key)}`;
+      const marker = document.createElement('span');
+      marker.className = `overview-severity-marker ${category.key}`;
+      marker.setAttribute('aria-hidden', 'true');
+      addText(link, 'span', '', category.label);
+      addText(link, 'strong', '', `${nf.format(category.count)} · ${total ? ((category.count / total) * 100).toFixed(1) : '0.0'}%`);
+      link.prepend(marker);
+      item.append(link);
+      overviewSeverityLegend.append(item);
+    });
+    overviewSeverityLegend.setAttribute('aria-busy', 'false');
+  }
+
+  function renderOverviewChanges(events) {
+    overviewChangeList.replaceChildren();
+    if (!events.length) {
+      const item = document.createElement('li');
+      item.className = 'overview-change-placeholder';
+      item.textContent = 'No retained change events were recorded in this capture. Earlier changes are not inferred.';
+      overviewChangeList.append(item);
+    } else {
+      events.forEach((event) => {
+        const item = document.createElement('li');
+        item.className = 'overview-change-row';
+        const heading = document.createElement('div');
+        heading.className = 'overview-change-row__heading';
+        addText(heading, 'span', 'change-type', changeTypeLabel(event.type));
+        addText(heading, 'code', 'overview-change-row__id', event.id);
+        const time = document.createElement('time');
+        time.dateTime = event.observed_at;
+        time.textContent = formatTimestamp(event.observed_at, 'observation time unavailable');
+        heading.append(time);
+        addText(item, 'p', 'overview-change-row__title', displayTitle(event.title, 'Title not supplied'));
+        const provenance = document.createElement('p');
+        provenance.className = 'overview-change-row__provenance';
+        provenance.textContent = `Observed by this capture · ${safeString(event.source, 'source not recorded')}${event.source_time ? ` · source time ${formatTimestamp(event.source_time, event.source_time)}` : ''}`;
+        item.prepend(heading);
+        item.append(provenance);
+        overviewChangeList.append(item);
+      });
+    }
+    overviewChangeList.setAttribute('aria-busy', 'false');
+  }
+
   function renderOverview(payload, candidate) {
     $('#overview-total').textContent = nf.format(candidate.totals.cves);
     $('#overview-kev').textContent = nf.format(candidate.totals.known_exploited);
@@ -1182,6 +1373,8 @@
     $('#overview-epss-note').textContent = `scored in the ${candidate.epss.score_date ? formatDate(candidate.epss.score_date) : 'undated'} set`;
     $('#overview-window-end').textContent = formatDate(candidate.window.end);
     renderActivityChart(candidate);
+    renderOverviewSeverity(candidate);
+    renderOverviewChanges(payload.recent_changes);
     renderSourceChecks(candidate);
     renderLatestPage(payload, candidate);
 
@@ -1284,6 +1477,18 @@
       $('#overview-epss').textContent = 'Unavailable';
       $('#overview-epss-note').textContent = 'Verification failed';
       $('#overview-window-end').textContent = 'Unavailable';
+      overviewSeverityBar.replaceChildren();
+      overviewSeverityBar.dataset.verified = 'false';
+      overviewSeverityBar.setAttribute('aria-busy', 'false');
+      overviewSeverityBar.setAttribute('aria-label', 'Severity distribution unavailable because the snapshot failed verification.');
+      overviewSeverityLegend.replaceChildren();
+      overviewSeverityLegend.setAttribute('aria-busy', 'false');
+      overviewChangeList.replaceChildren();
+      const changeUnavailable = document.createElement('li');
+      changeUnavailable.className = 'overview-change-placeholder';
+      changeUnavailable.textContent = 'Change preview unavailable because the snapshot failed verification.';
+      overviewChangeList.append(changeUnavailable);
+      overviewChangeList.setAttribute('aria-busy', 'false');
       overviewLatestList.replaceChildren();
       overviewLatestList.setAttribute('aria-busy', 'false');
       latestPageList.replaceChildren();
@@ -1341,34 +1546,41 @@
   }
 
   function validateSearchIndex(payload, candidate) {
-    if (!payload || typeof payload !== 'object' || payload.schema_version !== 2 || payload.generated_at !== candidate.generated_at ||
+    if (!payload || typeof payload !== 'object' || payload.schema_version !== 3 || payload.generated_at !== candidate.generated_at ||
         !Array.isArray(payload.records) || payload.records.length !== candidate.search_index.count || payload.records.length !== candidate.totals.cves) {
       throw new Error('Search index is invalid or incomplete.');
     }
     const dayPaths = new Set(candidate.days.map((day) => day.path));
     const seen = new Set();
     return payload.records.map((row) => {
-      const fields = ['id', 'title', 'summary', 'score', 'sev', 'kev', 'published', 'modified', 'window_date', 'activity_at', 'date_basis', 'sources', 'affected', 'advisory_ids', 'detail_path', 'epss'];
-      if (!row || typeof row !== 'object' || fields.some((key) => !Object.hasOwn(row, key)) || !CVE_ID_RE.test(safeString(row.id)) ||
-          row.id !== row.id.toUpperCase() || seen.has(row.id) || !isValidText(row.title, 4_096) ||
-          !isValidText(row.summary, 320, true) ||
-          !['critical', 'high', 'medium', 'low', 'none', 'unknown'].includes(row.sev) ||
-          !(row.score === null || (isFiniteScore(row.score) && row.score >= 0 && row.score <= 10)) ||
-          !isCanonicalDate(row.window_date) || !isCanonicalTimestamp(row.activity_at) ||
-          !(row.published === null || isCanonicalTimestamp(row.published)) || !(row.modified === null || isCanonicalTimestamp(row.modified)) ||
-          !isValidText(row.date_basis, 32) || !dayPaths.has(row.detail_path) || row.detail_path !== `data/${row.window_date}.json` ||
-          !Array.isArray(row.sources) || row.sources.some((source) => !SOURCE_LABELS.has(source)) ||
-          !Array.isArray(row.affected) || row.affected.length > 8 ||
-          !Array.isArray(row.advisory_ids) || row.advisory_ids.length > 8 || row.advisory_ids.some((id) => typeof id !== 'string' || !GHSA_ID_RE.test(id)) ||
-          row.affected.some((item) => !item || typeof item !== 'object' || !Object.keys(item).length ||
-            Object.keys(item).some((key) => !['vendor', 'product', 'versions'].includes(key)) ||
-            Object.entries(item).some(([key, value]) => !isValidText(value, key === 'versions' ? 160 : 2_048, true))) ||
-          (row.kev !== null && (!row.kev || typeof row.kev !== 'object' || !isCanonicalDate(row.kev.date_added))) ||
-          (row.epss !== null && (!row.epss || typeof row.epss !== 'object' || !isFiniteScore(row.epss.score) || row.epss.score < 0 || row.epss.score > 1 || !isFiniteScore(row.epss.percentile) || row.epss.percentile < 0 || row.epss.percentile > 1))) {
+      if (!Array.isArray(row) || row.length !== 11) throw new Error('A compact search-index record is invalid.');
+      const [id, title, summary, score, severityCode, hasKev, activityAt, dateBasisCode, sourceMask, affectedRows, advisoryIds] = row;
+      const severity = INDEX_SEVERITIES[severityCode];
+      const dateBasis = INDEX_DATE_BASES[dateBasisCode];
+      const windowDate = typeof activityAt === 'string' ? activityAt.slice(0, 10) : '';
+      const detailPath = `data/${windowDate}.json`;
+      const sources = INDEX_SOURCE_BITS.filter(([bit]) => sourceMask & bit).map(([, name]) => name);
+      if (!CVE_ID_RE.test(safeString(id)) || id !== id.toUpperCase() || seen.has(id) || !isValidText(title, 512) ||
+          !isValidText(summary, 320, true) || !Number.isInteger(severityCode) || severityCode < 0 || severityCode >= INDEX_SEVERITIES.length ||
+          !Number.isInteger(dateBasisCode) || dateBasisCode < 0 || dateBasisCode >= INDEX_DATE_BASES.length || !severity ||
+          !(score === null || (isFiniteScore(score) && score >= 0 && score <= 10)) ||
+          typeof hasKev !== 'boolean' || !isSourceTimestamp(activityAt) || !isCanonicalDate(windowDate) ||
+          !dateBasis || !dayPaths.has(detailPath) || !Number.isInteger(sourceMask) || sourceMask < 1 || sourceMask > 7 ||
+          !Array.isArray(affectedRows) || affectedRows.length > 8 || !Array.isArray(advisoryIds) || advisoryIds.length > 8 ||
+          advisoryIds.some((advisoryId) => typeof advisoryId !== 'string' || !GHSA_ID_RE.test(advisoryId)) ||
+          affectedRows.some((item) => !Array.isArray(item) || item.length !== 3 ||
+            !isValidText(item[0], 2_048, true) || !isValidText(item[1], 2_048, true) ||
+            !isValidText(item[2], 160, true) || (!item[0] && !item[1]))) {
         throw new Error('A compact search-index record is invalid.');
       }
-      seen.add(row.id);
-      return { ...row, desc: row.summary, refs: [], advisories: row.advisory_ids.map((ghsa_id) => ({ ghsa_id })) };
+      seen.add(id);
+      return {
+        id, title, summary, desc: summary, score, sev: severity, kev: hasKev,
+        activity_at: activityAt, window_date: windowDate, date_basis: dateBasis, sources,
+        affected: affectedRows.map(([vendor, product, versions]) => ({ vendor, product, versions })),
+        advisory_ids: advisoryIds, advisories: advisoryIds.map((ghsa_id) => ({ ghsa_id })),
+        detail_path: detailPath, published: null, modified: null, refs: []
+      };
     });
   }
 
@@ -1382,15 +1594,42 @@
         !Array.isArray(payload.events) || payload.events.length !== candidate.history.event_count ||
         payload.events.length > 10_000 || payload.snapshots.length > 800 ||
         (Array.isArray(payload.kev_catalog) ? payload.kev_catalog.length : 0) !== candidate.history.kev_catalog_count ||
-        (payload.kev_catalog && (payload.kev_catalog.length > 5_000 || payload.kev_catalog.some((item) => !item || !CVE_ID_RE.test(safeString(item.cveID)) || !isCanonicalDate(item.dateAdded))))) throw new Error('Change history is invalid or incomplete.');
-    if (payload.baseline !== null && (!payload.baseline || typeof payload.baseline !== 'object' ||
+        (payload.kev_catalog && payload.kev_catalog.length > 5_000)) throw new Error('Change history is invalid or incomplete.');
+    const generatedMs = Date.parse(candidate.generated_at);
+    const retentionMs = generatedMs - 30 * 24 * 60 * 60 * 1000;
+    const inRetention = (value) => {
+      if (!isCanonicalTimestamp(value)) return false;
+      const stamp = Date.parse(value);
+      return stamp <= generatedMs && stamp >= retentionMs;
+    };
+    if (payload.baseline !== null && (!payload.baseline || typeof payload.baseline !== 'object' || Array.isArray(payload.baseline) ||
+        Object.keys(payload.baseline).sort().join(',') !== ['complete', 'core_snapshot_at', 'epss_score_date', 'record_count'].sort().join(',') ||
         !isCanonicalTimestamp(payload.baseline.core_snapshot_at) || !isCount(payload.baseline.record_count, LIMITS.records) ||
-        typeof payload.baseline.complete !== 'boolean')) throw new Error('Change-history baseline provenance is invalid.');
-    payload.events.forEach((event) => {
-      if (!event || typeof event !== 'object' || !CVE_ID_RE.test(safeString(event.id)) || event.id !== event.id.toUpperCase() ||
-          !CHANGE_TYPES.has(event.type) || !isCanonicalTimestamp(event.observed_at) || !isValidText(event.source, 128) ||
-          !(event.source_time === null || isCanonicalTimestamp(event.source_time) || isCanonicalDate(event.source_time))) throw new Error('A change-history event is invalid.');
+        (payload.baseline.epss_score_date !== '' && !isCanonicalDate(payload.baseline.epss_score_date)) || payload.baseline.complete !== true)) {
+      throw new Error('Change-history baseline provenance is invalid.');
+    }
+    payload.snapshots.forEach((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item) ||
+          Object.keys(item).sort().join(',') !== ['complete', 'core_snapshot_at', 'epss_score_date', 'observed_at', 'record_count'].sort().join(',') ||
+          !inRetention(item.observed_at) || !isCanonicalTimestamp(item.core_snapshot_at) ||
+          (item.epss_score_date !== '' && !isCanonicalDate(item.epss_score_date)) ||
+          !isCount(item.record_count, LIMITS.records) || item.complete !== true) throw new Error('A retained complete-capture snapshot is invalid.');
     });
+    payload.events.forEach((event) => {
+      if (!event || typeof event !== 'object' || Array.isArray(event) ||
+          Object.keys(event).sort().join(',') !== ['from', 'id', 'observed_at', 'source', 'source_time', 'to', 'type'].sort().join(',') ||
+          !CVE_ID_RE.test(safeString(event.id)) || event.id !== event.id.toUpperCase() ||
+          !CHANGE_TYPES.has(event.type) || !inRetention(event.observed_at) || !isValidText(event.source, 128) ||
+          !(event.source_time === null || isCanonicalTimestamp(event.source_time) || isCanonicalDate(event.source_time)) ||
+          JSON.stringify(event.from).length > 2_300 || JSON.stringify(event.to).length > 2_300) throw new Error('A change-history event is invalid.');
+    });
+    const kevKeys = ['cveID', 'dateAdded', 'vendorProject', 'product', 'vulnerabilityName', 'shortDescription',
+      'requiredAction', 'dueDate', 'knownRansomwareCampaignUse', 'notes'].sort().join(',');
+    if (payload.kev_catalog && payload.kev_catalog.some((item) => !item || typeof item !== 'object' || Array.isArray(item) ||
+        Object.keys(item).sort().join(',') !== kevKeys || !CVE_ID_RE.test(safeString(item.cveID)) || !isCanonicalDate(item.dateAdded) ||
+        Object.entries(item).some(([key, value]) => key !== 'cveID' && key !== 'dateAdded' && !isValidText(value, key === 'shortDescription' ? 4096 : 2048, true, true)))) {
+      throw new Error('Change-history CISA baseline is invalid.');
+    }
     return payload;
   }
 
@@ -1417,7 +1656,7 @@
         (payload.error !== null && !isValidText(payload.error, 2048, true, true)) || !payload.scores || typeof payload.scores !== 'object' || Array.isArray(payload.scores)) throw new Error('EPSS sidecar is invalid.');
     const ids = new Set(rows.map((record) => record.id));
     const scores = Object.keys(payload.scores);
-    if (rows.some((row) => JSON.stringify(row.epss) !== JSON.stringify(payload.scores[row.id] || null)) || scores.length !== candidate.epss.scored_cves || scores.some((id) => {
+    if (scores.length !== candidate.epss.scored_cves || scores.some((id) => {
       const value = payload.scores[id];
       return !ids.has(id) || !/^CVE-\d{4,}-\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value) ||
         Object.keys(value).length !== 2 || !Object.hasOwn(value, 'score') || !Object.hasOwn(value, 'percentile') ||
@@ -1502,6 +1741,7 @@
         fetchVerifiedJson(manifest.epss, LIMITS.epssBytes, FETCH_CACHE.data, { storeOffline: false, retainBytes: true })
       ]);
       records = indexResult.payload;
+      recordsById = new Map(records.map((record) => [record.id, record]));
       epssScores = validateEpssFile(epssResult.payload, manifest, records);
       await Promise.all([
         storeVerifiedOfflineBytes(`${SNAPSHOT_BASE}${manifest.search_index.path}`, indexResult.bytes),
@@ -1514,18 +1754,19 @@
       const captureMessage = snapshotCacheFallbackUsed
         ? `OFFLINE · the compact ${nf.format(records.length)}-record index and EPSS set were verified against the captured manifest (${formatTimestamp(manifest.generated_at, 'unavailable')}). Detail opens only when its shard is cached; this is not live data.`
         : `${freshness} · compact search index verified · detail shards integrity-checked on demand · not live.`;
-      setSnapshotStatus(captureMessage, freshness.toLowerCase(), manifest, { records: records.length, kev: records.filter((record) => record.kev !== null).length }, 'center');
+      setSnapshotStatus(captureMessage, freshness.toLowerCase(), manifest, { records: records.length, kev: records.filter((record) => Boolean(record.kev)).length }, 'center');
       lastBackgroundSnapshotCheck = Date.now();
       renderRecords();
+      if (activePage === 'changes' && historyData) renderChanges();
       updateAddressBar();
-      const requestedRecord = requestedCveId ? records.find((record) => record.id === requestedCveId) : null;
+      const requestedRecord = requestedCveId ? recordsById.get(requestedCveId) || null : null;
       if (requestedRecord) openDetails(requestedRecord, recordButtons.get(requestedCveId));
       closeSnapshotLoader();
       if (loadStartedAt && window.performance?.measure) {
         try { window.performance.measure('subzero-index-verified-and-rendered', { start: loadStartedAt, end: window.performance.now() }); } catch { /* Diagnostic metrics are optional. */ }
       }
     } catch {
-      records = []; epssScores = Object.create(null);
+      records = []; recordsById.clear(); epssScores = Object.create(null);
       const offlineFailure = snapshotCacheFallbackUsed || navigator.onLine === false;
       setSnapshotStatus(offlineFailure
         ? 'OFFLINE · the cached search index or EPSS file is incomplete or failed integrity verification. No results are shown; reconnect before retrying.'
@@ -1548,8 +1789,18 @@
       detailShardCache.set(day.path, shard);
     }
     const detail = shard.find((record) => record.id === indexRecord.id);
+    const compactAffected = Array.isArray(detail?.affected) ? detail.affected.slice(0, 8).flatMap((item, index) => {
+      const vendor = typeof item?.vendor === 'string' ? item.vendor : '';
+      const product = typeof item?.product === 'string' ? item.product : '';
+      const versions = index < 3 && typeof item?.versions === 'string' ? item.versions.split(/\s+/).join(' ').slice(0, 160) : '';
+      return vendor || product ? [{ vendor, product, versions }] : [];
+    }) : [];
+    const compactSummary = safeString(detail?.desc).split(/\s+/).join(' ').trim().slice(0, 320);
     if (!detail || detail.title !== indexRecord.title || detail.window_date !== indexRecord.window_date ||
-        detail.activity_at !== indexRecord.activity_at || detail.sev !== indexRecord.sev || detail.score !== indexRecord.score) {
+        detail.activity_at !== indexRecord.activity_at || detail.date_basis !== indexRecord.date_basis ||
+        detail.sev !== indexRecord.sev || detail.score !== indexRecord.score || Boolean(detail.kev) !== Boolean(indexRecord.kev) ||
+        JSON.stringify(detail.sources) !== JSON.stringify(indexRecord.sources) || JSON.stringify(compactAffected) !== JSON.stringify(indexRecord.affected) ||
+        compactSummary !== indexRecord.summary) {
       throw new Error('The verified detail shard does not match its compact index entry.');
     }
     return detail;
@@ -1680,9 +1931,18 @@
     status.textContent = `Showing ${nf.format(start + 1)}–${nf.format(end)} of ${nf.format(total)} matching records · ${nf.format(records.length)} total in snapshot.`;
   }
 
+  function updateFilterDrawerCount() {
+    const changedRange = appliedFrom && appliedTo && dateFrom.min && dateTo.max && (appliedFrom !== dateFrom.min || appliedTo !== dateTo.max);
+    const active = [Boolean(searchInput.value.trim()), activeSeverity !== 'all', Boolean(changedRange), Boolean(vendorFilterInput.value.trim()),
+      sourceFilterSelect.value !== 'all', Boolean(epssMinimumInput.value.trim()), Boolean(cvssMinimumInput.value.trim()), kevOnlyInput.checked]
+      .filter(Boolean).length;
+    filterDrawerCount.textContent = active ? `${active} active` : 'Refine';
+  }
+
   function renderRecords() {
     const renderStartedAt = window.performance?.now?.() ?? 0;
     if (!manifest || !records.length) return;
+    updateFilterDrawerCount();
     recordButtons = new Map();
     matchedRecords = filteredRecords();
     const pageCount = Math.max(1, Math.ceil(matchedRecords.length / pageSize));
@@ -1894,6 +2154,9 @@
     appendFact(facts, 'Published', formatTimestamp(record.published));
     appendFact(facts, 'Last modified', formatTimestamp(record.modified));
     appendFact(facts, 'Feed source labels', safeStringList(record.sources).join(' · ') || 'Not supplied');
+    appendFact(facts, 'CVSS version', safeString(record.cvss_version, 'Not captured'));
+    appendFact(facts, 'CVSS scoring source', safeString(record.cvss_source, 'Not captured'));
+    appendFact(facts, 'CVSS vector', safeString(record.cvss_vector, 'Not captured in this snapshot'));
     appendFact(facts, 'CWE classification', 'Not supplied in the validated snapshot schema.');
     detailContent.append(factsHeading, facts);
 
@@ -1907,6 +2170,9 @@
       : `No numeric CVSS score in this record · source category ${sourceSeverity(record)}.`;
     addSignal(signalList, 'CVSS severity', scoreText,
       'CVSS describes vulnerability severity; it is not an estimate of exploitation probability. Source: CVE feed record.');
+    addSignal(signalList, 'CVSS vector evidence',
+      `${safeString(record.cvss_version, 'Version not captured')} · ${safeString(record.cvss_source, 'Scoring source not captured')}`,
+      safeString(record.cvss_vector, 'No CVSS vector is present in this captured snapshot.'));
 
     const epss = getEpss(record);
     const epssDate = safeString(manifest.epss?.score_date, 'not supplied');
@@ -1952,13 +2218,35 @@
     if (Array.isArray(record.affected) && record.affected.length) {
       const affectedList = document.createElement('ul');
       affectedList.className = 'detail-list';
-      record.affected.slice(0, 30).forEach((item) => {
+      record.affected.slice(0, 60).forEach((item) => {
         const line = [item?.vendor, item?.product, item?.versions].filter((part) => typeof part === 'string' && part.trim()).join(' · ');
-        if (line) addText(affectedList, 'li', '', line);
+        if (!line && !item?.cpe) return;
+        const entry = document.createElement('li');
+        if (line) addText(entry, 'span', 'affected-product__summary', line);
+        if (typeof item?.cpe === 'string' && item.cpe) addText(entry, 'code', 'affected-product__cpe', item.cpe);
+        addText(entry, 'span', 'affected-product__source', `Source: ${safeString(item?.source, 'not recorded')}`);
+        affectedList.append(entry);
       });
       detailContent.append(affectedList);
     } else {
       addText(detailContent, 'p', 'detail-empty-copy', 'No affected-product entries are attached to this feed record.');
+    }
+
+    const relatedHeading = addText(detailContent, 'h3', 'detail-section-heading', 'Related CVEs cited in source references');
+    const related = Array.isArray(record.related_cves) ? record.related_cves.slice(0, 30) : [];
+    if (related.length) {
+      const relatedList = document.createElement('ul');
+      relatedList.className = 'detail-list related-cve-list';
+      related.forEach((reference) => {
+        const item = document.createElement('li');
+        if (safeExternalUrl(reference?.url)) addLink(item, safeString(reference.id), reference.url, 'signal-link');
+        else addText(item, 'code', 'related-cve-id', safeString(reference?.id, 'CVE identifier unavailable'));
+        addText(item, 'span', 'reference-source', ` · ${safeString(reference?.source, 'source not recorded')}`);
+        relatedList.append(item);
+      });
+      detailContent.append(relatedList);
+    } else {
+      addText(detailContent, 'p', 'detail-empty-copy', 'No explicit related CVE link was extracted from the included source references.');
     }
 
     const refsHeading = addText(detailContent, 'h3', 'detail-section-heading', 'References in the feed');
@@ -2047,7 +2335,7 @@
     const pageChanged = activePage !== name;
     finishActiveSwipeSettlement();
     if (name === 'center') startSnapshot();
-    if (name === 'changes') loadHistory().then(renderChanges).catch(renderChangesError);
+    if (name === 'changes') { startSnapshot(); loadHistory().then(renderChanges).catch(renderChangesError); }
     if (name === 'latest') loadHistory().then(renderLatestChanges).catch(() => renderLatestChanges());
     const next = pages.get(name);
     const previous = pages.get(activePage);
@@ -2076,7 +2364,7 @@
     if (options.updateUrl !== false) updateAddressBar({ pushHistory: pageChanged });
     if (name === 'center' && requestedCveId && manifest &&
         (detailView.hidden || $('#detail-heading').textContent !== requestedCveId)) {
-      const requestedRecord = records.find((record) => record.id === requestedCveId);
+      const requestedRecord = recordsById.get(requestedCveId);
       if (requestedRecord) openDetails(requestedRecord, recordButtons.get(requestedCveId));
     }
   }
@@ -2585,6 +2873,12 @@
     epssMinimumInput.value = requestedEpssMin;
     cvssMinimumInput.value = requestedCvssMin;
     pageSizeSelect.value = String(pageSize);
+    $('#change-search').value = readUrlText('changeSearch');
+    const initialChangeFrom = initialUrlParams.get('changeFrom') || '';
+    const initialChangeTo = initialUrlParams.get('changeTo') || '';
+    $('#change-from').value = isCanonicalDate(initialChangeFrom) ? initialChangeFrom : '';
+    $('#change-to').value = isCanonicalDate(initialChangeTo) ? initialChangeTo : '';
+    $$('[data-change-filter]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.changeFilter === activeChangeFilter)));
     $$('.severity-tab').forEach((button) => {
       const selected = button.dataset.severity === activeSeverity;
       button.classList.toggle('is-selected', selected);
@@ -2648,17 +2942,32 @@
     const renderLatestOnFilter = () => {
       if (latestSummaryRecords.length) renderLatestRows();
     };
+    narrowFilters.addEventListener('change', (event) => { filterDrawer.open = !event.matches; });
     latestSearchInput.addEventListener('input', renderLatestOnFilter);
     latestSourceSelect.addEventListener('change', renderLatestOnFilter);
     latestEpssMinInput.addEventListener('input', renderLatestOnFilter);
     latestKevOnlyInput.addEventListener('change', renderLatestOnFilter);
-    $('#change-search').addEventListener('input', renderChanges);
-    ['change-from', 'change-to'].forEach((id) => $(`#${id}`).addEventListener('change', renderChanges));
+    $('#change-search').addEventListener('input', () => { changePageIndex = 0; renderChanges(); });
+    ['change-from', 'change-to'].forEach((id) => $(`#${id}`).addEventListener('change', () => { changePageIndex = 0; renderChanges(); }));
     $$('[data-change-filter]').forEach((button) => button.addEventListener('click', () => {
       activeChangeFilter = button.dataset.changeFilter;
+      changePageIndex = 0;
       $$('[data-change-filter]').forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === button)));
       renderChanges();
     }));
+    $('#change-page-prev').addEventListener('click', () => {
+      if (changePageIndex <= 0) return;
+      changePageIndex -= 1;
+      renderChanges();
+      $('#change-page-prev').focus({ preventScroll: true });
+      $('#change-page-status').scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    });
+    $('#change-page-next').addEventListener('click', () => {
+      changePageIndex += 1;
+      renderChanges();
+      $('#change-page-next').focus({ preventScroll: true });
+      $('#change-page-status').scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    });
     $('#changes-retry').addEventListener('click', () => {
       historyData = null; historyPromise = null;
       loadHistory().then(() => {

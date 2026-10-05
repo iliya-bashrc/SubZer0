@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, timedelta, timezone
+import gzip
 import hashlib
+import io
 import json
 import math
 import os
@@ -19,6 +21,14 @@ DEFAULT_ROOT = REPO_ROOT / "snapshot"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
 GHSA_RE = re.compile(r"^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$", re.I)
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$", re.I)
+CVSS_VECTOR_RE = re.compile(r"^CVSS:(?:3\.0|3\.1|4\.0)/[A-Za-z0-9:._/-]+$")
+CVSS2_VECTOR_RE = re.compile(
+    r"^(?:CVSS:2\.0/)?AV:[NAL]/AC:[LMH]/Au:[NSM]/C:[NPC]/I:[NPC]/A:[NPC]"
+    r"(?:/E:(?:ND|U|POC|F|H))?(?:/RL:(?:ND|OF|TF|W|U))?(?:/RC:(?:ND|UC|UR|C))?"
+    r"(?:/CDP:(?:ND|N|L|LM|MH|H))?(?:/TD:(?:ND|N|L|M|H))?"
+    r"(?:/CR:(?:ND|L|M|H))?(?:/IR:(?:ND|L|M|H))?(?:/AR:(?:ND|L|M|H))?$"
+)
+MAX_CVSS_VECTOR_CHARS = 512
 NAIVE_SOURCE_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?$")
 SEVERITIES = ("critical", "high", "medium", "low", "none", "unknown")
 CORE_SOURCES = (
@@ -37,7 +47,8 @@ MAX_SHARD_BYTES = 16 * 1024 * 1024
 MAX_OVERVIEW_BYTES = 64 * 1024
 MAX_OVERVIEW_RECORDS = 50
 MAX_EPSS_BYTES = 4 * 1024 * 1024
-MAX_INDEX_BYTES = 16 * 1024 * 1024
+MAX_INDEX_BYTES = 3 * 1024 * 1024
+MAX_INDEX_UNCOMPRESSED_BYTES = 12 * 1024 * 1024
 MAX_HISTORY_BYTES = 8 * 1024 * 1024
 MAX_HISTORY_EVENTS = 10_000
 MAX_HISTORY_SNAPSHOTS = 800
@@ -236,6 +247,25 @@ def _validate_record(record: Any, expected_day: str, label: str) -> dict[str, An
     severity = _text(record["sev"], f"{label}.sev", 16).lower()
     if severity not in SEVERITIES or severity != _severity(score):
         raise SnapshotValidationError(f"{label}.sev is inconsistent with its CVSS score")
+    for field, limit in (("cvss_version", 8), ("cvss_vector", MAX_CVSS_VECTOR_CHARS), ("cvss_source", 64)):
+        if field in record:
+            _text(record[field], f"{label}.{field}", limit, allow_empty=True)
+    version = record.get("cvss_version", "")
+    if version and version not in {"2.0", "3.0", "3.1", "4.0"}:
+        raise SnapshotValidationError(f"{label}.cvss_version is unsupported")
+    vector = record.get("cvss_vector", "")
+    if vector:
+        if version == "2.0":
+            if not CVSS2_VECTOR_RE.fullmatch(vector):
+                raise SnapshotValidationError(f"{label}.cvss_vector is not a supported CVSS 2.0 vector")
+        elif not version or not CVSS_VECTOR_RE.fullmatch(vector):
+            raise SnapshotValidationError(f"{label}.cvss_vector is not a supported CVSS vector")
+        elif vector.split("/", 1)[0] != f"CVSS:{version}":
+            raise SnapshotValidationError(f"{label}.cvss_vector version differs from its scoring evidence")
+    if record.get("cvss_source") and record["cvss_source"] not in {"NVD", "GitHub Advisory Database"}:
+        raise SnapshotValidationError(f"{label}.cvss_source is not a recognized scoring source")
+    if record.get("cvss_source") and score is None:
+        raise SnapshotValidationError(f"{label}.cvss_source is present without a numeric CVSS score")
 
     for field in ("published", "modified"):
         value = record[field]
@@ -348,6 +378,34 @@ def _verify_blob(root: Path, config: Any, expected_path: str, limit: int, label:
     if actual.lower() != digest.lower():
         raise SnapshotValidationError(f"SHA-256 mismatch for {expected_path}")
     return raw, _loads(raw, expected_path)
+
+
+def _verify_gzip_blob(
+    root: Path, config: Any, expected_path: str, compressed_limit: int,
+    uncompressed_limit: int, label: str,
+) -> tuple[bytes, Any, int]:
+    if not isinstance(config, dict) or config.get("path") != expected_path or config.get("compression") != "gzip":
+        raise SnapshotValidationError(f"{label} must declare its expected gzip path and encoding")
+    declared = _count(config.get("bytes"), f"manifest.{label}.bytes", compressed_limit)
+    uncompressed_declared = _count(config.get("uncompressed_bytes"), f"manifest.{label}.uncompressed_bytes", uncompressed_limit)
+    digest = config.get("sha256")
+    uncompressed_digest = config.get("uncompressed_sha256")
+    if not declared or not uncompressed_declared or not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) or \
+            not isinstance(uncompressed_digest, str) or not SHA256_RE.fullmatch(uncompressed_digest):
+        raise SnapshotValidationError(f"{label} gzip integrity metadata is invalid")
+    compressed = _contained_bytes(root, expected_path, compressed_limit)
+    if len(compressed) != declared or hashlib.sha256(compressed).hexdigest().lower() != digest.lower():
+        raise SnapshotValidationError(f"Compressed byte count or SHA-256 mismatch for {expected_path}")
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as source:
+            raw = source.read(uncompressed_limit + 1)
+    except (OSError, EOFError) as exc:
+        raise SnapshotValidationError(f"{expected_path} is not a valid gzip stream") from exc
+    if len(raw) > uncompressed_limit or len(raw) != uncompressed_declared:
+        raise SnapshotValidationError(f"Uncompressed byte count exceeds its declared bound for {expected_path}")
+    if hashlib.sha256(raw).hexdigest().lower() != uncompressed_digest.lower():
+        raise SnapshotValidationError(f"Uncompressed SHA-256 mismatch for {expected_path}")
+    return compressed, _loads(raw, expected_path), len(raw)
 
 
 def _activity_key(record: dict[str, Any]) -> tuple[datetime, str]:
@@ -529,10 +587,12 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     overview_config = manifest.get("overview")
     overview_raw, overview = _verify_blob(root, overview_config, "data/overview.json", MAX_OVERVIEW_BYTES, "overview")
     overview_records = overview.get("records") if isinstance(overview, dict) else None
+    recent_changes = overview.get("recent_changes") if isinstance(overview, dict) else None
     overview_count = _count(overview_config.get("count"), "manifest.overview.count", MAX_OVERVIEW_RECORDS)
-    if (not isinstance(overview, dict) or overview.get("schema_version") != 2 or
-            set(overview) != {"schema_version", "generated_at", "records"} or
-            overview.get("generated_at") != manifest["generated_at"] or overview_config.get("schema_version") != 2):
+    recent_count = _count(overview_config.get("recent_change_count"), "manifest.overview.recent_change_count", 5)
+    if (not isinstance(overview, dict) or overview.get("schema_version") != 3 or
+            set(overview) != {"schema_version", "generated_at", "records", "recent_changes"} or
+            overview.get("generated_at") != manifest["generated_at"] or overview_config.get("schema_version") != 3):
         raise SnapshotValidationError("overview.json schema or generated_at does not match the manifest")
     if not isinstance(overview_records, list) or len(overview_records) != overview_count or overview_count != min(MAX_OVERVIEW_RECORDS, len(all_records)):
         raise SnapshotValidationError("overview.json record count is inconsistent")
@@ -554,6 +614,32 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
                 raise SnapshotValidationError(f"{label}.epss must be null or a score/percentile object")
             _score(epss_value["score"], f"{label}.epss.score", 1)
             _score(epss_value["percentile"], f"{label}.epss.percentile", 1)
+    if not isinstance(recent_changes, list) or len(recent_changes) != recent_count or len(recent_changes) > 5:
+        raise SnapshotValidationError("overview.recent_changes count is invalid")
+    preview_ids: set[str] = set()
+    preview_types = {"NEW_CVE", "CVE_REOBSERVED", "KEV_ADDED", "KEV_CHANGED", "KEV_REMOVED",
+                     "CVSS_CHANGED", "EPSS_CHANGED", "AFFECTED_PRODUCTS_CHANGED", "VERSION_RANGE_CHANGED",
+                     "DESCRIPTION_CHANGED", "TITLE_CHANGED", "ADVISORY_ADDED", "REFERENCE_ADDED"}
+    full_by_id = {record["id"]: record for record in all_records}
+    for index, item in enumerate(recent_changes):
+        label = f"overview.recent_changes[{index}]"
+        if not isinstance(item, dict) or set(item) != {"id", "title", "type", "observed_at", "source_time", "source"}:
+            raise SnapshotValidationError(f"{label} has an invalid shape")
+        cve_id = _text(item["id"], f"{label}.id", 32)
+        if cve_id not in full_by_id or cve_id in preview_ids or item["type"] not in preview_types:
+            raise SnapshotValidationError(f"{label} does not refer to a unique current CVE and supported event")
+        preview_ids.add(cve_id)
+        if item["title"] != full_by_id[cve_id]["title"]:
+            raise SnapshotValidationError(f"{label}.title differs from the current full record")
+        observed_at = _timestamp(item["observed_at"], f"{label}.observed_at")
+        if observed_at > generated:
+            raise SnapshotValidationError(f"{label}.observed_at is ahead of capture time")
+        if item["source_time"] is not None:
+            if isinstance(item["source_time"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item["source_time"]):
+                _date(item["source_time"], f"{label}.source_time")
+            else:
+                _timestamp(item["source_time"], f"{label}.source_time")
+        _text(item["source"], f"{label}.source", 128)
     declared_files.add("data/overview.json")
     snapshot_bytes += len(overview_raw)
 
@@ -607,60 +693,67 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     snapshot_bytes += len(epss_raw)
 
     index_config = manifest.get("search_index")
-    index_raw, search_index = _verify_blob(root, index_config, "data/search-index.json", MAX_INDEX_BYTES, "search_index")
-    if (not isinstance(index_config, dict) or index_config.get("schema_version") != 2 or
-            not isinstance(search_index, dict) or search_index.get("schema_version") != 2 or
+    index_raw, search_index, index_uncompressed_bytes = _verify_gzip_blob(
+        root, index_config, "data/search-index.json.gz", MAX_INDEX_BYTES,
+        MAX_INDEX_UNCOMPRESSED_BYTES, "search_index")
+    if (not isinstance(index_config, dict) or index_config.get("schema_version") != 3 or
+            not isinstance(search_index, dict) or search_index.get("schema_version") != 3 or
             search_index.get("generated_at") != manifest["generated_at"] or
             set(search_index) != {"schema_version", "generated_at", "records"}):
         raise SnapshotValidationError("Search-index schema or capture time is invalid")
     index_records = search_index.get("records")
     if not isinstance(index_records, list) or len(index_records) != expected_cves or _count(index_config.get("count"), "manifest.search_index.count") != expected_cves:
         raise SnapshotValidationError("Search-index record count does not match the full snapshot")
-    full_by_id = {record["id"]: record for record in all_records}
     indexed_ids: set[str] = set()
-    index_keys = {"id", "title", "summary", "score", "sev", "kev", "published", "modified",
-                  "window_date", "activity_at", "date_basis", "sources", "affected", "advisory_ids", "detail_path", "epss"}
+    index_severities = ("critical", "high", "medium", "low", "none", "unknown")
+    index_date_bases = ("CVE publication", "GitHub advisory publication", "NVD last modified",
+                        "GitHub advisory updated", "CISA KEV date added")
+    source_bits = {"NVD": 1, "GitHub Advisory Database": 2, "CISA KEV": 4}
     for index, row in enumerate(index_records):
         label = f"search_index.records[{index}]"
-        if not isinstance(row, dict) or set(row) != index_keys:
+        if not isinstance(row, list) or len(row) != 11:
             raise SnapshotValidationError(f"{label} has an invalid shape")
-        cve_id = row.get("id")
+        cve_id, title, summary, score, severity_code, has_kev, activity_at, date_basis_code, sources_mask, affected, advisory_ids = row
         if not isinstance(cve_id, str) or not CVE_RE.fullmatch(cve_id) or cve_id != cve_id.upper() or cve_id in indexed_ids or cve_id not in full_by_id:
             raise SnapshotValidationError(f"{label}.id is invalid, duplicated, or absent from detail shards")
         indexed_ids.add(cve_id)
         full = full_by_id[cve_id]
-        if row.get("title") != full["title"] or row.get("sev") != full["sev"] or row.get("score") != full["score"]:
+        if (title != full["title"] or not isinstance(severity_code, int) or isinstance(severity_code, bool) or
+                severity_code != index_severities.index(full["sev"]) or score != full["score"]):
             raise SnapshotValidationError(f"{label} identity or severity differs from its detail record")
-        _text(row.get("summary"), f"{label}.summary", 320, allow_empty=True)
-        if row.get("window_date") != full["window_date"] or row.get("activity_at") != full["activity_at"] or row.get("date_basis") != full["date_basis"]:
+        _text(summary, f"{label}.summary", 320, allow_empty=True)
+        if summary != " ".join(str(full.get("desc") or "").split())[:320]:
+            raise SnapshotValidationError(f"{label}.summary differs from its detail description")
+        if (not isinstance(activity_at, str) or activity_at != full["activity_at"] or
+                not isinstance(date_basis_code, int) or isinstance(date_basis_code, bool) or
+                not 0 <= date_basis_code < len(index_date_bases) or index_date_bases[date_basis_code] != full["date_basis"]):
             raise SnapshotValidationError(f"{label} activity fields differ from its detail record")
-        if row.get("published") != full["published"] or row.get("modified") != full["modified"] or row.get("sources") != full["sources"]:
+        if not isinstance(sources_mask, int) or isinstance(sources_mask, bool) or not 1 <= sources_mask <= 7 or \
+                sources_mask != sum(bit for source, bit in source_bits.items() if source in full["sources"]):
             raise SnapshotValidationError(f"{label} provenance differs from its detail record")
-        if row.get("detail_path") != f"data/{full['window_date']}.json":
-            raise SnapshotValidationError(f"{label}.detail_path does not resolve to its activity shard")
-        affected = row.get("affected")
+        if not isinstance(has_kev, bool) or has_kev != isinstance(full.get("kev"), dict):
+            raise SnapshotValidationError(f"{label} KEV marker differs from its detail record")
         if not isinstance(affected, list) or len(affected) > 8:
             raise SnapshotValidationError(f"{label}.affected must be a compact list of at most eight entries")
         for item in affected:
-            if not isinstance(item, dict) or set(item) - {"vendor", "product", "versions"} or not item or any(not isinstance(v, str) for v in item.values()):
+            if not isinstance(item, list) or len(item) != 3 or any(not isinstance(value, str) for value in item):
                 raise SnapshotValidationError(f"{label}.affected contains invalid compact product data")
-            if "versions" in item and len(item["versions"]) > 160:
+            if len(item[2]) > 160:
                 raise SnapshotValidationError(f"{label}.affected version hint exceeds its compact bound")
         source_affected = full.get("affected") if isinstance(full.get("affected"), list) else []
         expected_affected = []
         for source_index, source_item in enumerate(source_affected[:8]):
             if not isinstance(source_item, dict):
                 continue
-            expected_item = {key: source_item.get(key, "") for key in ("vendor", "product") if isinstance(source_item.get(key, ""), str)}
+            vendor = source_item.get("vendor", "") if isinstance(source_item.get("vendor", ""), str) else ""
+            product = source_item.get("product", "") if isinstance(source_item.get("product", ""), str) else ""
+            version_hint = ""
             if source_index < 3 and isinstance(source_item.get("versions"), str):
                 version_hint = " ".join(source_item["versions"].split())[:160]
-                if version_hint:
-                    expected_item["versions"] = version_hint
-            if expected_item:
-                expected_affected.append(expected_item)
+            if vendor or product:
+                expected_affected.append([vendor, product, version_hint])
         if affected != expected_affected:
             raise SnapshotValidationError(f"{label}.affected differs from the source details or version hints")
-        advisory_ids = row.get("advisory_ids")
         if not isinstance(advisory_ids, list) or len(advisory_ids) > 8 or any(not isinstance(value, str) or not GHSA_RE.fullmatch(value) for value in advisory_ids):
             raise SnapshotValidationError(f"{label}.advisory_ids is invalid")
         expected_advisory_ids = []
@@ -673,21 +766,9 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
                 expected_advisory_ids.append(candidate.upper())
         if advisory_ids != list(dict.fromkeys(expected_advisory_ids))[:8]:
             raise SnapshotValidationError(f"{label}.advisory_ids differ from source advisory URLs")
-        kev = row.get("kev")
-        full_kev = full.get("kev")
-        if kev is not None:
-            if not isinstance(kev, dict) or set(kev) - {"date_added", "vendor", "product"}:
-                raise SnapshotValidationError(f"{label}.kev has an invalid compact shape")
-            if not isinstance(full_kev, dict) or kev.get("date_added") != full_kev.get("date_added"):
-                raise SnapshotValidationError(f"{label}.kev does not match its detail record")
-        elif full_kev is not None:
-            raise SnapshotValidationError(f"{label}.kev omits a catalog entry present in the detail record")
-        epss_row = row.get("epss")
-        if epss_row != scores.get(cve_id):
-            raise SnapshotValidationError(f"{label}.epss does not match the EPSS sidecar")
     if indexed_ids != all_ids:
         raise SnapshotValidationError("Search index must contain each detail record exactly once")
-    declared_files.add("data/search-index.json")
+    declared_files.add("data/search-index.json.gz")
     snapshot_bytes += len(index_raw)
 
     history_config = manifest.get("history")
@@ -732,7 +813,7 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
         if not isinstance(item, dict) or set(item) != {"id", "type", "observed_at", "source_time", "source", "from", "to"}:
             raise SnapshotValidationError(f"{label} has an invalid shape")
         cve_id = _text(item["id"], f"{label}.id", 32)
-        if not CVE_RE.fullmatch(cve_id) or cve_id != cve_id.upper() or item["type"] not in event_types:
+        if not CVE_RE.fullmatch(cve_id) or cve_id != cve_id.upper() or not isinstance(item["type"], str) or item["type"] not in event_types:
             raise SnapshotValidationError(f"{label} identity or change type is invalid")
         observed = _timestamp(item["observed_at"], f"{label}.observed_at")
         if observed > generated or observed < retention_start:
@@ -743,6 +824,34 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
             else:
                 _timestamp(item["source_time"], f"{label}.source_time")
         _text(item["source"], f"{label}.source", 128)
+        for field in ("from", "to"):
+            value_size = len(json.dumps(item[field], ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if value_size > 2_300:
+                raise SnapshotValidationError(f"{label}.{field} exceeds the bounded change-value size")
+
+    preview_priority = {"NEW_CVE": 0, "CVE_REOBSERVED": 1, "KEV_ADDED": 2, "KEV_CHANGED": 2,
+                        "KEV_REMOVED": 2, "CVSS_CHANGED": 3, "EPSS_CHANGED": 4,
+                        "AFFECTED_PRODUCTS_CHANGED": 5, "VERSION_RANGE_CHANGED": 5,
+                        "DESCRIPTION_CHANGED": 6, "TITLE_CHANGED": 6, "ADVISORY_ADDED": 7,
+                        "REFERENCE_ADDED": 8}
+    preview_candidates = [item for item in events if item["id"] in full_by_id and item["type"] in preview_priority]
+    preview_candidates.sort(key=lambda item: (_timestamp(item["observed_at"], "history event observed_at"),
+                                              -preview_priority[item["type"]], item["id"]), reverse=True)
+    expected_recent: list[dict[str, Any]] = []
+    retained_ids: set[str] = set()
+    for event in preview_candidates:
+        if event["id"] in retained_ids:
+            continue
+        current_record = full_by_id[event["id"]]
+        expected_recent.append({"id": event["id"], "title": current_record["title"], "type": event["type"],
+                                "observed_at": event["observed_at"], "source_time": event["source_time"],
+                                "source": event["source"] or "Verified source comparison"})
+        retained_ids.add(event["id"])
+        if len(expected_recent) == 5:
+            break
+    if recent_changes != expected_recent:
+        raise SnapshotValidationError("Overview recent changes do not match the newest source-verified retained events")
+
     kev_catalog = history.get("kev_catalog", [])
     if not isinstance(kev_catalog, list) or len(kev_catalog) > 5_000 or _count(history_config.get("kev_catalog_count"), "manifest.history.kev_catalog_count", 5_000) != len(kev_catalog):
         raise SnapshotValidationError("Change-history CISA baseline exceeds its declared entry bound")
@@ -784,6 +893,9 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
         "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
         "static_json_bytes": snapshot_bytes,
+        "search_index_compressed_bytes": len(index_raw),
+        "search_index_uncompressed_bytes": index_uncompressed_bytes,
+        "search_index_compression_ratio": round(len(index_raw) / index_uncompressed_bytes, 4),
         "largest_shard_bytes": max(shard_bytes, default=0),
         "shards": len(days),
         "records": len(all_ids),
@@ -838,7 +950,8 @@ def main() -> int:
     print(
         "SNAPSHOT VALIDATION PASSED: "
         f"{result['records']:,} unique CVEs across {result['shards']} UTC shards; "
-        f"{result['epss_scores']:,} EPSS values; {result['static_json_bytes']:,} JSON bytes; "
+        f"{result['epss_scores']:,} EPSS values; {result['static_json_bytes']:,} static bytes; "
+        f"search index {result['search_index_compressed_bytes']:,} compressed / {result['search_index_uncompressed_bytes']:,} uncompressed bytes; "
         f"generated {result['generated_at']} (EPSS {result['epss_status']})"
     )
     return 0

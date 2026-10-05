@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -31,7 +32,7 @@ class SnapshotIntegrityTests(unittest.TestCase):
         cve = {
             "id": "CVE-2026-8001", "published": activity, "lastModified": activity,
             "descriptions": [{"lang": "en", "value": "A fixture vulnerability in Widget."}],
-            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8}}]},
+            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "version": "3.1", "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}}]},
             "references": [{"url": "https://vendor.example/security/8001"}],
         }
         advisory = {
@@ -92,6 +93,61 @@ class SnapshotIntegrityTests(unittest.TestCase):
         self.assertEqual(report["epss_status"], "current")
         self.assertTrue((self.root / "VALIDATION.json").is_file())
 
+    def test_extended_cvss4_vector_validates_without_truncation(self):
+        vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H/E:A/CR:H/IR:H/AR:H/MAV:N/MAC:L/MAT:N/MPR:L/MUI:P/MVC:H/MVI:H/MVA:H/MSC:H/MSI:H/MSA:H/S:P/AU:N/R:A/V:D/RE:M/U:Green"
+        self.assertGreater(len(vector), 128)
+        day = next(item["date"] for item in self._manifest()["days"] if item["count"])
+        manifest = self._manifest()
+        shard = next(item for item in manifest["days"] if item["date"] == day)
+        records = json.loads((self.root / shard["path"]).read_text(encoding="utf-8"))
+        records[0]["cvss_version"] = "4.0"
+        records[0]["cvss_vector"] = vector
+        records[0]["cvss_source"] = "NVD"
+        self._update_day(day, records)
+        self.assertEqual(validate_snapshot(self.root)["records"], 1)
+
+    def test_official_unprefixed_cvss2_vector_validates(self):
+        day = next(item["date"] for item in self._manifest()["days"] if item["count"])
+        manifest = self._manifest()
+        shard = next(item for item in manifest["days"] if item["date"] == day)
+        records = json.loads((self.root / shard["path"]).read_text(encoding="utf-8"))
+        records[0]["cvss_version"] = "2.0"
+        records[0]["cvss_vector"] = "AV:N/AC:M/Au:N/C:P/I:P/A:P"
+        records[0]["cvss_source"] = "NVD"
+        self._update_day(day, records)
+        self.assertEqual(validate_snapshot(self.root)["records"], 1)
+
+    def test_overview_change_preview_must_match_a_retained_history_event(self):
+        manifest = self._manifest()
+        overview_path = self.root / manifest["overview"]["path"]
+        overview = json.loads(overview_path.read_text(encoding="utf-8"))
+        record = overview["records"][0]
+        overview["recent_changes"] = [{
+            "id": record["id"], "title": record["title"], "type": "CVSS_CHANGED",
+            "observed_at": manifest["generated_at"], "source_time": record["activity_at"], "source": "NVD",
+        }]
+        overview_raw = feed._json_bytes(overview)
+        overview_path.write_bytes(overview_raw)
+        manifest["overview"]["bytes"] = len(overview_raw)
+        manifest["overview"]["sha256"] = hashlib.sha256(overview_raw).hexdigest()
+        manifest["overview"]["recent_change_count"] = 1
+        self._save_manifest(manifest)
+        with self.assertRaisesRegex(SnapshotValidationError, "newest source-verified retained events"):
+            validate_snapshot(self.root)
+
+    def test_gzip_index_raw_digest_is_verified_after_decompression(self):
+        manifest = self._manifest()
+        packed_path = self.root / manifest["search_index"]["path"]
+        raw = gzip.decompress(packed_path.read_bytes())
+        changed = raw.replace(b"CVE-2026-8001", b"CVE-2026-8002", 1)
+        packed = gzip.compress(changed, compresslevel=9, mtime=0)
+        packed_path.write_bytes(packed)
+        manifest["search_index"]["bytes"] = len(packed)
+        manifest["search_index"]["sha256"] = hashlib.sha256(packed).hexdigest()
+        self._save_manifest(manifest)
+        with self.assertRaisesRegex(SnapshotValidationError, "(?i)uncompressed.*SHA-256 mismatch"):
+            validate_snapshot(self.root)
+
     def test_legacy_metadata_migration_preserves_source_bytes_and_timestamp(self):
         day = next(item["date"] for item in self._manifest()["days"] if item["count"])
         source_path = self.root / "data" / f"{day}.json"
@@ -139,7 +195,7 @@ class SnapshotIntegrityTests(unittest.TestCase):
         self.assertEqual(report["records"], 1)
         self.assertEqual(validate_snapshot(legacy_root)["records"], 1)
 
-    def test_overview_v1_migrates_to_v2_without_refreshing_records_or_epss(self):
+    def test_overview_v1_migrates_to_v3_without_refreshing_records_or_epss(self):
         legacy_root = Path(self.temporary.name) / "overview-v1"
         shutil.copytree(self.root, legacy_root)
         manifest_path = legacy_root / "manifest.json"
@@ -167,13 +223,27 @@ class SnapshotIntegrityTests(unittest.TestCase):
         migrated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         migrated_overview = json.loads(overview_path.read_text(encoding="utf-8"))
         self.assertEqual(migrated_manifest["generated_at"], original_generated_at)
-        self.assertEqual(migrated_manifest["overview"]["schema_version"], 2)
-        self.assertEqual(migrated_overview["schema_version"], 2)
+        self.assertEqual(migrated_manifest["overview"]["schema_version"], 3)
+        self.assertEqual(migrated_overview["schema_version"], 3)
         self.assertEqual(migrated_overview["records"][0]["epss"], {"score": 0.2, "percentile": 0.95})
+        self.assertEqual(migrated_manifest["search_index"]["path"], "data/search-index.json.gz")
+        packed = (legacy_root / "data" / "search-index.json.gz").read_bytes()
+        raw_index = gzip.decompress(packed)
+        self.assertEqual(len(packed), migrated_manifest["search_index"]["bytes"])
+        self.assertEqual(hashlib.sha256(packed).hexdigest(), migrated_manifest["search_index"]["sha256"])
+        self.assertEqual(len(raw_index), migrated_manifest["search_index"]["uncompressed_bytes"])
+        self.assertEqual(hashlib.sha256(raw_index).hexdigest(), migrated_manifest["search_index"]["uncompressed_sha256"])
         self.assertEqual((legacy_root / "data" / "epss.json").read_bytes(), original_epss)
         self.assertEqual({path: (legacy_root / path).read_bytes() for path in original_shards}, original_shards)
         self.assertEqual(report["records"], 1)
         self.assertEqual(validate_snapshot(legacy_root)["records"], 1)
+
+    def test_checked_in_capture_exposes_cvss_vector_evidence(self):
+        day = next(item["date"] for item in self._manifest()["days"] if item["count"])
+        record = json.loads((self.root / "data" / f"{day}.json").read_text(encoding="utf-8"))[0]
+        self.assertEqual(record["cvss_version"], "3.1")
+        self.assertTrue(record["cvss_vector"].startswith("CVSS:3.1/"))
+        self.assertEqual(record["cvss_source"], "NVD")
 
     def test_real_checked_in_full_snapshot_validates(self):
         snapshot_root = ROOT / "snapshot"

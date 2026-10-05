@@ -1,6 +1,6 @@
 # Security and reliability audit
 
-> **Historical report:** the findings below describe the explicitly named 2026-10-03 commit and snapshot only. They predate the current implementation and must not be read as current branch or production claims. See [IMPLEMENTATION-REPORT.md](IMPLEMENTATION-REPORT.md) for this branch's verified status.
+> **Historical report:** the findings below describe the explicitly named 2026-10-03 commit and snapshot only. They predate the current implementation and must not be read as current branch or production claims. For the actual branch behavior, see the [README](README.md), [data contract](DATA-CONTRACT.md), and [measured performance](PERFORMANCE.md).
 
 This review started from a clean fresh clone of `main` at commit `1c5d31727744e8844fa48285d5169483f49be435` (2026-10-03, after PR #12). Before edits, the latest Pages deployment pointed at that SHA; the HTTPS site returned 200 and `python3 scripts/verify_pages.py --timeout-seconds 60 --interval-seconds 5` confirmed byte-identical application and snapshot assets (15,318 records, 31 shards). The security-check and Pages workflows had passed for that SHA. `main` remained unprotected with no ruleset. No data-source refresh was run during this review.
 
