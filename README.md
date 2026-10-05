@@ -2,61 +2,74 @@
 
 # SubZer0
 
-SubZer0 is a static CVE-intelligence browser served by [GitHub Pages](https://iliya-bashrc.github.io/SubZer0/). The browser reads versioned JSON files from the same site; it does not call vulnerability APIs or run a backend.
+SubZer0 is a vanilla HTML/CSS/JavaScript CVE intelligence browser published with [GitHub Pages](https://iliya-bashrc.github.io/SubZer0/). It reads versioned JSON from the same site; no backend or vulnerability API is called by the page.
 
 [![Join @RootAccessClub on Telegram](assets/telegram-rootaccessclub.svg)](https://t.me/RootAccessClub) [![Join @BugCod3 on Telegram](assets/telegram-bugcod3.svg)](https://t.me/BugCod3)
 
 *SubZer0 is independent and is not affiliated with Telegram.*
 
-## Explore
+## Views
 
-- **Overview** — see counts and the three newest records in the validated snapshot, with links to their CVE details.
-- **CVE Center** — search CVE IDs, products and descriptions; filter by CVSS severity or activity date; browse pages and inspect source-linked evidence.
-- **Community** — view a terminal-style introduction and optionally open either Telegram destination. The displayed `xdg-open` command is a visual simulation; no shell command is executed.
+- **Overview** — verified CVE and CISA KEV totals, FIRST EPSS coverage, daily activity, source-check metadata recorded in the capture, and four linked records.
+- **Latest** — a source-derived, integrity-checked index of up to 50 records, with local text, source, EPSS minimum and KEV filters.
+- **Explore** — the complete captured feed, with search across supplied CVE/product/vendor/source/reference text; separate severity and numeric CVSS minimum filters; activity-date, supplied-vendor, source, EPSS minimum and KEV filters; pagination; and an evidence-led dossier.
+- **Archive** — UTC-date counts and links within the current rolling snapshot, not a permanent archive or cross-snapshot history.
+- **Community** — the existing terminal-style introduction and Telegram destinations remain a distinct experience. Its displayed `xdg-open` command is a visual simulation; no shell command runs in the browser.
 
-CVSS, FIRST EPSS and CISA KEV are separate signals. The CVE Center supports CISA KEV-only and explicit vendor filters; vendor relationships come only from the supplied affected-vendor or KEV vendor fields. A GitHub repository search is only a lead, not evidence that a proof of concept works. The application does not calculate a combined SubZer0 priority score.
+The dossier separates CVSS severity, FIRST EPSS probability, CISA KEV membership and advisory/research leads. Its “Why This Matters” points are assembled from the record’s actual captured evidence, with caveats rather than a combined score or live risk judgment. The current validated record schema has no CWE field; the dossier says when CWE is not supplied instead of inventing a classification.
 
-## Static snapshot and refresh
+The compact active-state header becomes a five-item, safe-area-aware bottom navigation on small screens; research rows become stacked cards. The implementation remains dependency-free vanilla HTML, CSS and JavaScript.
 
-GitHub Actions gathers records from the NVD CVE API, GitHub Security Advisory Database and CISA Known Exploited Vulnerabilities catalog, plus FIRST EPSS scores. A scheduled workflow runs every six hours (UTC) and can also be started manually from the `main` branch. It validates a complete new dataset and exercises the browser against it before committing only `snapshot/` to the GitHub Pages source branch. A core-source failure, incomplete pagination, invalid data, failed test or failed snapshot validation stops publication and retains the previous complete snapshot. EPSS is optional: if its feed is unavailable, retained scores remain explicitly marked stale or unavailable rather than being shown as current.
+## Snapshot status and offline behavior
 
-The browser itself remains offline from those upstream APIs. It fetches the same-origin static manifest and shards on demand, validates their schema and SHA-256 digests, applies byte/record limits, and shows an error rather than an empty or partially verified feed when a request fails. Hashes detect a shard that disagrees with its manifest; they are **not a digital signature**, because both are served from the same origin.
+Freshness labels describe the age and captured source metadata of this static snapshot, not current upstream health. **FRESH** means up to six hours old (the scheduled refresh interval); **DELAYED** is over six and up to 24 hours; **STALE** is older than 24 hours; **DEGRADED** marks recorded source/EPSS issues or failed verification; **OFFLINE** means verified cached snapshot files are being used. Snapshot age is approximate and uses the viewing device’s clock. A source check shown in the interface is the result recorded when the snapshot was generated, not a live check.
 
-The snapshot currently in this source tree was generated at **2026-10-04 17:08:24 UTC** and contains **14,903 CVE records** across 31 UTC-day shards, including **40 CISA KEV listings** in the window. The validated manifest reports **14,749 EPSS scores** dated **2026-10-04**; missing scores remain unscored, not zero. Treat these records as a dated snapshot, not a real-time feed. Static hosting provides no accounts, server-side search, push alerts or guarantee of source freshness; an upstream outage leaves the last complete snapshot in place.
+A same-origin service worker caches the app shell. The application stores snapshot data only after its size, manifest, hash, schema and relevant cross-file checks pass. When offline, cached files go through the same integrity checks; Explore shows no partial records if any required shard is missing. The cache is best-effort and only contains files that have already been successfully verified in that browser.
 
-### Shareable CVE Center state
+While the page is open, it checks the same-origin manifest and compact Overview index every 15 minutes, when a hidden page becomes visible, and after the browser comes back online. A newer manifest and Overview index that pass their schema, size and hash checks produce a reload-or-dismiss notice; full daily shards are verified after reload before Explore shows records. The application does not silently replace the data already on screen. This check does not poll NVD, GitHub, CISA or FIRST, and it does not report GitHub Actions or live source health. The user-activated workflow link opens GitHub Actions history.
 
-The Center keeps its active page and filters in the URL. Supported parameters include `page=center`, `search=…`, `severity=critical|high|medium|low|unrated`, `kev=true`, `vendor=…`, inclusive `from=YYYY-MM-DD` and `to=YYYY-MM-DD`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` for a record detail. Search covers IDs, titles, descriptions, source labels, explicit affected vendor/product/version/CPE values, KEV vendor/product values, advisory identifiers/URLs, and reference labels/sources/URLs. A vendor filter matches only explicit affected-vendor and KEV-vendor fields; it does not infer product ownership.
+The checked-in snapshot was generated at **2026-10-04 17:08:24 UTC**. It contains **14,903 CVE records** across 31 UTC date shards in a rolling 30-day activity window, including **40 CISA KEV records**. Its FIRST EPSS sidecar contains **14,749 scored CVEs** for **2026-10-04**. These counts document this particular capture and are not estimates of current conditions.
+
+## Static data and integrity
+
+GitHub Actions gathers records from the NVD CVE API, GitHub Security Advisory Database, the CISA Known Exploited Vulnerabilities catalog and FIRST EPSS. The refresh workflow runs every six hours (UTC) and can be started manually from `main`. It validates a complete candidate snapshot and exercises the browser before publishing only `snapshot/` to the GitHub Pages source branch. A core-source failure, incomplete pagination, invalid data, failed test or failed validation stops publication and retains the previous complete snapshot. EPSS is optional; retained scores remain explicitly marked stale or unavailable when its source data is stale or missing.
+
+`snapshot/data/overview.json` is a bounded 50-record schema-v2 index containing actual feed records and associated EPSS/KEV evidence when present. Its size and SHA-256 digest appear in the manifest. Overview and Latest verify the manifest and this index; Explore verifies every daily shard and the EPSS file before rendering the complete feed. A hash shows that a downloaded file matches the same-origin manifest; it is **not a digital signature** or independent proof of authenticity.
+
+## Shareable Explore state
+
+The selected page uses `page=overview|latest|center|archive|community`; `center` remains the stable URL name for Explore. Archive links use inclusive UTC `from=YYYY-MM-DD` and `to=YYYY-MM-DD` dates.
+
+Explore supports `search=…`, `severity=critical|high|medium|low|unrated`, `cvssMin=0..10`, `kev=true`, `vendor=…`, `source=NVD|GitHub%20Advisory%20Database|CISA%20KEV`, `epssMin=0..100`, `from=…`, `to=…`, `size=24|48|96`, one-based `pageIndex`, and `cve=CVE-…` for a record detail. CVSS and EPSS thresholds are distinct: records without the relevant score are excluded when a numeric minimum is active, including zero.
+
+Search covers identifiers, titles, descriptions, source labels, supplied affected vendor/product/version/CPE values, KEV vendor/product fields, advisory identifiers/URLs, and reference labels/sources/URLs. The dedicated vendor filter uses only supplied affected-vendor and KEV-vendor fields; product ownership is not inferred.
 
 See the [snapshot manifest](snapshot/manifest.json), [validation record](snapshot/VALIDATION.json), [source and trust notes](SOURCE-NOTES.md), [security audit](AUDIT.md), and [2026-10-04 review report](AUDIT-REPORT-2026-10-04.md).
 
-## Run locally
+## Run and validate locally
 
-From the repository root, serve the files over HTTP so the browser can load the JSON snapshot:
+Serve the repository over HTTP so the browser can load its same-origin files:
 
 ```bash
 python3 -m http.server 8766 --bind 127.0.0.1
 ```
 
-Open [Overview](http://127.0.0.1:8766/) or the [CVE Center](http://127.0.0.1:8766/?page=center). Stop the server with `Ctrl+C`.
+Open [Overview](http://127.0.0.1:8766/), [Latest](http://127.0.0.1:8766/?page=latest), [Explore](http://127.0.0.1:8766/?page=center), or [Archive](http://127.0.0.1:8766/?page=archive). Stop the server with `Ctrl+C`.
 
-## Validate changes
-
-Python unit tests use deterministic fixtures and do not call upstream APIs. The browser checks use Playwright and Chromium; the Community suite intercepts every Telegram navigation locally. Direct development pins live in [`requirements-dev.in`](requirements-dev.in); `requirements-dev.txt` is the SHA-256 lock.
+The deterministic unit tests make no upstream requests. The Playwright browser suites test real checked-in records; the Community suite intercepts Telegram navigation locally. Development dependencies are hash-pinned in `requirements-dev.txt`.
 
 ```bash
-python3 -m pip install --require-hashes --index-url https://pypi.org/simple -r requirements-dev.txt
-python3 -m playwright install --with-deps chromium
 node --check app.js
+node --check sw.js
 node --check community.js
-python3 -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_preview.py verify_community_ansi_shadow.py
+python3 -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_community_ansi_shadow.py
 python3 scripts/verify_data_snapshot.py
 python3 -m unittest discover -s tests -v
 python3 verify_full_feed.py
 python3 verify_community_ansi_shadow.py --community-only
 ```
 
-`verify_community_ansi_shadow.py` without `--community-only` also compares Overview and CVE Center screenshots with `origin/main` (or `SUBZERO_BASELINE_DIR`) and requires Pillow; expected redesign or snapshot changes can produce pixel differences. `scripts/verify_pages.py` is used by the refresh workflow to wait until the public Pages site serves the exact locally validated manifest, every referenced data file, and the checked-in application HTML, JavaScript and stylesheets.
+`scripts/verify_pages.py` checks that the public Pages site serves the expected application assets and a manifest-consistent snapshot. It is intended for post-deployment verification.
 
 ## License
 

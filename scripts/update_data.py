@@ -957,20 +957,41 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def build_overview(records: list[dict[str, Any]], generated_at: datetime) -> dict[str, Any]:
-    """Create a tiny, exact top-three preview so Overview never hardcodes CVEs."""
+OVERVIEW_SCHEMA_VERSION = 2
+LATEST_PREVIEW_LIMIT = 50
+
+
+def build_overview(
+    records: list[dict[str, Any]],
+    generated_at: datetime,
+    epss_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a bounded, data-derived Latest index without adding a browser feed request."""
     def order(record: dict[str, Any]) -> tuple[datetime, str]:
         stamp = parse_datetime(record.get("activity_at"))
         if stamp is None:
             raise FeedError(f"Record {record.get('id', 'unknown')} has no valid activity timestamp")
         return stamp, str(record.get("id") or "")
 
+    score_map = (epss_snapshot or {}).get("scores") or {}
+    if not isinstance(score_map, dict):
+        raise FeedError("EPSS scores must be an object when building the Overview index")
     summary_fields = ("id", "title", "sev", "score", "window_date", "activity_at", "date_basis", "sources")
-    latest = sorted(records, key=order, reverse=True)[:3]
+    latest = sorted(records, key=order, reverse=True)[:LATEST_PREVIEW_LIMIT]
+    summaries = []
+    for record in latest:
+        summary = {key: record[key] for key in summary_fields}
+        kev = record.get("kev")
+        summary["kev_date_added"] = kev.get("date_added") if isinstance(kev, dict) else None
+        epss_value = score_map.get(record["id"])
+        if epss_value is not None and (not isinstance(epss_value, dict) or set(epss_value) != {"score", "percentile"}):
+            raise FeedError(f"EPSS value for {record['id']} is malformed while building the Overview index")
+        summary["epss"] = dict(epss_value) if epss_value is not None else None
+        summaries.append(summary)
     return {
-        "schema_version": 1,
+        "schema_version": OVERVIEW_SCHEMA_VERSION,
         "generated_at": iso_z(generated_at),
-        "records": [{key: record[key] for key in summary_fields} for record in latest],
+        "records": summaries,
     }
 
 
@@ -1398,9 +1419,10 @@ def write_snapshot(
                 raise FeedError(f"Manifest digest mismatch for {day}")
             (data_root / f"{day}.json").write_bytes(raw)
 
-        overview = build_overview(records, generated_at)
+        overview = build_overview(records, generated_at, epss_snapshot)
         overview_bytes = _json_bytes(overview)
         manifest["overview"] = {
+            "schema_version": OVERVIEW_SCHEMA_VERSION,
             "path": "data/overview.json",
             "bytes": len(overview_bytes),
             "sha256": hashlib.sha256(overview_bytes).hexdigest(),
