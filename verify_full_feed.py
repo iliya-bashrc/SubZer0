@@ -192,8 +192,10 @@ def load_contract() -> tuple[dict, dict, dict[str, dict]]:
 def source_epss_stale(manifest: dict) -> bool:
     status = next(source for source in manifest['source_status'] if source['name'] == 'FIRST EPSS')
     try:
+        # Freshness is captured in the manifest; wall-clock evaluation makes this test drift over time.
+        captured = datetime.fromisoformat(manifest['generated_at'].replace('Z', '+00:00'))
         updated = datetime.fromisoformat(manifest['epss']['source_updated_at'].replace('Z', '+00:00'))
-        age = (datetime.now(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds()
+        age = (captured.astimezone(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds()
     except (TypeError, ValueError):
         return True
     return status['ok'] is not True or age < 0 or age > 36 * 60 * 60
