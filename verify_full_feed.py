@@ -201,12 +201,32 @@ def source_epss_stale(manifest: dict) -> bool:
     return status['ok'] is not True or age < 0 or age > 36 * 60 * 60
 
 
-def browser_issue_track(page, issues: dict, origin: str) -> None:
+def browser_issue_track(page, issues: dict, origin: str, actions_stub: dict | None = None) -> None:
     page.on('pageerror', lambda error: issues['page_errors'].append(f'{error}\n{getattr(error, "stack", "")}'))
     page.on('console', lambda message: issues['console_errors'].append(message.text) if message.type == 'error' else None)
     page.on('requestfailed', lambda request: issues['request_failures'].append(request.url))
     page.on('request', lambda request: issues['external_requests'].append(request.url)
-            if not request.url.startswith((origin, 'data:')) else None)
+            if not request.url.startswith((origin, 'data:', 'https://api.github.com/repos/iliya-bashrc/SubZer0/actions/')) else None)
+    stub_json = json.dumps(actions_stub or {"workflow_runs": [], "jobs": {}}, separators=(',', ':'))
+    page.add_init_script("""
+      (() => {
+        const stub = __ACTIONS_STUB__;
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input && typeof input.url === 'string' ? input.url : '';
+          if (url.startsWith('https://api.github.com/repos/iliya-bashrc/SubZer0/actions/')) {
+            const runsPath = '/actions/runs/';
+            const runStart = url.indexOf(runsPath);
+            const jobStart = runStart < 0 ? -1 : url.indexOf('/jobs', runStart + runsPath.length);
+            const runId = jobStart < 0 ? '' : url.slice(runStart + runsPath.length, jobStart);
+            const body = /^[0-9]+$/.test(runId) ? (stub.jobs && stub.jobs[runId] ? stub.jobs[runId] : {jobs: []})
+              : (url.includes('/workflows/update.yml/runs') ? stub : {jobs: []});
+            return Promise.resolve(new Response(JSON.stringify(body), {status: 200, headers: {'Content-Type': 'application/json'}}));
+          }
+          return nativeFetch(input, init);
+        };
+      })();
+    """.replace('__ACTIONS_STUB__', stub_json))
 
 
 def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count: int, issues: dict) -> dict:
@@ -319,11 +339,41 @@ def run_offline_cache_tests(browser, origin: str, manifest: dict, expected_count
 
 
 def run_background_snapshot_update_test(browser, origin: str, manifest: dict, overview: dict, issues: dict) -> dict:
+    latest_time = datetime.now(timezone.utc).replace(microsecond=0)
+    previous_success = latest_time - timedelta(hours=1)
+    def api_time(value):
+        return value.isoformat().replace('+00:00', 'Z')
+    runs = {"workflow_runs": [
+            {"id": 7654321, "head_branch": "main", "event": "schedule", "status": "completed",
+             "conclusion": "failure", "created_at": api_time(latest_time), "updated_at": api_time(latest_time)},
+            {"id": 7654320, "head_branch": "main", "event": "schedule", "status": "completed",
+             "conclusion": "success", "created_at": api_time(previous_success), "updated_at": api_time(previous_success)},
+    ]}
+    failed_job_data = {"jobs": [
+                {"name": "prepare", "conclusion": "failure", "steps": [
+                    {"name": "Collect the complete upstream feed into a staged static snapshot", "conclusion": "failure"}
+                ]}
+    ]}
     page = browser.new_page(viewport={'width': 1280, 'height': 900})
-    browser_issue_track(page, issues, origin)
+    browser_issue_track(page, issues, origin, {"workflow_runs": runs["workflow_runs"], "jobs": {"7654321": failed_job_data}})
     try:
-        page.goto(f'{origin}/?page=overview', wait_until='load', timeout=30_000)
-        expect(page.locator('#overview-status')).to_contain_text('CVE records', timeout=30_000)
+        sample_id = overview['records'][0]['id']
+        date_start = manifest['window']['start'][:10]
+        date_end = manifest['window']['end'][:10]
+        params = {
+            'page': 'center', 'cve': sample_id, 'search': 'CVE-', 'severity': 'high', 'cvssMin': '7',
+            'epssMin': '1', 'source': 'NVD', 'from': date_start, 'to': date_end,
+            'size': '48', 'pageIndex': '2', 'changeType': 'CWE_CHANGED', 'changeSearch': 'feed',
+            'changeFrom': date_start, 'changeTo': date_end, 'changePage': '2',
+        }
+        page.goto(f'{origin}/?{urlencode(params)}', wait_until='load', timeout=30_000)
+        expect(page.locator('#detail-heading')).to_have_text(sample_id, timeout=120_000)
+        state_url_before_reload = page.url
+        attempt_status = page.locator('#page-center [data-update-run-status]')
+        expect(attempt_status).to_contain_text('Latest attempt started', timeout=30_000)
+        expect(attempt_status).to_contain_text('and failed', timeout=30_000)
+        expect(attempt_status).to_contain_text('Collect the complete upstream feed', timeout=30_000)
+        expect(attempt_status.locator('a')).to_have_attribute('href', 'https://github.com/iliya-bashrc/SubZer0/actions/runs/7654321')
         candidate = json.loads(json.dumps(manifest))
         capture_time = datetime.fromisoformat(manifest['generated_at'].replace('Z', '+00:00'))
         candidate['generated_at'] = (capture_time + timedelta(minutes=1)).isoformat().replace('+00:00', 'Z')
@@ -337,6 +387,14 @@ def run_background_snapshot_update_test(browser, origin: str, manifest: dict, ov
         overview_bytes = json.dumps(candidate_overview, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
         candidate['overview']['bytes'] = len(overview_bytes)
         candidate['overview']['sha256'] = hashlib.sha256(overview_bytes).hexdigest()
+        candidate_index = read_search_index(manifest)
+        candidate_index['generated_at'] = candidate['generated_at']
+        index_bytes = json.dumps(candidate_index, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+        compressed_index = gzip.compress(index_bytes, mtime=0)
+        candidate['search_index']['bytes'] = len(compressed_index)
+        candidate['search_index']['sha256'] = hashlib.sha256(compressed_index).hexdigest()
+        candidate['search_index']['uncompressed_bytes'] = len(index_bytes)
+        candidate['search_index']['uncompressed_sha256'] = hashlib.sha256(index_bytes).hexdigest()
         assert candidate['generated_at'] > manifest['generated_at']
         response_body = json.dumps(candidate, separators=(',', ':'))
         page.route('**/snapshot/manifest.json', lambda route: route.fulfill(
@@ -344,6 +402,9 @@ def run_background_snapshot_update_test(browser, origin: str, manifest: dict, ov
         ))
         page.route('**/snapshot/data/overview.json', lambda route: route.fulfill(
             status=200, content_type='application/json; charset=utf-8', body=overview_bytes
+        ))
+        page.route('**/snapshot/data/search-index.json.gz', lambda route: route.fulfill(
+            status=200, content_type='application/gzip', body=compressed_index
         ))
         page.evaluate('''() => {
           const previous = Date.now();
@@ -355,9 +416,20 @@ def run_background_snapshot_update_test(browser, origin: str, manifest: dict, ov
         expect(page.locator('#snapshot-update-copy')).to_contain_text('newer captured snapshot')
         expect(page.locator('#snapshot-update-copy')).to_contain_text('manifest and Overview preview are verified')
         expect(page.locator('#snapshot-update-copy')).to_contain_text('reload to verify the compact search index')
-        page.locator('#snapshot-update-dismiss').click()
-        expect(notice).to_be_hidden()
-        return {'background_interval_triggered': True, 'manifest_and_overview_preview_verified_before_reload': True, 'dismissible_notice': True}
+        with page.expect_navigation(wait_until='load', timeout=30_000):
+            page.locator('#snapshot-update-reload').click()
+        expect(page).to_have_url(state_url_before_reload)
+        expect(page.locator('#detail-heading')).to_have_text(sample_id, timeout=120_000)
+        expect(page.locator('#record-search')).to_have_value('CVE-')
+        expect(page.locator('#source-filter')).to_have_value('NVD')
+        expect(page.locator('#cvss-min')).to_have_value('7')
+        expect(page.locator('#epss-min')).to_have_value('1')
+        expect(page.locator('#page-size')).to_have_value('48')
+        expect(page.locator('#change-search')).to_have_value('feed')
+        expect(page.locator('#page-center [data-update-run-status]')).to_contain_text('integrity-verified')
+        return {'background_interval_triggered': True, 'manifest_and_overview_preview_verified_before_reload': True,
+                'failed_workflow_shows_successful_run_attempt_time_and_failed_step': True,
+                'reload_preserves_dossier_search_filters_dates_pagination_and_change_url_state': True}
     finally:
         page.close()
 
@@ -768,7 +840,8 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
         cold_events = [event for event in cache_scenario_events(scenario) if event['path'] in initial_paths]
         cold_full = [event for event in cold_events if event['status'] == 200]
         cold_counts = {path: sum(event['path'] == path for event in cold_full) for path in initial_paths}
-        assert all(count == 1 for count in cold_counts.values()), f'Index-first visit did not fetch manifest and both compact sidecars once: {cold_counts}'
+        assert all(count == 1 for count in cold_counts.values()), \
+            f'Index-first visit did not fetch manifest and both compact sidecars once: {cold_counts}; events={cold_events}'
         assert not [event for event in cache_scenario_events(scenario) if event['path'] in detail_paths], 'Initial Explore visit fetched a full detail shard.'
         cold_manifest_event = next(event for event in cold_full if event['path'] == manifest_path)
         assert cold_manifest_event['cache_control'] == 'public, max-age=600'
@@ -814,7 +887,8 @@ def run_http_cache_tests(browser, manifest: dict) -> dict:
         repeat_elapsed = time.monotonic() - repeat_started
         repeat_events = [event for event in cache_scenario_events(scenario)[repeat_marker:] if event['path'] in initial_paths]
         repeat_manifest = [event for event in repeat_events if event['path'] == manifest_path]
-        assert len(repeat_manifest) == 1 and repeat_manifest[0]['status'] == 304
+        assert len(repeat_manifest) == 1 and repeat_manifest[0]['status'] == 304, \
+            f'Expected one conditional 304 manifest revalidation; matching events={repeat_manifest}; all repeat events={repeat_events}'
         assert repeat_manifest[0]['if_none_match'] == cold_manifest_event['etag']
         assert not [event for event in repeat_events if event['path'] != manifest_path], f'Fresh compact data was re-requested: {repeat_events}'
 
@@ -2098,7 +2172,7 @@ def main() -> None:
             expect(page.locator('#detail-content dt').filter(has_text='EPSS probability')).to_have_count(1)
             expect(page.locator('#detail-content dt').filter(has_text='CISA KEV evidence')).to_have_count(1)
             expect(page.locator('#detail-content')).to_contain_text('CWE classification')
-            expect(page.locator('#detail-content')).to_contain_text('Not supplied in the validated snapshot schema.')
+            expect(page.locator('#detail-content')).to_contain_text('Not supplied in this snapshot.')
             why_section = page.locator('.detail-why')
             expect(why_section).to_contain_text('Evidence summary from this verified capture')
             expect(why_section).to_contain_text('CVSS' if isinstance(sample.get('score'), (int, float)) else 'No numeric CVSS score')

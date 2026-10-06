@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080c0f">
   <meta name="description" content="Explore a verified static snapshot of CVE intelligence from NVD, GitHub advisories, CISA KEV and FIRST EPSS.">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>SubZer0 — CVE intelligence snapshot</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 30 16 16 30 2 16Z' fill='none' stroke='%237aa5b4' stroke-width='2'/%3E%3Cpath d='M16 7v18M8 11.5l16 9M24 11.5l-16 9' fill='none' stroke='%237aa5b4' stroke-width='1.5'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="community.css">
@@ -71,6 +71,7 @@
 
         <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot capture metadata">
           <p class="snapshot-status-strip__state" data-snapshot-state data-state="loading" role="status" aria-live="polite" aria-atomic="true">Loading snapshot manifest…</p>
+          <p class="snapshot-status-strip__run-status" data-update-run-status data-state="loading" role="status" aria-live="polite">Checking the latest public refresh workflow attempt…</p>
           <dl class="snapshot-status-strip__facts">
             <div><dt>Capture generated</dt><dd><time data-snapshot-generated>Checking…</time></dd></div>
             <div class="snapshot-status-strip__window"><dt>30-day UTC activity window</dt><dd><time data-snapshot-window-start>Checking…</time><span aria-hidden="true"> — </span><time data-snapshot-window-end>Checking…</time></dd></div>
@@ -173,6 +174,8 @@
             <button type="button" data-change-filter="all" aria-pressed="true">All</button>
             <button type="button" data-change-filter="NEW_CVE" aria-pressed="false">New</button>
             <button type="button" data-change-filter="CVE_UPDATED" aria-pressed="false">Updated</button>
+            <button type="button" data-change-filter="CVE_REJECTED" aria-pressed="false">Rejected</button>
+            <button type="button" data-change-filter="CWE_CHANGED" aria-pressed="false">Weaknesses</button>
             <button type="button" data-change-filter="KEV" aria-pressed="false">KEV</button>
             <button type="button" data-change-filter="CVSS_CHANGED" aria-pressed="false">CVSS</button>
             <button type="button" data-change-filter="EPSS_CHANGED" aria-pressed="false">EPSS</button>
@@ -197,6 +200,7 @@
 
         <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot capture metadata">
           <p class="snapshot-status-strip__state" data-snapshot-state data-state="loading" role="status" aria-live="polite" aria-atomic="true">Waiting to load the static snapshot…</p>
+          <p class="snapshot-status-strip__run-status" data-update-run-status data-state="loading" role="status" aria-live="polite">Checking the latest public refresh workflow attempt…</p>
           <dl class="snapshot-status-strip__facts">
             <div><dt>Capture generated</dt><dd><time data-snapshot-generated>Not verified</time></dd></div>
             <div class="snapshot-status-strip__window"><dt>30-day UTC activity window</dt><dd><time data-snapshot-window-start>Not verified</time><span aria-hidden="true"> — </span><time data-snapshot-window-end>Not verified</time></dd></div>

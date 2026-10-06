@@ -124,6 +124,9 @@
   let snapshotCacheFallbackUsed = false;
   let lastBackgroundSnapshotCheck = 0;
   let backgroundSnapshotCheckInFlight = false;
+  let lastActionStatusCheck = 0;
+  let actionStatusCheckInFlight = false;
+  let actionStatusResult = null;
   let noticedSnapshotGeneratedAt = '';
   let dismissedSnapshotGeneratedAt = '';
   let records = [];
@@ -133,7 +136,7 @@
   let historyPromise = null;
   let historyLoadError = false;
   const CHANGE_PAGE_SIZE = 40;
-  let activeChangeFilter = ['all', 'NEW_CVE', 'CVE_UPDATED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
+  let activeChangeFilter = ['all', 'NEW_CVE', 'CVE_UPDATED', 'CVE_REJECTED', 'CWE_CHANGED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
     'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED', 'ADVISORY_CHANGED'].includes(initialUrlParams.get('changeType'))
     ? initialUrlParams.get('changeType') : 'all';
   let changePageIndex = /^[1-9]\d{0,3}$/.test(initialUrlParams.get('changePage') || '') ? Number(initialUrlParams.get('changePage')) - 1 : 0;
@@ -164,6 +167,8 @@
   const TELEGRAM_DESTINATION = 'https://t.me/RootAccessClub';
   const EPSS_SOURCE = 'https://www.first.org/epss/data';
   const KEV_SOURCE = 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog';
+  const ACTIONS_RUNS_API = 'https://api.github.com/repos/iliya-bashrc/SubZer0/actions/workflows/update.yml/runs?branch=main&per_page=20';
+  const ACTIONS_API_BASE = 'https://api.github.com/repos/iliya-bashrc/SubZer0/actions';
   const GITHUB_SEARCH = (id) => `https://github.com/search?q=${encodeURIComponent(`${id} poc exploit`)}&type=repositories`;
   const nf = new Intl.NumberFormat('en-US');
 
@@ -355,6 +360,128 @@
       if (freshness === 'unavailable') epssDate.removeAttribute('datetime');
       else epssDate.dateTime = scoreDate;
     });
+    renderLatestActionStatus(candidate);
+    if (candidate) checkLatestActionStatus(candidate);
+  }
+
+  function updateActionStatusLine(message, state, runId = null) {
+    $$('[data-update-run-status]').forEach((line) => {
+      line.dataset.state = state;
+      line.replaceChildren(document.createTextNode(message));
+      if (Number.isSafeInteger(runId) && runId > 0) {
+        line.append(document.createTextNode(' '));
+        const link = document.createElement('a');
+        link.href = `https://github.com/iliya-bashrc/SubZer0/actions/runs/${runId}`;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'View workflow run';
+        line.append(link);
+      }
+    });
+  }
+
+  function renderLatestActionStatus(candidate = manifest) {
+    if (!candidate) {
+      updateActionStatusLine('Refresh workflow status will be checked after the snapshot manifest is verified.', 'loading');
+      return;
+    }
+    const captured = formatTimestamp(candidate.last_successful_update || candidate.generated_at, 'unavailable');
+    const result = actionStatusResult;
+    if (!result) {
+      updateActionStatusLine(`Last successfully captured dataset: ${captured}. Checking the latest public refresh attempt; snapshot verification does not depend on this check.`, 'loading');
+      return;
+    }
+    if (result.unavailable) {
+      updateActionStatusLine(`Last successfully captured dataset: ${captured}. Latest refresh-attempt details are unavailable; the verified snapshot remains usable and its age is shown above.`, 'unknown');
+      return;
+    }
+
+    const { latest, lastSuccessful, failingStep } = result;
+    const successfulAt = lastSuccessful
+      ? formatTimestamp(lastSuccessful.updated_at || lastSuccessful.created_at, 'unavailable')
+      : captured;
+    const attemptAt = formatTimestamp(latest.created_at, 'unavailable');
+    const prefix = `Last successful refresh: ${successfulAt}. Latest attempt started ${attemptAt}`;
+    if (latest.status !== 'completed') {
+      updateActionStatusLine(`${prefix} and is ${latest.status === 'queued' ? 'queued' : 'in progress'}. The currently verified capture remains available.`, 'running', latest.id);
+      return;
+    }
+    if (latest.conclusion === 'success') {
+      updateActionStatusLine(`${prefix} and succeeded. The published dataset capture is dated ${captured}.`, 'success', latest.id);
+      return;
+    }
+    const conclusion = latest.conclusion === 'cancelled' ? 'cancelled' : 'failed';
+    const reason = failingStep ? ` at step “${failingStep}”` : ' (step details unavailable)';
+    updateActionStatusLine(`${prefix} and ${conclusion}${reason}. The current snapshot remains integrity-verified from ${captured}; it may be stale.`,
+      conclusion === 'cancelled' ? 'cancelled' : 'failure', latest.id);
+  }
+
+  async function requestActionsJson(url) {
+    const target = new URL(url);
+    if (target.origin !== 'https://api.github.com' || !target.pathname.startsWith('/repos/iliya-bashrc/SubZer0/actions/')) {
+      throw new Error('Actions status URL is outside the fixed public repository API.');
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch(target.href, {
+        method: 'GET', cache: 'no-store', credentials: 'omit', mode: 'cors', redirect: 'error',
+        headers: { Accept: 'application/vnd.github+json' }, signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`Actions API returned HTTP ${response.status}.`);
+      const declaredLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declaredLength) && declaredLength > 128 * 1024) throw new Error('Actions API response exceeds its size limit.');
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > 128 * 1024) throw new Error('Actions API response exceeds its size limit.');
+      return parseJsonBytes(bytes);
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  function isActionsRun(run) {
+    return Boolean(run && typeof run === 'object' && Number.isSafeInteger(run.id) && run.id > 0 &&
+      run.head_branch === 'main' && ['schedule', 'workflow_dispatch'].includes(run.event) &&
+      ['queued', 'in_progress', 'completed'].includes(run.status) &&
+      (run.conclusion === null || ['success', 'failure', 'cancelled', 'timed_out', 'action_required', 'neutral', 'skipped', 'stale'].includes(run.conclusion)) &&
+      isCanonicalTimestamp(run.created_at) && isCanonicalTimestamp(run.updated_at));
+  }
+
+  async function checkLatestActionStatus(candidate = manifest, { force = false } = {}) {
+    const now = Date.now();
+    if (!candidate || document.hidden || actionStatusCheckInFlight ||
+        (!force && now - lastActionStatusCheck < BACKGROUND_SNAPSHOT_CHECK_MS)) return;
+    actionStatusCheckInFlight = true;
+    lastActionStatusCheck = now;
+    try {
+      const payload = await requestActionsJson(ACTIONS_RUNS_API);
+      if (!payload || !Array.isArray(payload.workflow_runs) || payload.workflow_runs.length > 100) throw new Error('Actions API returned an invalid run list.');
+      const runs = payload.workflow_runs.filter(isActionsRun)
+        .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+      if (!runs.length) throw new Error('No public main-branch refresh workflow attempts were returned.');
+      const latest = runs[0];
+      const lastSuccessful = runs.find((run) => run.status === 'completed' && run.conclusion === 'success') || null;
+      let failingStep = '';
+      if (latest.status === 'completed' && latest.conclusion && latest.conclusion !== 'success') {
+        try {
+          const jobPayload = await requestActionsJson(`${ACTIONS_API_BASE}/runs/${latest.id}/jobs?per_page=100`);
+          if (Array.isArray(jobPayload?.jobs) && jobPayload.jobs.length <= 100) {
+            const failedSteps = jobPayload.jobs.flatMap((job) => Array.isArray(job?.steps) ? job.steps : [])
+              .filter((step) => ['failure', 'timed_out'].includes(step?.conclusion) && isValidText(step?.name, 160));
+            failingStep = failedSteps.at(-1)?.name || '';
+          }
+        } catch {
+          // The action run remains linkable when the optional job-detail request is rate-limited or unavailable.
+        }
+      }
+      actionStatusResult = { latest, lastSuccessful, failingStep };
+      renderLatestActionStatus(candidate);
+    } catch {
+      actionStatusResult = { unavailable: true };
+      renderLatestActionStatus(candidate);
+    } finally {
+      actionStatusCheckInFlight = false;
+    }
   }
 
   function activityDate(record) {
@@ -500,7 +627,7 @@
     if (pageSize !== 24) url.searchParams.set('size', String(pageSize));
     if (pageIndex > 0) url.searchParams.set('pageIndex', String(pageIndex + 1));
     const changeSearch = $('#change-search')?.value.trim().slice(0, 200) || '';
-    const validChangeFilters = new Set(['all', 'NEW_CVE', 'CVE_UPDATED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
+    const validChangeFilters = new Set(['all', 'NEW_CVE', 'CVE_UPDATED', 'CVE_REJECTED', 'CWE_CHANGED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
       'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED', 'ADVISORY_CHANGED']);
     if (changeSearch) url.searchParams.set('changeSearch', changeSearch);
     if (validChangeFilters.has(activeChangeFilter) && activeChangeFilter !== 'all') url.searchParams.set('changeType', activeChangeFilter);
@@ -540,7 +667,7 @@
     initialPageSize = PAGE_SIZES.has(requestedSize) ? requestedSize : 24;
     requestedPageIndex = params.get('pageIndex') || '';
     initialPageIndex = /^[1-9]\d{0,4}$/.test(requestedPageIndex) ? Number(requestedPageIndex) - 1 : 0;
-    const validChangeFilters = new Set(['all', 'NEW_CVE', 'CVE_UPDATED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
+    const validChangeFilters = new Set(['all', 'NEW_CVE', 'CVE_UPDATED', 'CVE_REJECTED', 'CWE_CHANGED', 'KEV', 'CVSS_CHANGED', 'EPSS_CHANGED',
       'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED', 'ADVISORY_CHANGED']);
     activeChangeFilter = validChangeFilters.has(params.get('changeType')) ? params.get('changeType') : 'all';
     changePageIndex = /^[1-9]\d{0,3}$/.test(params.get('changePage') || '') ? Number(params.get('changePage')) - 1 : 0;
@@ -971,7 +1098,7 @@
           record.epss.percentile < 0 || record.epss.percentile > 1)) throw new Error('Overview EPSS data is invalid.');
     });
     const seenChanges = new Set();
-    const previewTypes = new Set(['NEW_CVE', 'CVE_REOBSERVED', 'KEV_ADDED', 'KEV_CHANGED', 'KEV_REMOVED',
+    const previewTypes = new Set(['NEW_CVE', 'CVE_REOBSERVED', 'CWE_CHANGED', 'KEV_ADDED', 'KEV_CHANGED', 'KEV_REMOVED',
       'CVSS_CHANGED', 'EPSS_CHANGED', 'AFFECTED_PRODUCTS_CHANGED', 'VERSION_RANGE_CHANGED',
       'DESCRIPTION_CHANGED', 'TITLE_CHANGED', 'ADVISORY_ADDED', 'REFERENCE_ADDED']);
     payload.recent_changes.forEach((event) => {
@@ -1053,7 +1180,7 @@
   }
 
   function changeTypeLabel(type) {
-    return ({ NEW_CVE: 'NEW', CVE_UPDATED: 'UPDATED', CVE_REOBSERVED: 'RECENTLY UPDATED · PRIOR DETAIL NOT RETAINED', CVSS_CHANGED: 'CVSS CHANGED', TITLE_CHANGED: 'TITLE CHANGED',
+    return ({ NEW_CVE: 'NEW', CVE_UPDATED: 'UPDATED', CVE_REJECTED: 'NVD REJECTED', CWE_CHANGED: 'CWE CHANGED', CVE_REOBSERVED: 'RECENTLY UPDATED · PRIOR DETAIL NOT RETAINED', CVSS_CHANGED: 'CVSS CHANGED', TITLE_CHANGED: 'TITLE CHANGED',
       DESCRIPTION_CHANGED: 'DESCRIPTION CHANGED', KEV_ADDED: 'KEV ADDED', KEV_CHANGED: 'KEV CHANGED', KEV_REMOVED: 'KEV REMOVED',
       EPSS_CHANGED: 'EPSS CHANGED', AFFECTED_PRODUCTS_CHANGED: 'PRODUCT DATA CHANGED', REFERENCE_CHANGED: 'REFERENCES CHANGED',
       ADVISORY_CHANGED: 'ADVISORY CHANGED', ADVISORY_ADDED: 'ADVISORY ADDED', ADVISORY_REMOVED: 'ADVISORY REMOVED',
@@ -1068,6 +1195,7 @@
       return String(value);
     };
     if (event.type === 'CVE_UPDATED') return `${event.to?.changes || 0} meaningful field changes were detected.`;
+    if (event.type === 'CVE_REJECTED') return 'NVD explicitly marked this CVE as rejected; it was removed from the active feed.';
     if (event.type === 'CVE_REOBSERVED') return event.to?.note || 'Recently modified in a source; the prior detail is outside the retained feed window.';
     const before = format(event.from); const after = format(event.to);
     if (before === 'Not present') return `Added · ${after}`;
@@ -1082,7 +1210,10 @@
       const item = document.createElement('li'); item.className = 'change-event-row';
       const article = document.createElement('article'); article.className = 'change-event';
       const heading = document.createElement('div'); heading.className = 'change-event__heading';
-      const link = document.createElement('a'); link.className = 'change-event__id'; link.href = `?page=center&cve=${encodeURIComponent(event.id)}`; link.textContent = event.id;
+      const link = event.type === 'CVE_REJECTED' ? document.createElement('span') : document.createElement('a');
+      link.className = 'change-event__id';
+      if (link instanceof HTMLAnchorElement) link.href = `?page=center&cve=${encodeURIComponent(event.id)}`;
+      link.textContent = event.id;
       heading.append(link, Object.assign(document.createElement('span'), { className: `change-type change-type--${event.type.toLowerCase()}`, textContent: changeTypeLabel(event.type) }));
       const indexRecord = recordsById.get(event.id);
       if (indexRecord) addText(article, 'p', 'change-event__title', displayTitle(indexRecord.title));
@@ -1584,7 +1715,7 @@
     });
   }
 
-  const CHANGE_TYPES = new Set(['NEW_CVE', 'CVE_UPDATED', 'CVE_REOBSERVED', 'CVSS_CHANGED', 'TITLE_CHANGED', 'DESCRIPTION_CHANGED',
+  const CHANGE_TYPES = new Set(['NEW_CVE', 'CVE_UPDATED', 'CVE_REJECTED', 'CWE_CHANGED', 'CVE_REOBSERVED', 'CVSS_CHANGED', 'TITLE_CHANGED', 'DESCRIPTION_CHANGED',
     'KEV_ADDED', 'KEV_CHANGED', 'KEV_REMOVED', 'EPSS_CHANGED', 'AFFECTED_PRODUCTS_CHANGED', 'REFERENCE_CHANGED',
     'ADVISORY_CHANGED', 'ADVISORY_ADDED', 'ADVISORY_REMOVED', 'VERSION_RANGE_CHANGED', 'REFERENCE_ADDED', 'REFERENCE_REMOVED', 'SOURCE_METADATA_CHANGED']);
 
@@ -2157,7 +2288,8 @@
     appendFact(facts, 'CVSS version', safeString(record.cvss_version, 'Not captured'));
     appendFact(facts, 'CVSS scoring source', safeString(record.cvss_source, 'Not captured'));
     appendFact(facts, 'CVSS vector', safeString(record.cvss_vector, 'Not captured in this snapshot'));
-    appendFact(facts, 'CWE classification', 'Not supplied in the validated snapshot schema.');
+    const cwes = Array.isArray(record.cwes) ? record.cwes : [];
+    appendFact(facts, 'CWE classification', cwes.length ? cwes.join(' · ') : 'Not supplied in this snapshot.');
     detailContent.append(factsHeading, facts);
 
     const signalHeading = addText(detailContent, 'h3', 'detail-section-heading', 'Evidence signals');
@@ -2830,10 +2962,19 @@
       snapshotUpdateNotice.hidden = true;
     });
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) checkForUpdatedSnapshot();
+      if (!document.hidden) {
+        checkForUpdatedSnapshot();
+        checkLatestActionStatus(manifest, { force: true });
+      }
     });
-    window.addEventListener('online', () => checkForUpdatedSnapshot({ force: true }));
-    window.setInterval(() => checkForUpdatedSnapshot(), BACKGROUND_SNAPSHOT_CHECK_MS);
+    window.addEventListener('online', () => {
+      checkForUpdatedSnapshot({ force: true });
+      checkLatestActionStatus(manifest, { force: true });
+    });
+    window.setInterval(() => {
+      checkForUpdatedSnapshot();
+      checkLatestActionStatus(manifest);
+    }, BACKGROUND_SNAPSHOT_CHECK_MS);
 
     tabs.forEach((tab, index) => {
       tab.addEventListener('click', () => switchPage(tab.dataset.page));

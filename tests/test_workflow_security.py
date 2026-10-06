@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import unittest
@@ -27,6 +28,8 @@ class WorkflowSecurityTests(unittest.TestCase):
         cls.update = (ROOT / ".github/workflows/update.yml").read_text(encoding="utf-8")
         cls.checks = (ROOT / ".github/workflows/checks.yml").read_text(encoding="utf-8")
         cls.requirements = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+        cls.npm_package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        cls.npm_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
 
     def test_candidate_validation_job_is_read_only_and_checkout_does_not_persist_credentials(self):
         self.assertIn("permissions:\n  contents: read", self.update)
@@ -97,9 +100,22 @@ class WorkflowSecurityTests(unittest.TestCase):
             self.assertIn("pip install --require-hashes", workflow)
             self.assertIn("--index-url https://pypi.org/simple", workflow)
 
+    def test_wrangler_and_transitive_npm_packages_are_integrity_locked(self):
+        self.assertEqual(self.npm_package["devDependencies"].get("wrangler"), "4.147.0")
+        self.assertEqual(self.npm_lock["packages"]["node_modules/wrangler"]["version"], "4.147.0")
+        locked_packages = [item for item in self.npm_lock["packages"].values() if item.get("resolved")]
+        self.assertGreater(len(locked_packages), 50)
+        self.assertTrue(all(re.fullmatch(r"sha512-[A-Za-z0-9+/]+=*", item.get("integrity", ""))
+                            for item in locked_packages))
+        self.assertIn("npm ci --ignore-scripts --no-audit --no-fund", self.checks)
+        self.assertIn("./node_modules/.bin/wrangler deploy --dry-run", self.checks)
+        self.assertNotIn("npx --yes wrangler", self.checks)
+
     def test_snapshot_refresh_is_main_only_and_hands_off_only_validated_snapshot(self):
         self.assertIn("on:\n  schedule:", self.update)
-        self.assertIn('cron: "17 */6 * * *"', self.update)
+        self.assertIn('cron: "7,37 * * * *"', self.update)
+        self.assertIn("group: subzero-static-snapshot-refresh", self.update)
+        self.assertIn("cancel-in-progress: false", self.update)
         self.assertIn("workflow_dispatch:", self.update)
         self.assertNotIn("pull_request:", self.update)
         self.assertEqual(self.update.count("if: github.ref == 'refs/heads/main'"), 3)
@@ -107,6 +123,10 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertIn("if-no-files-found: error", self.update)
         self.assertIn("retention-days: 1", self.update)
         self.assertIn("git add -- snapshot/", self.update)
+        publish = _job_block(self.update, "publish", "verify-pages")
+        self.assertIn("if git diff --cached --quiet; then", publish)
+        self.assertIn('echo "changed=false" >> "$GITHUB_OUTPUT"', publish)
+        self.assertIn("if: steps.commit.outputs.changed == 'true'", publish)
         self.assertIn("Only snapshot/ files may be published.", self.update)
         self.assertEqual(self.update.count("contents: write"), 1)
 

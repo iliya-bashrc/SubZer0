@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +41,26 @@ async function rejectSymlinks(path) {
   for (const entry of await readdir(path, { withFileTypes: true })) {
     await rejectSymlinks(join(path, entry.name));
   }
+}
+
+async function syncPath(path) {
+  if (process.platform === 'win32') return;
+  const handle = await open(path, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncTree(root) {
+  if (process.platform === 'win32') return;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const child = join(root, entry.name);
+    if (entry.isDirectory()) await syncTree(child);
+    else if (entry.isFile()) await syncPath(child);
+  }
+  await syncPath(root);
 }
 
 export async function buildWorkerAssets(repoRoot = PROJECT_ROOT) {
@@ -93,16 +113,20 @@ export async function buildWorkerAssets(repoRoot = PROJECT_ROOT) {
       const info = await lstat(path).catch(() => null);
       if (!info?.isFile()) throw new Error(`Worker asset bundle is incomplete: ${name}`);
     }
+    await syncTree(staged);
 
     if (await exists(output)) {
       await rename(output, backup);
       movedPrevious = true;
+      await syncPath(root);
     }
     try {
       await rename(staged, output);
+      await syncPath(root);
     } catch (error) {
       if (movedPrevious && !(await exists(output))) {
         await rename(backup, output);
+        await syncPath(root);
         movedPrevious = false;
       }
       throw error;

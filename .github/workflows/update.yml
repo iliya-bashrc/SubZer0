@@ -2,7 +2,7 @@ name: Refresh validated static CVE snapshot
 
 on:
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 
 permissions:

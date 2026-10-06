@@ -8,6 +8,7 @@ day so the browser can load recent records first on slower devices.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import gzip
 import hashlib
@@ -37,6 +38,7 @@ EPSS_CSV = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 EPSS_API = "https://api.first.org/data/v1/epss"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
 GHSA_RE = re.compile(r"^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$", re.I)
+CWE_RE = re.compile(r"^CWE-\d{1,5}$", re.I)
 CVSS_VECTOR_RE = re.compile(r"^CVSS:(?:3\.0|3\.1|4\.0)/[A-Za-z0-9:._/-]+$")
 CVSS2_VECTOR_RE = re.compile(
     r"^(?:CVSS:2\.0/)?AV:[NAL]/AC:[LMH]/Au:[NSM]/C:[NPC]/I:[NPC]/A:[NPC]"
@@ -63,7 +65,12 @@ MAX_EPSS_ROWS = 5_000_000
 MAX_EPSS_COMMENT_BYTES = 64 * 1024
 MAX_EPSS_CACHE_BYTES = 4 * 1024 * 1024
 MAX_CORE_RECORDS = 50_000
+MAX_CWES = 32
 NVD_PAGE_PAUSE_SECONDS = 6
+NVD_CURSOR_OVERLAP = timedelta(hours=2)
+NVD_CURSOR_MAX_AGE = timedelta(days=90)
+MIN_BASELINE_RATIO = 0.5
+MAX_BASELINE_RATIO = 2.0
 USER_AGENT = "SubZer0/1.0 (+https://github.com/iliya-bashrc/SubZer0)"
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "unknown": 5}
 SOURCE_CREDITS = [
@@ -416,8 +423,8 @@ def iter_github_advisories(
             raise FeedError("GitHub returned an empty advisory page with a next-page cursor")
         pages += 1
         url = next_url
-    if pages == 0 or not items:
-        raise FeedError("GitHub returned an empty advisory result set")
+    if pages == 0:
+        raise FeedError("GitHub returned no complete advisory page")
     return items, pages
 
 
@@ -634,6 +641,25 @@ def _description(descriptions: Any) -> str:
     return ""
 
 
+def _cwe_values(value: Any) -> list[str]:
+    """Extract only canonical CWE identifiers from source-controlled weakness fields."""
+    candidates: list[Any] = []
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                candidates.append(item)
+            elif isinstance(item, dict):
+                candidates.extend([item.get("value"), item.get("cwe_id"), item.get("id")])
+                descriptions = item.get("description")
+                if isinstance(descriptions, list):
+                    candidates.extend(desc.get("value") for desc in descriptions if isinstance(desc, dict))
+    elif isinstance(value, dict):
+        candidates.extend([value.get("value"), value.get("cwe_id"), value.get("id")])
+    result = sorted({item.strip().upper() for item in candidates
+                     if isinstance(item, str) and CWE_RE.fullmatch(item.strip())})
+    return result[:MAX_CWES]
+
+
 def _safe_url(value: Any) -> str | None:
     if not isinstance(value, str) or len(value) > 2048:
         return None
@@ -795,6 +821,7 @@ def _record(cve_id: str, published: str | None = None) -> dict[str, Any]:
         "cvss_version": "",
         "cvss_vector": "",
         "cvss_source": "",
+        "cwes": [],
         "sev": "unknown",
         "published": published,
         "modified": None,
@@ -865,6 +892,7 @@ def build_records(
             "cvss_version": cvss_version,
             "cvss_vector": cvss_vector,
             "cvss_source": cvss_source,
+            "cwes": _cwe_values(cve.get("weaknesses")),
             "sev": severity_for(score),
             "published": published,
             "modified": modified,
@@ -955,6 +983,10 @@ def build_records(
             record["cvss_source"] = "GitHub Advisory Database"
             record["sev"] = severity_for(record["score"])
         _add_source(record, "GitHub Advisory Database")
+        for cwe in _cwe_values(advisory.get("cwes") or advisory.get("cwe_ids") or advisory.get("weakness")):
+            if cwe not in record["cwes"]:
+                record["cwes"].append(cwe)
+        record["cwes"] = sorted(record["cwes"])[:MAX_CWES]
         html_url = advisory.get("html_url") or advisory.get("url")
         if _safe_url(html_url) and not any(item["url"] == html_url for item in record["advisories"]):
             record["advisories"].append({"label": "GitHub Security Advisory", "url": html_url,
@@ -1040,6 +1072,192 @@ def build_records(
     return sorted(records.values(), key=lambda record: (record.get("window_date") or "", record["id"]), reverse=True)
 
 
+def rejected_nvd_updates(nvd_items: list[dict[str, Any]]) -> dict[str, str | None]:
+    rejected: dict[str, str | None] = {}
+    for item in nvd_items:
+        cve = item.get("cve", item) if isinstance(item, dict) else None
+        if not isinstance(cve, dict) or str(cve.get("vulnStatus") or "").strip().casefold() != "rejected":
+            continue
+        cve_id = _cve_id(cve.get("id"))
+        if not cve_id:
+            raise FeedError("NVD returned a rejected record without a valid CVE identifier")
+        modified = normalize_source_timestamp(cve.get("lastModified"), f"NVD rejection timestamp for {cve_id}")
+        rejected[cve_id] = modified
+    return rejected
+
+
+def _merge_rows(old_rows: Any, new_rows: Any, key_field: str, *, remove_sources: set[str] | None = None, limit: int) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for row in old_rows if isinstance(old_rows, list) else []:
+        if not isinstance(row, dict) or (remove_sources and row.get("source") in remove_sources):
+            continue
+        if key_field == "@affected":
+            key = json.dumps([row.get(field, "") for field in ("vendor", "product", "versions", "cpe", "source")], ensure_ascii=False, separators=(",", ":"))
+        else:
+            key = str(row.get(key_field) or "") or json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        merged[key] = copy.deepcopy(row)
+    for row in new_rows if isinstance(new_rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if key_field == "@affected":
+            key = json.dumps([row.get(field, "") for field in ("vendor", "product", "versions", "cpe", "source")], ensure_ascii=False, separators=(",", ":"))
+        else:
+            key = str(row.get(key_field) or "") or json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        merged[key] = copy.deepcopy(row)
+    return [merged[key] for key in sorted(merged)[:limit]]
+
+
+def _merge_refreshed_record(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """Merge only source-authoritative changes while retaining evidence from untouched sources."""
+    result = copy.deepcopy(old)
+    new_sources = set(new.get("sources") or [])
+    old_sources = set(old.get("sources") or [])
+    has_new_nvd = "NVD" in new_sources
+    old_has_nvd = "NVD" in old_sources
+    for field in ("title", "desc", "primary_url"):
+        value = new.get(field)
+        source_priority_allows = has_new_nvd or not old_has_nvd
+        if (source_priority_allows and isinstance(value, str) and value and value != new.get("id")
+                and not value.startswith("No source summary") and not value.startswith("No English summary")):
+            result[field] = value
+    old_published, new_published = parse_datetime(old.get("published")), parse_datetime(new.get("published"))
+    if new.get("published") and (old_published is None or (new_published and new_published < old_published)):
+        result["published"] = new["published"]
+    old_modified, new_modified = parse_datetime(old.get("modified")), parse_datetime(new.get("modified"))
+    if new.get("modified") and (old_modified is None or (new_modified and new_modified > old_modified)):
+        result["modified"] = new["modified"]
+    old_activity, new_activity = parse_datetime(old.get("activity_at")), parse_datetime(new.get("activity_at"))
+    if new_activity and (old_activity is None or new_activity > old_activity or
+                         (new_activity == old_activity and (has_new_nvd or not old_has_nvd))):
+        for field in ("activity_at", "window_date", "date_basis"):
+            result[field] = new.get(field)
+
+    if new.get("score") is not None:
+        for field in ("score", "cvss_version", "cvss_vector", "cvss_source", "sev"):
+            result[field] = new.get(field)
+    elif "NVD" in new_sources and old.get("cvss_source") == "NVD":
+        result.update({"score": None, "cvss_version": "", "cvss_vector": "", "cvss_source": "", "sev": "unknown"})
+
+    result["cwes"] = sorted(set(new.get("cwes") or [])) if "NVD" in new_sources else sorted(set(old.get("cwes") or []) | set(new.get("cwes") or []))
+    result["affected"] = _merge_rows(old.get("affected"), new.get("affected"), "@affected", remove_sources={"NVD"} if "NVD" in new_sources else None, limit=60)
+    result["refs"] = _merge_rows(old.get("refs"), new.get("refs"), "url", remove_sources={"NVD", "CVE Program"} if "NVD" in new_sources else None, limit=14)
+    result["related_cves"] = _merge_rows(old.get("related_cves"), new.get("related_cves"), "id", remove_sources={"NVD reference"} if "NVD" in new_sources else None, limit=200)
+    result["advisories"] = _merge_rows(old.get("advisories"), new.get("advisories"), "url", limit=6)
+    result["sources"] = sorted(set(old.get("sources") or []) | new_sources,
+                               key=lambda source: {"NVD": 0, "GitHub Advisory Database": 1, "CISA KEV": 2}.get(source, 9))
+    result["kev"] = copy.deepcopy(new.get("kev")) if new.get("kev") is not None else copy.deepcopy(old.get("kev"))
+    return result
+
+
+def merge_incremental_records(
+    previous_records: list[dict[str, Any]], current_records: list[dict[str, Any]],
+    kev_items: list[dict[str, Any]], rejected_ids: set[str], start: datetime, end: datetime,
+) -> list[dict[str, Any]]:
+    """Carry forward still-in-window records; omissions never imply source deletion."""
+    merged: dict[str, dict[str, Any]] = {}
+    for item in previous_records:
+        cve_id = _cve_id(item.get("id"))
+        activity = parse_datetime(item.get("activity_at"))
+        if cve_id and activity and start <= activity <= end and cve_id not in rejected_ids:
+            retained = copy.deepcopy(item)
+            retained.setdefault("cwes", [])
+            merged[cve_id] = retained
+    for item in current_records:
+        cve_id = _cve_id(item.get("id"))
+        if not cve_id or cve_id in rejected_ids:
+            continue
+        merged[cve_id] = _merge_refreshed_record(merged[cve_id], item) if cve_id in merged else copy.deepcopy(item)
+
+    current_kev = {_cve_id(item.get("cveID")): item for item in kev_items if isinstance(item, dict) and _cve_id(item.get("cveID"))}
+    for cve_id, record in list(merged.items()):
+        kev = current_kev.get(cve_id)
+        record["affected"] = [item for item in record.get("affected", []) if not (isinstance(item, dict) and item.get("source") == "CISA KEV")]
+        record["refs"] = [item for item in record.get("refs", []) if not (isinstance(item, dict) and item.get("source") == "CISA")]
+        record["sources"] = [source for source in record.get("sources", []) if source != "CISA KEV"]
+        record["kev"] = None
+        if kev:
+            added = str(kev.get("dateAdded") or "")
+            record["kev"] = {"date_added": added, "vendor": str(kev.get("vendorProject") or ""),
+                             "product": str(kev.get("product") or ""), "due_date": str(kev.get("dueDate") or ""),
+                             "required_action": str(kev.get("requiredAction") or ""),
+                             "ransomware": str(kev.get("knownRansomwareCampaignUse") or "Unknown")}
+            record["sources"].append("CISA KEV")
+            if kev.get("vendorProject") or kev.get("product"):
+                record["affected"].append({"vendor": str(kev.get("vendorProject") or ""),
+                                           "product": str(kev.get("product") or ""),
+                                           "versions": "Version details not specified by CISA", "source": "CISA KEV"})
+            record["refs"].append({"label": "CISA KEV catalog", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "source": "CISA"})
+        if not record["sources"]:
+            del merged[cve_id]
+            continue
+        record["affected"] = _merge_rows([], record.get("affected"), "@affected", limit=60)
+        record["refs"] = _merge_rows([], record.get("refs"), "url", limit=14)
+        record["sources"] = sorted(set(record["sources"]), key=lambda source: {"NVD": 0, "GitHub Advisory Database": 1, "CISA KEV": 2}.get(source, 9))
+    return sorted(merged.values(), key=lambda record: (record.get("window_date") or "", record["id"]), reverse=True)
+
+
+def nvd_items_in_rolling_window(items: list[dict[str, Any]], start: datetime, end: datetime) -> list[dict[str, Any]]:
+    filtered = []
+    for item in items:
+        cve = item.get("cve", item) if isinstance(item, dict) else None
+        if not isinstance(cve, dict):
+            raise FeedError("NVD returned a malformed vulnerability record")
+        if str(cve.get("vulnStatus") or "").strip().casefold() == "rejected":
+            continue
+        published = normalize_source_timestamp(cve.get("published"), "NVD publication timestamp")
+        modified = normalize_source_timestamp(cve.get("lastModified"), "NVD lastModified timestamp")
+        activity = [parse_datetime(value) for value in (published, modified) if value]
+        if any(value and start <= value <= end for value in activity):
+            filtered.append(item)
+    return filtered
+
+
+def _assert_ratio(label: str, old: int, new: int) -> None:
+    if old > 0 and (new < old * MIN_BASELINE_RATIO or new > old * MAX_BASELINE_RATIO):
+        raise FeedError(f"Candidate {label} changed suspiciously from {old:,} to {new:,}; previous snapshot preserved for review")
+
+
+def guard_candidate_delta(previous_manifest: dict[str, Any], previous_records: list[dict[str, Any]],
+                         current_records: list[dict[str, Any]], ghsa_total: int, kev_total: int) -> None:
+    """Reject order-of-magnitude source or payload changes pending explicit review."""
+    old_totals = previous_manifest.get("totals") or {}
+    _assert_ratio("CVE count", int(old_totals.get("cves") or 0), len(current_records))
+    old_nvd = sum("NVD" in (item.get("sources") or []) for item in previous_records)
+    new_nvd = sum("NVD" in (item.get("sources") or []) for item in current_records)
+    _assert_ratio("NVD-backed CVE count", old_nvd, new_nvd)
+    old_coverage = previous_manifest.get("coverage") or {}
+    _assert_ratio("GitHub advisory window count", int(old_coverage.get("github_advisories_returned") or 0), ghsa_total)
+    _assert_ratio("CISA KEV catalog count", int(old_coverage.get("cisa_kev_catalog_records") or 0), kev_total)
+    old_bytes = len(_json_bytes(previous_records))
+    new_bytes = len(_json_bytes(current_records))
+    if old_bytes and (new_bytes < old_bytes * MIN_BASELINE_RATIO or new_bytes > old_bytes * MAX_BASELINE_RATIO):
+        raise FeedError(f"Candidate record payload changed suspiciously from {old_bytes:,} to {new_bytes:,} bytes; previous snapshot preserved for review")
+
+
+def snapshot_content_unchanged(previous_records: list[dict[str, Any]], current_records: list[dict[str, Any]],
+                               previous_epss: dict[str, Any], current_epss: dict[str, Any],
+                               previous_status: list[dict[str, Any]], current_epss_status: dict[str, Any],
+                               previous_kev: list[dict[str, Any]] | None,
+                               current_kev: list[dict[str, Any]]) -> bool:
+    old_by_id = {_cve_id(item.get("id")): item for item in previous_records if _cve_id(item.get("id"))}
+    new_by_id = {_cve_id(item.get("id")): item for item in current_records if _cve_id(item.get("id"))}
+    for records in (old_by_id, new_by_id):
+        for record in records.values():
+            record.setdefault("cwes", [])
+    if _canonical_change(old_by_id) != _canonical_change(new_by_id):
+        return False
+    if _canonical_change({key: previous_epss.get(key) for key in ("score_date", "source_updated_at", "scores")}) != _canonical_change(
+        {key: current_epss.get(key) for key in ("score_date", "source_updated_at", "scores")}
+    ):
+        return False
+    old_epss_status = next((item for item in previous_status if item.get("name") == EPSS_SOURCE["name"]), {})
+    if bool(old_epss_status.get("ok")) != bool(current_epss_status.get("ok")):
+        return False
+    normalized_old_kev = _normalize_kev_catalog(previous_kev)
+    normalized_new_kev = _normalize_kev_catalog(current_kev)
+    return normalized_old_kev == normalized_new_kev
+
+
 def _json_bytes(value: Any) -> bytes:
     """Serialize the exact compact UTF-8 JSON bytes published to the static feed."""
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
@@ -1093,7 +1311,7 @@ def build_overview(
     record_by_id = {str(record.get("id") or ""): record for record in records}
     priority = {"NEW_CVE": 0, "CVE_REOBSERVED": 1, "KEV_ADDED": 2, "KEV_CHANGED": 2,
                 "KEV_REMOVED": 2, "CVSS_CHANGED": 3, "EPSS_CHANGED": 4,
-                "AFFECTED_PRODUCTS_CHANGED": 5, "VERSION_RANGE_CHANGED": 5,
+                "AFFECTED_PRODUCTS_CHANGED": 5, "VERSION_RANGE_CHANGED": 5, "CWE_CHANGED": 5,
                 "DESCRIPTION_CHANGED": 6, "TITLE_CHANGED": 6, "ADVISORY_ADDED": 7,
                 "REFERENCE_ADDED": 8}
     eligible = [event for event in (history or {}).get("events", [])
@@ -1172,7 +1390,10 @@ def build_manifest(
     manifest = {
         "schema_version": 2,
         "generated_at": iso_z(generated_at),
+        "capture_generated_at": iso_z(generated_at),
         "last_successful_update": iso_z(generated_at),
+        "dataset_created_at": iso_z(generated_at),
+        "dataset_modified_at": iso_z(generated_at),
         "window": {
             "days": 30,
             "start": iso_z(start),
@@ -1193,6 +1414,7 @@ def build_manifest(
         },
         "coverage": {
             "nvd_records_returned": nvd_total,
+            "nvd_records_in_window": sum("NVD" in (item.get("sources") or []) for item in records),
             "github_advisories_returned": ghsa_total,
             "cisa_kev_catalog_records": kev_total,
             "distinct_cve_records": sharded_total,
@@ -1443,6 +1665,7 @@ def material_change_events(
     previous_core_snapshot_at: datetime | None = None,
     previous_kev_catalog: list[dict[str, Any]] | None = None,
     current_kev_catalog: list[dict[str, Any]] | None = None,
+    nvd_rejections: dict[str, str | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Create source-backed diffs; rolling-window absence is never treated as deletion."""
     old_by_id = {_cve_id(item.get("id")): item for item in previous_records if _cve_id(item.get("id"))}
@@ -1476,9 +1699,14 @@ def material_change_events(
                   "note": "A source reports recent activity; the prior full record is outside the retained feed window, so individual field differences cannot be reconstructed."},
                  source_time, source_label)
 
+    for cve_id, source_time in sorted((nvd_rejections or {}).items()):
+        if cve_id in old_by_id and cve_id not in new_by_id:
+            emit(cve_id, "CVE_REJECTED", {"title": old_by_id[cve_id].get("title")},
+                 {"status": "Rejected"}, source_time, "NVD")
+
     fields = (
         ("desc", "DESCRIPTION_CHANGED"), ("title", "TITLE_CHANGED"),
-        ("affected", "AFFECTED_PRODUCTS_CHANGED"),
+        ("affected", "AFFECTED_PRODUCTS_CHANGED"), ("cwes", "CWE_CHANGED"),
         ("sources", "SOURCE_METADATA_CHANGED"), ("published", "SOURCE_METADATA_CHANGED"),
         ("modified", "SOURCE_METADATA_CHANGED"), ("date_basis", "SOURCE_METADATA_CHANGED"),
     )
@@ -1586,6 +1814,7 @@ def build_change_history(
     current_manifest: dict[str, Any],
     observed_at: datetime,
     current_kev_catalog: list[dict[str, Any]] | None = None,
+    nvd_rejections: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Append only observed comparisons between complete captures; retain a bounded 30-day window."""
     history_path = output_dir / "data" / "history.json"
@@ -1628,7 +1857,7 @@ def build_change_history(
                                    "record_count": len(previous_records), "complete": True}
         events.extend(material_change_events(previous_records, current_records, previous_epss, current_epss,
                                              observed_at, parse_datetime(str(previous_manifest.get("generated_at") or "")),
-                                             previous_kev_catalog, current_kev_catalog))
+                                             previous_kev_catalog, current_kev_catalog, nvd_rejections))
 
     core_at = str(current_manifest.get("generated_at") or iso_z(observed_at))
     snapshot = {"observed_at": iso_z(observed_at), "core_snapshot_at": core_at,
@@ -1686,6 +1915,30 @@ def build_search_index(records: list[dict[str, Any]], epss_snapshot: dict[str, A
         ])
     return {"schema_version": SEARCH_INDEX_SCHEMA_VERSION, "generated_at": records[0].get("activity_at") if records else "", "records": rows}
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_tree(root: Path) -> None:
+    if os.name == "nt":
+        return
+    directories = []
+    for current, _, filenames in os.walk(root):
+        directory = Path(current)
+        directories.append(directory)
+        for filename in filenames:
+            with (directory / filename).open("rb") as source:
+                os.fsync(source.fileno())
+    for directory in reversed(directories):
+        _fsync_directory(directory)
+
+
 def _commit_snapshot(staged_root: Path, output_dir: Path) -> None:
     """Swap a fully validated sibling directory into place and restore on failure."""
     backup = output_dir.with_name(f".{output_dir.name}.backup-{os.getpid()}-{time.time_ns()}")
@@ -1695,11 +1948,16 @@ def _commit_snapshot(staged_root: Path, output_dir: Path) -> None:
     if had_previous:
         os.replace(output_dir, backup)
     try:
+        _fsync_directory(output_dir.parent)
         os.replace(staged_root, output_dir)
+        _fsync_directory(output_dir.parent)
     except BaseException as swap_error:
-        if had_previous and backup.exists() and not output_dir.exists():
+        if had_previous and backup.exists():
             try:
+                if output_dir.exists():
+                    os.replace(output_dir, staged_root)
                 os.replace(backup, output_dir)
+                _fsync_directory(output_dir.parent)
             except Exception as restore_error:
                 raise FeedError(
                     f"Snapshot swap failed ({swap_error!r}) and rollback failed ({restore_error!r}); "
@@ -1708,6 +1966,11 @@ def _commit_snapshot(staged_root: Path, output_dir: Path) -> None:
         raise
     if had_previous:
         shutil.rmtree(backup, ignore_errors=True)
+        try:
+            _fsync_directory(output_dir.parent)
+        except OSError:
+            # The new fully validated directory is already durable; a stale backup is harmless.
+            pass
 
 
 def write_snapshot(
@@ -1799,6 +2062,7 @@ def write_snapshot(
             validate_snapshot(stage_root, write_report=True)
         except Exception as exc:
             raise FeedError(f"Staged snapshot failed offline integrity validation: {exc}") from exc
+        _fsync_tree(stage_root)
         _commit_snapshot(stage_root, output_dir)
     finally:
         if stage_root.exists():
@@ -1818,8 +2082,39 @@ def refresh(
     as_of = (now or utc_now()).astimezone(timezone.utc).replace(microsecond=0)
     start = as_of - timedelta(days=30)
     end = as_of
-    # Fail closed if any feed fails: retain the last complete snapshot rather than
-    # quietly publishing a partial source mix as if it were complete.
+    previous_manifest: dict[str, Any] | None = None
+    previous_records: list[dict[str, Any]] = []
+    previous_epss: dict[str, Any] = {}
+    previous_history: dict[str, Any] = {}
+    if output_dir.exists():
+        if output_dir.is_symlink() or not output_dir.is_dir():
+            raise FeedError("Snapshot output must be a real directory")
+        manifest_path = output_dir / "manifest.json"
+        if manifest_path.is_file():
+            from verify_data_snapshot import validate_snapshot
+            try:
+                validate_snapshot(output_dir)
+                previous_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                previous_records = _load_snapshot_records(output_dir / "data", previous_manifest)
+                previous_epss = json.loads((output_dir / "data" / "epss.json").read_text(encoding="utf-8"))
+                previous_history = json.loads((output_dir / "data" / "history.json").read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise FeedError(f"Existing snapshot is invalid; refusing to use or replace it: {exc}") from exc
+        elif any(output_dir.iterdir()):
+            raise FeedError("Snapshot directory is non-empty but has no valid manifest; refusing to overwrite it")
+
+    cursor = None
+    if previous_manifest:
+        nvd_previous_status = next((item for item in previous_manifest.get("source_status", [])
+                                    if item.get("name") == "NVD CVE API 2.0"), {})
+        cursor = parse_datetime(nvd_previous_status.get("cursor_end"))
+    if cursor and cursor > as_of + timedelta(minutes=5):
+        raise FeedError("Last validated NVD cursor is implausibly ahead of the current clock")
+    full_baseline = cursor is None or as_of - cursor > NVD_CURSOR_MAX_AGE
+    nvd_query_start = start if full_baseline else cursor - NVD_CURSOR_OVERLAP
+
+    # Fail closed if any required source fails; rolling-window absence is never
+    # interpreted as deletion. A complete empty delta is valid after the baseline.
     ingress_budget = _JSONIngressBudget()
 
     def request_with_budget(url: str, headers: dict[str, str] | None = None) -> tuple[Any, Any]:
@@ -1828,27 +2123,48 @@ def refresh(
     def epss_request_with_budget(url: str, headers: dict[str, str] | None = None) -> tuple[Any, Any]:
         return ingress_budget.fetch(epss_api_request_fn, url, headers)
 
-    nvd_items, nvd_total, nvd_pages = iter_nvd(start, end, request_with_budget, sleep_fn, api_key=nvd_api_key)
-    if nvd_total == 0 or not nvd_items:
-        raise FeedError("NVD returned no records; refusing to publish a partial feed")
+    nvd_items, nvd_total, nvd_pages = iter_nvd(nvd_query_start, end, request_with_budget, sleep_fn, api_key=nvd_api_key)
+    if full_baseline and (nvd_total == 0 or not nvd_items):
+        raise FeedError("NVD returned no records for the required full baseline")
     ghsa_items, ghsa_pages = iter_github_advisories(start, end, request_with_budget, token=github_token)
-    if not ghsa_items:
-        raise FeedError("GitHub returned no advisories; refusing to publish a partial feed")
     kev_items, kev_total = fetch_kev(request_with_budget)
     if not kev_items or kev_total != len(kev_items):
         raise FeedError("CISA KEV returned no or inconsistent catalog records; refusing to publish a partial feed")
-    records = build_records(nvd_items, ghsa_items, kev_items, start, end)
+    rejected = rejected_nvd_updates(nvd_items)
+    nvd_window_items = nvd_items_in_rolling_window(nvd_items, start, end)
+    refreshed_records = build_records(nvd_window_items, ghsa_items, kev_items, start, end)
+    records = merge_incremental_records(previous_records, refreshed_records, kev_items, set(rejected), start, end)
     if not records or len(records) > MAX_CORE_RECORDS:
         raise FeedError(f"Merged CVE result is empty or exceeds the {MAX_CORE_RECORDS:,}-record safety limit")
     epss_snapshot, epss_status = build_epss_snapshot(records, output_dir, as_of, epss_csv_loader, epss_request_with_budget)
+    normalized_kev = _normalize_kev_catalog(kev_items)
+    kev_cursor = max((str(item.get("dateAdded") or "") for item in normalized_kev or []), default="")
     statuses = [
-        {"name": "NVD CVE API 2.0", "ok": True, "pages": nvd_pages, "records": nvd_total, "checked_at": iso_z(as_of)},
-        {"name": "GitHub Security Advisory Database", "ok": True, "pages": ghsa_pages, "advisories": len(ghsa_items), "checked_at": iso_z(as_of)},
-        {"name": "CISA KEV", "ok": True, "catalog_records": kev_total, "checked_at": iso_z(as_of)},
+        {"name": "NVD CVE API 2.0", "ok": True, "pages": nvd_pages, "records": nvd_total,
+         "checked_at": iso_z(as_of), "cursor_start": iso_z(nvd_query_start), "cursor_end": iso_z(end),
+         "overlap_seconds": int(NVD_CURSOR_OVERLAP.total_seconds()), "full_baseline": full_baseline},
+        {"name": "GitHub Security Advisory Database", "ok": True, "pages": ghsa_pages,
+         "advisories": len(ghsa_items), "checked_at": iso_z(as_of), "coverage_kind": "complete-rolling-window"},
+        {"name": "CISA KEV", "ok": True, "catalog_records": kev_total, "checked_at": iso_z(as_of),
+         "coverage_kind": "complete-catalog", "cursor": kev_cursor,
+         "catalog_sha256": hashlib.sha256(_json_bytes(normalized_kev)).hexdigest()},
     ]
+    epss_status["coverage_kind"] = "current-record-intersection"
+    epss_status["cursor"] = epss_status.get("score_date") or ""
+    epss_status["scores_sha256"] = hashlib.sha256(_json_bytes(epss_snapshot.get("scores") or {})).hexdigest()
+    if previous_manifest:
+        guard_candidate_delta(previous_manifest, previous_records, records, len(ghsa_items), kev_total)
+        if snapshot_content_unchanged(previous_records, records, previous_epss, epss_snapshot,
+                                      previous_manifest.get("source_status") or [], epss_status,
+                                      previous_history.get("kev_catalog"), kev_items):
+            print("No relevant source data changed; validated cursor was not advanced and the prior snapshot was left byte-for-byte intact.")
+            return previous_manifest
     manifest, shards = build_manifest(records, start, end, as_of, statuses, nvd_total, len(ghsa_items), kev_total)
+    created_at = previous_manifest.get("dataset_created_at") or previous_manifest.get("generated_at") if previous_manifest else iso_z(as_of)
+    manifest["dataset_created_at"] = created_at
+    manifest["dataset_modified_at"] = iso_z(as_of)
     add_epss_metadata(manifest, epss_snapshot, epss_status)
-    history = build_change_history(output_dir, records, epss_snapshot, manifest, as_of, kev_items)
+    history = build_change_history(output_dir, records, epss_snapshot, manifest, as_of, kev_items, rejected)
     write_snapshot(output_dir, manifest, shards, epss_snapshot, history)
     print(
         f"Complete snapshot: {len(records)} unique CVEs across {len(manifest['days'])} UTC day shards; "

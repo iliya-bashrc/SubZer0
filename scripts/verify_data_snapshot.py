@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = REPO_ROOT / "snapshot"
 CVE_RE = re.compile(r"^CVE-\d{4,}-\d+$", re.I)
 GHSA_RE = re.compile(r"^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$", re.I)
+CWE_RE = re.compile(r"^CWE-\d{1,5}$", re.I)
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$", re.I)
 CVSS_VECTOR_RE = re.compile(r"^CVSS:(?:3\.0|3\.1|4\.0)/[A-Za-z0-9:._/-]+$")
 CVSS2_VECTOR_RE = re.compile(
@@ -63,6 +64,7 @@ MAX_AFFECTED = 128
 MAX_REFERENCES = 64
 MAX_RELATED = 100
 MAX_ADVISORIES = 32
+MAX_CWES = 32
 MAX_TAGS = 40
 
 
@@ -250,6 +252,13 @@ def _validate_record(record: Any, expected_day: str, label: str) -> dict[str, An
     for field, limit in (("cvss_version", 8), ("cvss_vector", MAX_CVSS_VECTOR_CHARS), ("cvss_source", 64)):
         if field in record:
             _text(record[field], f"{label}.{field}", limit, allow_empty=True)
+    if "cwes" in record:
+        cwes = record["cwes"]
+        if not isinstance(cwes, list) or len(cwes) > MAX_CWES:
+            raise SnapshotValidationError(f"{label}.cwes must be an array of at most {MAX_CWES} identifiers")
+        clean_cwes = [_text(value, f"{label}.cwes[]", 12) for value in cwes]
+        if clean_cwes != sorted(set(clean_cwes)) or any(not CWE_RE.fullmatch(value) or value != value.upper() for value in clean_cwes):
+            raise SnapshotValidationError(f"{label}.cwes contains invalid, duplicate, or non-canonical identifiers")
     version = record.get("cvss_version", "")
     if version and version not in {"2.0", "3.0", "3.1", "4.0"}:
         raise SnapshotValidationError(f"{label}.cvss_version is unsupported")
@@ -430,6 +439,11 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     last_success = _timestamp(manifest.get("last_successful_update"), "manifest.last_successful_update")
     if last_success != generated:
         raise SnapshotValidationError("manifest last_successful_update must match generated_at")
+    capture_at = _timestamp(manifest.get("capture_generated_at", manifest.get("generated_at")), "manifest.capture_generated_at")
+    created_at = _timestamp(manifest.get("dataset_created_at", manifest.get("generated_at")), "manifest.dataset_created_at")
+    modified_at = _timestamp(manifest.get("dataset_modified_at", manifest.get("generated_at")), "manifest.dataset_modified_at")
+    if capture_at != generated or created_at > modified_at or modified_at > generated:
+        raise SnapshotValidationError("Manifest capture and dataset timestamps are inconsistent")
     now = datetime.now(timezone.utc)
     if generated > now + timedelta(minutes=5):
         raise SnapshotValidationError("manifest.generated_at is implausibly in the future")
@@ -455,8 +469,7 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     if not isinstance(coverage, dict) or coverage.get("sources_complete") is not True:
         raise SnapshotValidationError("Manifest does not declare complete core-source coverage")
     for key in ("nvd_records_returned", "github_advisories_returned", "cisa_kev_catalog_records"):
-        if _manifest_count(coverage, key) == 0:
-            raise SnapshotValidationError(f"Core source {key} is empty")
+        _manifest_count(coverage, key)
     statuses = manifest.get("source_status")
     if not isinstance(statuses, list):
         raise SnapshotValidationError("manifest.source_status must be an array")
@@ -480,15 +493,33 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     nvd_status = status_by_name[CORE_SOURCES[0]]
     github_status = status_by_name[CORE_SOURCES[1]]
     cisa_status = status_by_name[CORE_SOURCES[2]]
-    if _count(nvd_status.get("records"), "NVD source records") != _manifest_count(coverage, "nvd_records_returned"):
+    nvd_records_returned = _count(nvd_status.get("records"), "NVD source records")
+    if nvd_records_returned != _manifest_count(coverage, "nvd_records_returned"):
         raise SnapshotValidationError("NVD status count does not match source coverage")
     if _count(nvd_status.get("pages"), "NVD source pages", 1_000) == 0:
         raise SnapshotValidationError("NVD source status has no completed pages")
+    if "full_baseline" in nvd_status:
+        if type(nvd_status["full_baseline"]) is not bool:
+            raise SnapshotValidationError("NVD full_baseline must be a boolean")
+        cursor_start = _timestamp(nvd_status.get("cursor_start"), "NVD cursor_start")
+        cursor_end = _timestamp(nvd_status.get("cursor_end"), "NVD cursor_end")
+        overlap = _count(nvd_status.get("overlap_seconds"), "NVD overlap_seconds", 86_400)
+        if cursor_start >= cursor_end or cursor_end != generated or overlap != 7_200 or generated - cursor_start > timedelta(days=92):
+            raise SnapshotValidationError("NVD incremental cursor metadata is inconsistent")
+        if nvd_status["full_baseline"] and nvd_records_returned == 0:
+            raise SnapshotValidationError("The initial NVD baseline cannot be empty")
+        if nvd_status["full_baseline"] and cursor_start != start:
+            raise SnapshotValidationError("The initial NVD baseline does not span the complete rolling window")
+    elif nvd_records_returned == 0:
+        raise SnapshotValidationError("Legacy full-window NVD source coverage cannot be empty")
     if _count(github_status.get("advisories"), "GitHub source advisories", MAX_RECORDS) != _manifest_count(coverage, "github_advisories_returned"):
         raise SnapshotValidationError("GitHub status count does not match source coverage")
     if _count(github_status.get("pages"), "GitHub source pages", 250) == 0:
         raise SnapshotValidationError("GitHub source status has no completed pages")
-    if _count(cisa_status.get("catalog_records"), "CISA source records", 10_000) != _manifest_count(coverage, "cisa_kev_catalog_records"):
+    cisa_count = _count(cisa_status.get("catalog_records"), "CISA source records", 10_000)
+    if cisa_count == 0:
+        raise SnapshotValidationError("CISA KEV full-catalog coverage cannot be empty")
+    if cisa_count != _manifest_count(coverage, "cisa_kev_catalog_records"):
         raise SnapshotValidationError("CISA status count does not match source coverage")
 
     sources = manifest.get("sources")
@@ -583,6 +614,11 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
         raise SnapshotValidationError(f"Manifest record total mismatch or limit exceeded: {len(all_ids)}")
     if calculated != expected_totals or calculated_kev != expected_kev:
         raise SnapshotValidationError("Manifest severity or known-exploited totals do not match the shards")
+    if "nvd_records_in_window" in coverage:
+        declared_nvd_window = _count(coverage["nvd_records_in_window"], "manifest.coverage.nvd_records_in_window")
+        actual_nvd_window = sum("NVD" in (record.get("sources") or []) for record in all_records)
+        if declared_nvd_window != actual_nvd_window:
+            raise SnapshotValidationError("Manifest retained NVD-record count does not match the validated shards")
 
     overview_config = manifest.get("overview")
     overview_raw, overview = _verify_blob(root, overview_config, "data/overview.json", MAX_OVERVIEW_BYTES, "overview")
@@ -617,7 +653,7 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     if not isinstance(recent_changes, list) or len(recent_changes) != recent_count or len(recent_changes) > 5:
         raise SnapshotValidationError("overview.recent_changes count is invalid")
     preview_ids: set[str] = set()
-    preview_types = {"NEW_CVE", "CVE_REOBSERVED", "KEV_ADDED", "KEV_CHANGED", "KEV_REMOVED",
+    preview_types = {"NEW_CVE", "CVE_REOBSERVED", "CWE_CHANGED", "KEV_ADDED", "KEV_CHANGED", "KEV_REMOVED",
                      "CVSS_CHANGED", "EPSS_CHANGED", "AFFECTED_PRODUCTS_CHANGED", "VERSION_RANGE_CHANGED",
                      "DESCRIPTION_CHANGED", "TITLE_CHANGED", "ADVISORY_ADDED", "REFERENCE_ADDED"}
     full_by_id = {record["id"]: record for record in all_records}
@@ -689,6 +725,12 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
         age = generated - source_updated
         if age < timedelta(0) or age > timedelta(hours=36):
             raise SnapshotValidationError("EPSS is marked current despite a stale or future-dated score set")
+    if "coverage_kind" in epss_status:
+        expected_scores_hash = hashlib.sha256((json.dumps(scores, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")).hexdigest()
+        if (epss_status.get("coverage_kind") != "current-record-intersection" or
+                epss_status.get("cursor") != score_date or epss_status.get("scores_sha256") != expected_scores_hash or
+                not isinstance(epss_status.get("scores_sha256"), str) or not SHA256_RE.fullmatch(epss_status["scores_sha256"])):
+            raise SnapshotValidationError("EPSS coverage cursor or score fingerprint does not match its sidecar")
     declared_files.add("data/epss.json")
     snapshot_bytes += len(epss_raw)
 
@@ -804,7 +846,7 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
         if item["epss_score_date"]:
             _date(item["epss_score_date"], f"{label}.epss_score_date")
         _count(item["record_count"], f"{label}.record_count")
-    event_types = {"NEW_CVE", "CVE_UPDATED", "CVE_REOBSERVED", "CVSS_CHANGED", "TITLE_CHANGED", "DESCRIPTION_CHANGED",
+    event_types = {"NEW_CVE", "CVE_UPDATED", "CVE_REOBSERVED", "CVE_REJECTED", "CWE_CHANGED", "CVSS_CHANGED", "TITLE_CHANGED", "DESCRIPTION_CHANGED",
                    "KEV_ADDED", "KEV_CHANGED", "KEV_REMOVED", "EPSS_CHANGED", "AFFECTED_PRODUCTS_CHANGED",
                    "REFERENCE_CHANGED", "REFERENCE_ADDED", "REFERENCE_REMOVED", "ADVISORY_CHANGED",
                    "ADVISORY_ADDED", "ADVISORY_REMOVED", "VERSION_RANGE_CHANGED", "SOURCE_METADATA_CHANGED"}
@@ -831,7 +873,7 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
 
     preview_priority = {"NEW_CVE": 0, "CVE_REOBSERVED": 1, "KEV_ADDED": 2, "KEV_CHANGED": 2,
                         "KEV_REMOVED": 2, "CVSS_CHANGED": 3, "EPSS_CHANGED": 4,
-                        "AFFECTED_PRODUCTS_CHANGED": 5, "VERSION_RANGE_CHANGED": 5,
+                        "AFFECTED_PRODUCTS_CHANGED": 5, "VERSION_RANGE_CHANGED": 5, "CWE_CHANGED": 5,
                         "DESCRIPTION_CHANGED": 6, "TITLE_CHANGED": 6, "ADVISORY_ADDED": 7,
                         "REFERENCE_ADDED": 8}
     preview_candidates = [item for item in events if item["id"] in full_by_id and item["type"] in preview_priority]
@@ -872,6 +914,17 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
             _text(item[key], f"{label}.{key}", limit, allow_empty=True, multiline=True)
     if len(json.dumps(kev_catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 4 * 1024 * 1024:
         raise SnapshotValidationError("Change-history CISA catalog baseline exceeds 4 MiB")
+    cisa_status = status_by_name[CORE_SOURCES[2]]
+    if "coverage_kind" in cisa_status:
+        catalog_hash = hashlib.sha256((json.dumps(kev_catalog, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")).hexdigest()
+        catalog_cursor = max((item["dateAdded"] for item in kev_catalog), default="")
+        if (cisa_status.get("coverage_kind") != "complete-catalog" or cisa_status.get("cursor") != catalog_cursor or
+                cisa_status.get("catalog_sha256") != catalog_hash or
+                not isinstance(cisa_status.get("catalog_sha256"), str) or not SHA256_RE.fullmatch(cisa_status["catalog_sha256"])):
+            raise SnapshotValidationError("CISA KEV cursor or catalog fingerprint does not match its complete history sidecar")
+    github_status = status_by_name[CORE_SOURCES[1]]
+    if "coverage_kind" in github_status and github_status.get("coverage_kind") != "complete-rolling-window":
+        raise SnapshotValidationError("GitHub advisory coverage is not a complete rolling-window query")
 
     declared_files.add("data/history.json")
     snapshot_bytes += len(history_raw)

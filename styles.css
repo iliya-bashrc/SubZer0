@@ -101,6 +101,11 @@ body[data-skin="glass"] { color-scheme: dark; background: #090e12; --nav-bg: #09
 
 .snapshot-status-strip { margin: 0 0 18px; padding: 10px 13px 11px; border: 1px solid #2c4048; border-left: 2px solid #6f9eac; background: #0e171b; }
 .snapshot-status-strip__state { margin: 0 0 8px; color: #cad7db; font-size: 10.5px; font-weight: 580; line-height: 1.45; }
+.snapshot-status-strip__run-status { margin: -2px 0 8px; color: #84949b; font-size: 10.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.snapshot-status-strip__run-status[data-state="success"] { color: #a9c9b7; }
+.snapshot-status-strip__run-status[data-state="failure"], .snapshot-status-strip__run-status[data-state="cancelled"] { color: #edaf88; }
+.snapshot-status-strip__run-status[data-state="running"] { color: #ddc982; }
+.snapshot-status-strip__run-status a { color: #a3ceda; margin-left: 4px; text-underline-offset: 2px; }
 .snapshot-status-strip__state[data-state="preview"], .snapshot-status-strip__state[data-state="verified"], .snapshot-status-strip__state[data-state="fresh"] { color: #bfdae2; }
 .snapshot-status-strip__state[data-state="delayed"] { color: #ddc982; }
 .snapshot-status-strip__state[data-state="stale"], .snapshot-status-strip__state[data-state="degraded"] { color: #edaf88; }

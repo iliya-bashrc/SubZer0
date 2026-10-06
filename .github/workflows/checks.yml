@@ -47,11 +47,14 @@ jobs:
       - name: Run network-mocked updater and snapshot-integrity tests
         run: python -m unittest discover -s tests -v
 
+      - name: Install the integrity-locked Wrangler toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Build and test the optional Worker preview without publishing
         run: |
           node scripts/build_worker_assets.mjs
           node --test tests/worker.test.mjs tests/worker-assets.test.mjs
-          npx --yes wrangler@4.147.0 deploy --dry-run
+          ./node_modules/.bin/wrangler deploy --dry-run
 
       - name: Install pinned Chromium runtime
         run: python -m playwright install --with-deps chromium

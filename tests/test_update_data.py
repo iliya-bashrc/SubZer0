@@ -9,12 +9,87 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import urllib.error
+from email.message import Message
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import update_data as feed  # noqa: E402
+
+
+class UpstreamRequestTests(unittest.TestCase):
+    @staticmethod
+    def _response(body: bytes = b'{"ok":true}'):
+        response = mock.MagicMock()
+        response.headers = Message()
+        response.read.return_value = body
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        return response
+
+    @staticmethod
+    def _http_error(code: int, retry_after: str | None = None):
+        headers = Message()
+        if retry_after:
+            headers['Retry-After'] = retry_after
+        return urllib.error.HTTPError(feed.NVD_API, code, 'fixture', headers, io.BytesIO(b''))
+
+    def test_all_transient_http_statuses_retry_once_and_recover(self):
+        url = f'{feed.NVD_API}?resultsPerPage=1'
+        for code in (408, 425, 429, 500, 502, 503, 504):
+            with self.subTest(status=code):
+                opener = mock.MagicMock()
+                opener.open.side_effect = [self._http_error(code), self._response()]
+                with mock.patch.object(feed.urllib.request, 'build_opener', return_value=opener), \
+                     mock.patch.object(feed.time, 'sleep') as sleep:
+                    payload, _headers = feed.request_json(url)
+                self.assertEqual(payload, {'ok': True})
+                self.assertEqual(opener.open.call_count, 2)
+                sleep.assert_called_once_with(1)
+
+    def test_retry_after_is_bounded_and_http_403_api_key_rejection_fails_without_retry(self):
+        opener = mock.MagicMock()
+        opener.open.side_effect = [self._http_error(429, '9'), self._response()]
+        with mock.patch.object(feed.urllib.request, 'build_opener', return_value=opener), \
+             mock.patch.object(feed.time, 'sleep') as sleep:
+            feed.request_json(f'{feed.NVD_API}?resultsPerPage=1')
+        sleep.assert_called_once_with(9)
+
+        opener = mock.MagicMock()
+        opener.open.side_effect = self._http_error(403)
+        with mock.patch.object(feed.urllib.request, 'build_opener', return_value=opener), \
+             mock.patch.object(feed.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(feed.FeedError, 'HTTP 403'):
+                feed.request_json(f'{feed.NVD_API}?resultsPerPage=1', {'apiKey': 'rejected-test-key'})
+        opener.open.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_timeout_connection_and_dns_errors_retry_with_a_fixed_attempt_limit(self):
+        url = f'{feed.NVD_API}?resultsPerPage=1'
+        failures = (TimeoutError('fixture timeout'), urllib.error.URLError('connection reset'),
+                    urllib.error.URLError(OSError('fixture DNS failure')))
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                opener = mock.MagicMock()
+                opener.open.side_effect = [failure, self._response()]
+                with mock.patch.object(feed.urllib.request, 'build_opener', return_value=opener), \
+                     mock.patch.object(feed.time, 'sleep') as sleep:
+                    payload, _headers = feed.request_json(url)
+                self.assertEqual(payload, {'ok': True})
+                self.assertEqual(opener.open.call_count, 2)
+                sleep.assert_called_once_with(1)
+
+    def test_malformed_or_duplicate_key_json_fails_closed_without_retry(self):
+        for body in (b'{"ok":', b'{"ok":true,"ok":false}'):
+            with self.subTest(body=body):
+                opener = mock.MagicMock()
+                opener.open.return_value = self._response(body)
+                with mock.patch.object(feed.urllib.request, 'build_opener', return_value=opener):
+                    with self.assertRaises(feed.FeedError):
+                        feed.request_json(f'{feed.NVD_API}?resultsPerPage=1')
+                opener.open.assert_called_once()
 
 
 class PaginationTests(unittest.TestCase):
@@ -77,11 +152,13 @@ class PaginationTests(unittest.TestCase):
         end = datetime(2026, 9, 30, tzinfo=timezone.utc)
         calls = []
         page = {"totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-0001"}}]}
-        feed.iter_nvd(start, end, lambda url, headers=None: (calls.append(url) or page, {}),
-                      lambda _: None, date_field="published")
-        query = parse_qs(urlparse(calls[0]).query)
+        feed.iter_nvd(start, end, lambda url, headers=None: (calls.append((url, headers)) or page, {}),
+                      lambda _: None, date_field="published", api_key="fixture-secret-not-real")
+        query = parse_qs(urlparse(calls[0][0]).query)
         self.assertIn("pubStartDate", query)
         self.assertIn("pubEndDate", query)
+        self.assertEqual(calls[0][1], {"apiKey": "fixture-secret-not-real"})
+        self.assertNotIn("apiKey", query)
 
     def test_nvd_fails_on_empty_or_changing_pages(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -127,14 +204,15 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(query["modified"], ["2026-09-01..2026-09-30"])
         self.assertEqual(query["sort"], ["updated"])
 
-    def test_github_rejects_off_origin_cursor_and_empty_success(self):
+    def test_github_rejects_off_origin_cursor_and_accepts_complete_empty_window(self):
         bad_cursor = "https://attacker.example/advisories?after=next"
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         end = datetime(2026, 9, 30, tzinfo=timezone.utc)
         with self.assertRaises(feed.FeedError):
             feed.iter_github_advisories(start, end, lambda *_args, **_kwargs: ([{"ghsa_id": "GHSA-one"}], {"Link": f'<{bad_cursor}>; rel="next"'}))
-        with self.assertRaises(feed.FeedError):
-            feed.iter_github_advisories(start, end, lambda *_args, **_kwargs: ([], {}))
+        items, pages = feed.iter_github_advisories(start, end, lambda *_args, **_kwargs: ([], {}))
+        self.assertEqual(items, [])
+        self.assertEqual(pages, 1)
 
     def test_cisa_requires_nonempty_count_matched_catalog(self):
         with self.assertRaises(feed.FeedError):
@@ -331,6 +409,49 @@ class ChangeHistoryTests(unittest.TestCase):
         self.assertEqual(by_pair, {("CVE-2019-9001", "KEV_CHANGED"), ("CVE-2018-9002", "KEV_REMOVED"), ("CVE-2026-9003", "KEV_ADDED")})
 
 
+class IncrementalIngestionTests(unittest.TestCase):
+    def setUp(self):
+        self.start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        self.end = datetime(2026, 9, 30, tzinfo=timezone.utc)
+        self.activity = "2026-09-15T12:00:00Z"
+
+    def test_cwe_values_are_normalized_deduplicated_and_change_is_a_real_event(self):
+        cve = {"id": "CVE-2026-9101", "published": self.activity, "lastModified": self.activity,
+               "descriptions": [{"lang": "en", "value": "Weakness fixture."}],
+               "weaknesses": [{"description": [{"lang": "en", "value": "CWE-79"}]},
+                              {"description": [{"lang": "en", "value": "CWE-89"}]},
+                              {"description": [{"lang": "en", "value": "NVD-CWE-noinfo"}]}]}
+        record = feed.build_records([{"cve": cve}], [], [], self.start, self.end)[0]
+        self.assertEqual(record["cwes"], ["CWE-79", "CWE-89"])
+        changed = {**record, "cwes": ["CWE-79"]}
+        events = feed.material_change_events([changed], [record], None, None, self.end,
+                                             self.end - timedelta(days=1))
+        cwe_event = next(event for event in events if event["type"] == "CWE_CHANGED")
+        self.assertEqual(cwe_event["from"], ["CWE-79"])
+        self.assertEqual(cwe_event["to"], ["CWE-79", "CWE-89"])
+
+    def test_omission_preserves_a_live_record_and_only_explicit_nvd_rejection_removes_it(self):
+        cve = {"id": "CVE-2026-9102", "published": self.activity, "lastModified": self.activity,
+               "descriptions": [{"lang": "en", "value": "Retained fixture."}]}
+        previous = feed.build_records([{"cve": cve}], [], [], self.start, self.end)
+        carried = feed.merge_incremental_records(previous, [], [], set(), self.start, self.end)
+        self.assertEqual([item["id"] for item in carried], ["CVE-2026-9102"])
+        removed = feed.merge_incremental_records(previous, [], [], {"CVE-2026-9102"}, self.start, self.end)
+        self.assertEqual(removed, [])
+        rejection = feed.material_change_events(previous, [], None, None, self.end,
+                                               nvd_rejections={"CVE-2026-9102": self.activity})
+        self.assertEqual([item["type"] for item in rejection], ["CVE_REJECTED"])
+        self.assertEqual(rejection[0]["source"], "NVD")
+
+    def test_large_candidate_shrink_is_rejected(self):
+        previous_manifest = {"totals": {"cves": 10}, "coverage": {
+            "github_advisories_returned": 8, "cisa_kev_catalog_records": 12}}
+        previous_records = [{"id": f"CVE-2026-{index:04d}", "sources": ["NVD"]} for index in range(10)]
+        candidate = previous_records[:4]
+        with self.assertRaisesRegex(feed.FeedError, "CVE count changed suspiciously"):
+            feed.guard_candidate_delta(previous_manifest, previous_records, candidate, 8, 12)
+
+
 class EpssTests(unittest.TestCase):
     def test_csv_parser_reads_score_date_and_filters_ids(self):
         csv_text = (
@@ -416,6 +537,85 @@ class PipelineFailureTests(unittest.TestCase):
 
         return request, epss
 
+    def test_incremental_cursor_overlap_updates_record_then_no_change_preserves_bytes(self):
+        now = self._now()
+        request, epss = self._request_for(now)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot"
+            first = feed.refresh(output, now, request, lambda _: None, epss_csv_loader=epss)
+            first_bytes = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+            cursor_starts = []
+            modified_at = now + timedelta(seconds=30)
+
+            def changed_delta(url, headers=None):
+                if url.startswith(feed.NVD_API):
+                    params = parse_qs(urlparse(url).query)
+                    cursor_starts.append(params["lastModStartDate"][0])
+                    payload, response_headers = request(url, headers)
+                    cve = payload["vulnerabilities"][0]["cve"]
+                    cve["lastModified"] = feed.iso_z(modified_at)
+                    cve["descriptions"] = [{"lang": "en", "value": "A corrected incremental fixture description."}]
+                    cve["weaknesses"] = [{"description": [{"lang": "en", "value": "CWE-79"}]}]
+                    return payload, response_headers
+                return request(url, headers)
+
+            second_time = now + timedelta(minutes=1)
+            second = feed.refresh(output, second_time, changed_delta, lambda _: None, epss_csv_loader=epss)
+            expected_cursor = now - timedelta(hours=2)
+            self.assertEqual(cursor_starts, [expected_cursor.strftime("%Y-%m-%dT%H:%M:%S.000")])
+            nvd_status = next(item for item in second["source_status"] if item["name"] == "NVD CVE API 2.0")
+            self.assertFalse(nvd_status["full_baseline"])
+            self.assertEqual(nvd_status["cursor_end"], feed.iso_z(second_time))
+            records = feed._load_snapshot_records(output / "data", second)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["desc"], "A corrected incremental fixture description.")
+            self.assertEqual(records[0]["cwes"], ["CWE-79"])
+            history = json.loads((output / "data" / "history.json").read_text(encoding="utf-8"))
+            self.assertIn("CWE_CHANGED", {event["type"] for event in history["events"]})
+            self.assertIn("DESCRIPTION_CHANGED", {event["type"] for event in history["events"]})
+            second_bytes = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+            self.assertNotEqual(first_bytes, second_bytes)
+
+            before_no_change = second_bytes
+            third_time = now + timedelta(minutes=2)
+            third = feed.refresh(output, third_time, changed_delta, lambda _: None, epss_csv_loader=epss)
+            self.assertEqual(third["generated_at"], second["generated_at"])
+            self.assertEqual(cursor_starts[-1], (second_time - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.000"))
+            after_no_change = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+            self.assertEqual(after_no_change, before_no_change)
+
+    def test_optional_epss_failure_retains_verified_scores_and_marks_them_stale(self):
+        current_time = self._now()
+        now = current_time - timedelta(hours=9)
+        request, epss = self._request_for(now)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "snapshot"
+            first = feed.refresh(output, now, request, lambda _: None, epss_csv_loader=epss)
+            previous_epss = json.loads((output / "data" / "epss.json").read_text(encoding="utf-8"))
+            self.assertEqual(previous_epss["scores"]["CVE-2026-7001"]["score"], 0.2)
+
+            def epss_unavailable(_ids):
+                raise RuntimeError("EPSS fixture outage")
+
+            later = current_time
+            second = feed.refresh(output, later, request, lambda _: None, epss_csv_loader=epss_unavailable)
+            retained_epss = json.loads((output / "data" / "epss.json").read_text(encoding="utf-8"))
+            statuses = {item["name"]: item for item in second["source_status"]}
+
+            self.assertEqual(second["totals"]["cves"], first["totals"]["cves"])
+            self.assertTrue(statuses["NVD CVE API 2.0"]["ok"])
+            self.assertTrue(statuses["GitHub Security Advisory Database"]["ok"])
+            self.assertTrue(statuses["CISA KEV"]["ok"])
+            self.assertFalse(statuses["FIRST EPSS"]["ok"])
+            self.assertEqual(retained_epss["scores"], previous_epss["scores"])
+            self.assertIn("retaining prior scores", statuses["FIRST EPSS"]["note"])
+            self.assertEqual(second["epss"]["score_date"], previous_epss["score_date"])
+            self.assertTrue(second["coverage"]["sources_complete"])
+            from verify_data_snapshot import validate_snapshot
+            report = validate_snapshot(output)
+            self.assertEqual(report["records"], 1)
+            self.assertEqual(report["epss_status"], "stale-or-unavailable")
+
     def test_success_writes_only_current_static_paths_and_validation_report(self):
         now = self._now()
         request, epss = self._request_for(now)
@@ -450,12 +650,16 @@ class PipelineFailureTests(unittest.TestCase):
             def empty_nvd(url, headers=None):
                 if url.startswith(feed.NVD_API):
                     return {"totalResults": 0, "vulnerabilities": []}, {}
-                raise AssertionError("An empty NVD result must abort before later sources")
+                return request(url, headers)
 
-            with self.assertRaises(feed.FeedError):
-                feed.refresh(output, now, empty_nvd, lambda _: None, epss_csv_loader=epss)
+            no_change_manifest = feed.refresh(output, now, empty_nvd, lambda _: None, epss_csv_loader=epss)
+            self.assertEqual(no_change_manifest["generated_at"], json.loads((output / "manifest.json").read_text())["generated_at"])
             after = {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*") if p.is_file()}
             self.assertEqual(after, before)
+
+            fresh_output = Path(temporary) / "empty-baseline"
+            with self.assertRaisesRegex(feed.FeedError, "full baseline"):
+                feed.refresh(fresh_output, now, empty_nvd, lambda _: None, epss_csv_loader=epss)
 
             def fail_github(url, headers=None):
                 if url.startswith(feed.NVD_API):
