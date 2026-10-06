@@ -196,8 +196,10 @@ dialog .d-close:hover{color:var(--txt)}
 /* ---------- responsive ---------- */
 @media (max-width:860px){
   .kpi-grid{grid-template-columns:repeat(2,1fr)}
-  .nav{order:3;width:100%;overflow-x:auto}
-  .live-pill{margin-left:auto}
+  .topbar-inner{gap:10px}
+  .brand{flex:1}
+  .live-pill{flex:none}
+  .nav{order:3;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
 @media (max-width:520px){
   .kpi-grid{grid-template-columns:1fr 1fr;gap:10px}
