@@ -260,7 +260,7 @@ class PipelineFailureTests(unittest.TestCase):
             self.assertEqual(manifest["totals"]["cves"], 1)
             self.assertFalse((Path(temporary) / "api").exists())
             data_names = {path.name for path in (output / "data").iterdir()}
-            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json"})
+            self.assertEqual(data_names, {f"{day['date']}.json" for day in manifest["days"]} | {"overview.json", "epss.json", "search_index.json", "shard_map.json"})
 
     def test_core_source_failure_or_empty_result_preserves_every_prior_snapshot_byte(self):
         now = self._now()

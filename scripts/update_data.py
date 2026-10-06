@@ -1403,6 +1403,15 @@ def write_snapshot(
     if generated_at is None:
         raise FeedError("Manifest generated_at is invalid")
 
+    generated_at_iso = str(manifest.get("generated_at") or "")
+    previous_generated_at = None
+    try:
+        _prev_manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+        if _prev_manifest.get("complete") is True:
+            previous_generated_at = str(_prev_manifest.get("generated_at") or None)
+    except (OSError, ValueError):
+        previous_generated_at = None
+
     stage_root = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.staging-", dir=output_dir.parent))
     try:
         data_root = stage_root / "data"
@@ -1436,7 +1445,68 @@ def write_snapshot(
         epss_meta["sha256"] = hashlib.sha256(epss_bytes).hexdigest()
         (data_root / "overview.json").write_bytes(overview_bytes)
         (data_root / "epss.json").write_bytes(epss_bytes)
+        # Compact frontend search index + id->shard map (subzer0-ng)
+        _epss_scores = (epss_snapshot or {}).get("scores") or {}
+        search_index = []
+        shard_map = {}
+        for record in records:
+            cve_id = str(record.get("id") or "")
+            affected = record.get("affected") or []
+            products = " ".join(f"{a.get('vendor', '')} {a.get('product', '')}" for a in affected)[:80]
+            search_index.append([
+                cve_id,
+                str(record.get("title") or record.get("desc") or "")[:110],
+                str(record.get("sev") or "none"),
+                round(float(record.get("score") or 0.0), 1),
+                1 if record.get("kev") else 0,
+                (_epss_scores.get(cve_id) or {}).get("score"),
+                str(record.get("activity_at") or "")[:10],
+                str(record.get("published") or "")[:10],
+                products,
+            ])
+            shard_map[cve_id] = str(record.get("window_date") or "")
+        index_bytes = _json_bytes(search_index)
+        shard_map_bytes = _json_bytes(shard_map)
+        (data_root / "search_index.json").write_bytes(index_bytes)
+        (data_root / "shard_map.json").write_bytes(shard_map_bytes)
+        manifest["search_index"] = {
+            "schema_version": 1,
+            "path": "data/search_index.json",
+            "bytes": len(index_bytes),
+            "sha256": hashlib.sha256(index_bytes).hexdigest(),
+            "count": len(search_index),
+        }
+        manifest["shard_map"] = {
+            "schema_version": 1,
+            "path": "data/shard_map.json",
+            "bytes": len(shard_map_bytes),
+            "sha256": hashlib.sha256(shard_map_bytes).hexdigest(),
+            "count": len(shard_map),
+        }
         _write_json(stage_root / "manifest.json", manifest)
+
+        # subzer0-ng: publish a compact change feed for the frontend, derived from
+        # the retained history events plus the new-CVE diff against the previous
+        # complete snapshot. Only real comparisons produce events; never hand-written.
+        try:
+            history_path = output_dir / "history.json"
+            history_events = []
+            if history_path.is_file():
+                retained = json.loads(history_path.read_text(encoding="utf-8"))
+                history_events = [e for e in (retained.get("events") or []) if isinstance(e, dict)]
+            changes_payload = {
+                "schema_version": 1,
+                "generated_at": generated_at_iso,
+                "previous_snapshot": previous_generated_at,
+                "events": history_events,
+                "counts": {},
+            }
+            for event in changes_payload["events"]:
+                kind = str(event.get("type") or "other")
+                changes_payload["counts"][kind] = changes_payload["counts"].get(kind, 0) + 1
+            (stage_root / "changes.json").write_bytes(_json_bytes(changes_payload))
+        except (OSError, ValueError) as changes_exc:
+            raise FeedError(f"Failed to stage the change feed: {changes_exc}") from exc
 
         try:
             validate_snapshot(stage_root, write_report=True)

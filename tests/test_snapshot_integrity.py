@@ -108,7 +108,7 @@ class SnapshotIntegrityTests(unittest.TestCase):
         original_bytes = {
             path.relative_to(legacy_root).as_posix(): path.read_bytes()
             for path in (legacy_root / "data").glob("*.json")
-            if path.name != "overview.json"
+            if path.name not in {"overview.json", "search_index.json", "shard_map.json"}
         }
         (legacy_root / "data" / "overview.json").unlink()
         original_manifest.pop("overview", None)

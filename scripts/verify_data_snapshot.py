@@ -601,6 +601,22 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     declared_files.add("data/epss.json")
     snapshot_bytes += len(epss_raw)
 
+    # Optional subzer0-ng index artifacts: validated when present in the manifest.
+    for artifact_key in ("search_index", "shard_map"):
+        artifact_meta = manifest.get(artifact_key)
+        if not isinstance(artifact_meta, dict) or not artifact_meta.get("path"):
+            continue
+        artifact_path = str(artifact_meta["path"])
+        if artifact_path not in {"data/search_index.json", "data/shard_map.json"}:
+            raise SnapshotValidationError(f"manifest.{artifact_key}.path is not an allowed index artifact")
+        artifact_raw = (root / artifact_path).read_bytes()
+        if artifact_meta.get("bytes") != len(artifact_raw):
+            raise SnapshotValidationError(f"manifest.{artifact_key}.bytes mismatch")
+        if artifact_meta.get("sha256") != hashlib.sha256(artifact_raw).hexdigest():
+            raise SnapshotValidationError(f"manifest.{artifact_key}.sha256 mismatch")
+        declared_files.add(artifact_path)
+        snapshot_bytes += len(artifact_raw)
+
     if snapshot_bytes > MAX_SNAPSHOT_BYTES:
         raise SnapshotValidationError(f"Static snapshot exceeds its {MAX_SNAPSHOT_BYTES}-byte total limit")
     data_root = root / "data"

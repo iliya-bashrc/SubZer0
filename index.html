@@ -1,273 +1,154 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#080c0f">
-  <meta name="description" content="Explore a verified static snapshot of CVE intelligence from NVD, GitHub advisories, CISA KEV and FIRST EPSS.">
-  <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>SubZer0 — CVE intelligence snapshot</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 30 16 16 30 2 16Z' fill='none' stroke='%237aa5b4' stroke-width='2'/%3E%3Cpath d='M16 7v18M8 11.5l16 9M24 11.5l-16 9' fill='none' stroke='%237aa5b4' stroke-width='1.5'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="community.css">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="feed.css">
-  <link rel="stylesheet" href="severity-effects.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#060a0d">
+<meta name="description" content="SubZer0 v2 — fast, interactive CVE intelligence from NVD, GitHub advisories, CISA KEV and FIRST EPSS.">
+<title>SubZer0 — Zero-Day Radar v2</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 30 16 16 30 2 16Z' fill='none' stroke='%2338d6e0' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%2338d6e0'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
 </head>
-<body data-skin="metal">
-  <a class="skip-link" href="#main-content">Skip to content</a>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
 
-  <header class="site-header">
-    <div class="site-header-inner">
-      <a class="wordmark" href="#page-overview" aria-label="SubZer0 overview">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-          <path d="M16 2.5 29.5 16 16 29.5 2.5 16 16 2.5Z" fill="none" stroke="currentColor" stroke-width="1.4"/>
-          <path d="M16 8v16M9.1 12l13.8 8M22.9 12 9.1 20" fill="none" stroke="currentColor" stroke-width="1.2"/>
-        </svg>
-        <span>SubZer0</span>
-      </a>
-      <div class="header-navigation">
-        <nav class="page-nav" role="tablist" aria-label="SubZer0 pages">
-          <button class="nav-tab is-active" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="page-overview" tabindex="0" data-page="overview">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx=".5"/><rect x="12" y="3" width="5" height="5" rx=".5"/><rect x="3" y="12" width="5" height="5" rx=".5"/><rect x="12" y="12" width="5" height="5" rx=".5"/></svg><span>Overview</span>
-          </button>
-          <button class="nav-tab" id="tab-latest" type="button" role="tab" aria-selected="false" aria-controls="page-latest" tabindex="-1" data-page="latest">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h8"/><circle cx="2.5" cy="5" r=".6"/><circle cx="2.5" cy="10" r=".6"/><circle cx="2.5" cy="15" r=".6"/></svg><span>Latest</span>
-          </button>
-          <button class="nav-tab" id="tab-center" type="button" role="tab" aria-selected="false" aria-controls="page-center" tabindex="-1" data-page="center">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.3"/><path d="m12.5 12.5 4 4"/></svg><span>Explore</span>
-          </button>
-          <button class="nav-tab" id="tab-archive" type="button" role="tab" aria-selected="false" aria-controls="page-archive" tabindex="-1" data-page="archive">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="13" rx="1"/><path d="M6.5 2.5v3M13.5 2.5v3M3 8h14M6 11h2M10 11h2M6 14h2"/></svg><span>Archive</span>
-          </button>
-          <button class="nav-tab" id="tab-community" type="button" role="tab" aria-selected="false" aria-controls="page-community" tabindex="-1" data-page="community">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 5-4 5 4 5M14 5l4 5-4 5M11.5 3 8.5 17"/></svg><span>Community</span>
-          </button>
-        </nav>
-        <button class="header-search-return" id="header-search-return" type="button" aria-label="Return to CVE search" aria-keyshortcuts="/" title="Return to CVE search (/ )" hidden>
-          <svg class="header-search-return__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-          <span class="header-search-return__label">Search</span><kbd class="header-search-return__shortcut" aria-hidden="true">/</kbd>
-        </button>
-      </div>
-      <span class="preview-mark"><span aria-hidden="true"></span>Captured snapshot</span>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#overview" data-nav="overview">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.5 29.5 16 16 29.5 2.5 16Z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="16" r="3.4" fill="currentColor"/></svg>
+      <span>Sub<em>Zero</em><small>v2</small></span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <button class="nav-btn is-active" data-nav="overview">Overview</button>
+      <button class="nav-btn" data-nav="explore">Explore</button>
+      <button class="nav-btn" data-nav="kev">KEV Watch</button>
+      <button class="nav-btn" data-nav="changes">Changes</button>
+      <button class="nav-btn" data-nav="community">Community</button>
+    </nav>
+    <div class="live-pill" id="live-pill"><span class="pulse" aria-hidden="true"></span><span id="live-text">Loading…</span></div>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+
+<!-- ============ OVERVIEW ============ -->
+<section class="page is-current" id="page-overview">
+  <div class="hero">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <p class="eyebrow">Zero-Day Radar</p>
+    <h1>See the threat surface<br><span class="grad">before it sees you.</span></h1>
+    <p class="lead">A verified 30-day capture across NVD, GitHub advisories, CISA KEV &amp; FIRST EPSS — rebuilt to be faster, sharper and interactive.</p>
+    <div class="hero-cta">
+      <button class="btn btn-primary" data-nav="explore">Explore records →</button>
+      <button class="btn btn-ghost" data-nav="kev">Exploited in the wild</button>
     </div>
-  </header>
+  </div>
 
-  <aside class="snapshot-update-notice" id="snapshot-update-notice" role="status" aria-live="polite" aria-atomic="true" hidden>
-    <p id="snapshot-update-copy"></p>
-    <div class="snapshot-update-notice__actions">
-      <button id="snapshot-update-reload" type="button">Reload verified capture</button>
-      <button id="snapshot-update-dismiss" type="button" aria-label="Dismiss newer snapshot notice">Later</button>
+  <section class="kpi-grid" aria-label="Snapshot totals">
+    <article class="kpi glass"><span class="kpi-label">CVE records</span><strong id="kpi-total">—</strong><span class="kpi-note">in 30-day window</span></article>
+    <article class="kpi glass kpi-critical"><span class="kpi-label">Critical</span><strong id="kpi-critical">—</strong><span class="kpi-note">CVSS 9.0+</span></article>
+    <article class="kpi glass kpi-kev"><span class="kpi-label">CISA KEV</span><strong id="kpi-kev">—</strong><span class="kpi-note">known exploited</span></article>
+    <article class="kpi glass"><span class="kpi-label">EPSS coverage</span><strong id="kpi-epss">—</strong><span class="kpi-note" id="kpi-epss-note">scored</span></article>
+  </section>
+
+  <section class="panel glass">
+    <div class="panel-head">
+      <div><h2>Daily activity</h2><p id="activity-sub">Loading window…</p></div>
+      <div class="legend" aria-hidden="true">
+        <span><i class="dot crit"></i>Critical</span><span><i class="dot high"></i>High</span>
+        <span><i class="dot med"></i>Medium</span><span><i class="dot low"></i>Low/Other</span>
+      </div>
     </div>
-  </aside>
+    <canvas id="chart" height="220" role="img" aria-label="Daily CVE counts stacked by severity"></canvas>
+    <div id="chart-tip" class="chart-tip" hidden></div>
+  </section>
 
-  <main id="main-content" tabindex="-1">
-    <section class="page page-overview is-current" id="page-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
-      <div class="overview-wrap">
-        <header class="overview-heading">
-          <div class="overview-heading__copy">
-            <p class="section-context">Vulnerability intelligence</p>
-            <h1>CVE intelligence, with its evidence attached.</h1>
-            <p class="overview-lead">A verified, dated view of records across NVD, GitHub advisories and CISA KEV. Compare the signals; open the source record when you need the detail.</p>
-          </div>
-          <button class="primary-action" id="explore-cves" type="button">Explore records</button>
-        </header>
+  <section class="panel glass">
+    <div class="panel-head"><div><h2>Newest records</h2><p>Latest additions to the capture</p></div>
+    <button class="text-link" data-nav="explore">View all →</button></div>
+    <ol class="latest-list" id="latest-list" aria-busy="true"></ol>
+  </section>
+  <footer class="foot">Static verified snapshot · sources labeled as recorded · built for @RootAccessClub</footer>
+</section>
 
-        <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot capture metadata">
-          <p class="snapshot-status-strip__state" data-snapshot-state data-state="loading" role="status" aria-live="polite" aria-atomic="true">Loading snapshot manifest…</p>
-          <dl class="snapshot-status-strip__facts">
-            <div><dt>Capture generated</dt><dd><time data-snapshot-generated>Checking…</time></dd></div>
-            <div class="snapshot-status-strip__window"><dt>30-day UTC activity window</dt><dd><time data-snapshot-window-start>Checking…</time><span aria-hidden="true"> — </span><time data-snapshot-window-end>Checking…</time></dd></div>
-            <div><dt>CVE records</dt><dd data-snapshot-records>Waiting</dd></div>
-            <div><dt>KEV records</dt><dd data-snapshot-kev>Waiting</dd></div>
-            <div><dt>EPSS score date</dt><dd><time data-snapshot-epss-date>Waiting</time></dd></div>
-          </dl>
-        </section>
+<!-- ============ EXPLORE ============ -->
+<section class="page" id="page-explore" hidden>
+  <div class="explore-head">
+    <h1>Explore <span id="explore-count">—</span> records</h1>
+    <div class="search-wrap glass">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m12.5 12.5 4 4" stroke="currentColor" stroke-width="1.6"/></svg>
+      <input id="search" type="search" placeholder="Search CVE ID, product, keyword…" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="filters">
+      <div class="sev-tabs" id="sev-tabs" role="group" aria-label="Severity filter"></div>
+      <label class="chk"><input type="checkbox" id="kev-only"><span>🔥 KEV only</span></label>
+      <label class="range"><span>EPSS ≥ <b id="epss-val">0</b>%</span><input type="range" id="epss-min" min="0" max="100" step="1" value="0"></label>
+    </div>
+  </div>
+  <div id="results" class="record-grid" aria-live="polite" aria-busy="true"></div>
+  <div class="pager" id="pager">
+    <button class="btn btn-ghost" id="prev" disabled>← Prev</button>
+    <span id="page-info">Page 1 / 1</span>
+    <button class="btn btn-ghost" id="next" disabled>Next →</button>
+  </div>
+</section>
 
-        <section class="overview-kpis" aria-label="Verified snapshot totals">
-          <article class="overview-kpi overview-kpi--primary"><span class="overview-kpi__label">CVE records</span><strong id="overview-total">—</strong><span class="overview-kpi__note">in this captured window</span></article>
-          <article class="overview-kpi"><span class="overview-kpi__label">CISA KEV</span><strong id="overview-kev">—</strong><span class="overview-kpi__note">records listed in the capture</span></article>
-          <article class="overview-kpi"><span class="overview-kpi__label">EPSS coverage</span><strong id="overview-epss">—</strong><span class="overview-kpi__note" id="overview-epss-note">score set not verified</span></article>
-          <article class="overview-kpi overview-kpi--date"><span class="overview-kpi__label">Window end</span><strong id="overview-window-end">—</strong><span class="overview-kpi__note">UTC activity date</span></article>
-        </section>
+<!-- ============ KEV ============ -->
+<section class="page" id="page-kev" hidden>
+  <div class="explore-head"><h1>🔥 <span class="grad">Known Exploited</span> — CISA KEV</h1>
+  <p class="lead">Actively exploited vulnerabilities present in this capture. Patch first, ask later.</p></div>
+  <div id="kev-list" class="record-grid" aria-busy="true"></div>
+</section>
 
-        <div class="overview-grid">
-          <section class="activity-panel" aria-labelledby="activity-heading">
-            <div class="section-heading-row">
-              <div><h2 id="activity-heading">Activity in the snapshot</h2><p>Daily record counts across the manifest-listed UTC window.</p></div>
-              <span class="section-heading-note" id="activity-total">Awaiting verification</span>
-            </div>
-            <div class="activity-chart" id="activity-chart" role="img" aria-label="Activity counts will appear after manifest verification" aria-describedby="activity-chart-data" aria-busy="true"></div>
-            <ul class="sr-only" id="activity-chart-data" aria-label="Daily CVE record counts"></ul>
-            <div class="activity-axis"><time id="activity-start">Awaiting verification</time><span id="activity-day-count" aria-hidden="true">Awaiting verification</span><time id="activity-end">Awaiting verification</time></div>
-          </section>
+<!-- ============ CHANGES ============ -->
+<section class="page" id="page-changes" hidden>
+  <div class="explore-head">
+    <h1><span class="grad">What changed</span> since the last snapshot</h1>
+    <p class="lead" id="changes-summary">Loading change history…</p>
+    <div class="sev-tabs" id="change-tabs" role="group" aria-label="Change type filter"></div>
+  </div>
+  <div id="changes-list" class="record-grid" aria-live="polite" aria-busy="true"></div>
+  <div class="pager" id="changes-pager">
+    <button class="btn btn-ghost" id="chg-prev" disabled>← Prev</button>
+    <span id="chg-page-info">Page 1 / 1</span>
+    <button class="btn btn-ghost" id="chg-next" disabled>Next →</button>
+  </div>
+</section>
 
-          <section class="source-intelligence" aria-labelledby="source-intelligence-heading">
-            <div class="section-heading-row source-intelligence__heading">
-              <div><h2 id="source-intelligence-heading">Source checks</h2><p>Captured run metadata, not a live health check.</p></div>
-              <a href="https://github.com/iliya-bashrc/SubZer0/actions/workflows/update.yml" target="_blank" rel="noopener noreferrer">Refresh workflow</a>
-            </div>
-            <p class="source-intelligence__age" id="source-check-age" aria-live="polite">Snapshot age will be calculated after manifest verification.</p>
-            <ul class="source-check-list" id="source-check-list" aria-busy="true" aria-label="Source checks recorded in the captured manifest">
-              <li class="source-check-placeholder">Waiting for manifest verification…</li>
-            </ul>
-          </section>
-        </div>
-
-        <section class="snapshot-rail" aria-labelledby="latest-heading">
-          <div class="snapshot-heading"><div><h2 id="latest-heading">Latest records</h2><p>Ordered by activity date in the current capture.</p></div><a href="?page=latest" class="text-link" data-page-link="latest">View all latest</a></div>
-          <ol class="latest-list" id="latest-list" aria-busy="true" aria-label="Newest records from the verified snapshot"></ol>
-          <p class="overview-status" id="overview-status" role="status" aria-live="polite" aria-busy="true" tabindex="-1">Verifying the latest static snapshot…</p>
-          <button class="secondary-action overview-retry" id="overview-retry" type="button" hidden>Try again</button>
-        </section>
-        <footer class="overview-footer"><p>Static snapshot · sources and capture times are labeled as recorded. Nothing here is a live upstream check.</p></footer>
-      </div>
-    </section>
-
-    <section class="page page-latest" id="page-latest" role="tabpanel" aria-labelledby="tab-latest" tabindex="-1" hidden>
-      <div class="discovery-wrap latest-page-wrap">
-        <header class="discovery-heading">
-          <div><p class="section-context">Hash-verified Overview index</p><h1>Latest</h1><p class="discovery-intro">Scan the newest records from the captured snapshot. Open a record in Explore for full, shard-verified evidence.</p></div>
-          <p class="discovery-count"><strong id="latest-record-count">—</strong><span>records in index</span></p>
-        </header>
-        <dl class="latest-capture-facts">
-          <div><dt>Snapshot generated</dt><dd><time id="latest-generated-at">Awaiting verification</time></dd></div>
-          <div><dt>Newest activity</dt><dd><time id="latest-activity-at">Awaiting verification</time></dd></div>
-        </dl>
-        <div class="latest-filters" role="group" aria-label="Filter latest records">
-          <label class="latest-filter-search" for="latest-filter-search"><span>Search latest</span><input id="latest-filter-search" type="search" autocomplete="off" placeholder="CVE ID, title or source"></label>
-          <label for="latest-filter-source"><span>Source</span><select id="latest-filter-source"><option value="all">All sources</option><option value="NVD">NVD</option><option value="GitHub Advisory Database">GitHub advisories</option><option value="CISA KEV">CISA KEV</option></select></label>
-          <label class="latest-filter-epss" for="latest-filter-epss"><span>Minimum EPSS</span><span class="percent-input"><input id="latest-filter-epss" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="Any" aria-describedby="latest-epss-hint"><span>%</span></span><span class="sr-only" id="latest-epss-hint">Records without an EPSS score are excluded when a minimum is set.</span></label>
-          <label class="check-filter" for="latest-filter-kev"><input id="latest-filter-kev" type="checkbox"><span>CISA KEV only</span></label>
-        </div>
-        <ol class="latest-page-list" id="latest-page-list" aria-busy="true" aria-label="Newest records in this snapshot">
-          <li class="discovery-placeholder">The verified latest records will appear here.</li>
-        </ol>
-        <p class="discovery-status" id="latest-page-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Verifying the snapshot index…</p>
-        <button class="secondary-action overview-retry" id="latest-page-retry" type="button" hidden>Try again</button>
-        <a class="primary-action primary-action-link" id="latest-open-explore" href="?page=center">Open full Explore index</a>
-      </div>
-    </section>
-
-    <section class="page page-archive" id="page-archive" role="tabpanel" aria-labelledby="tab-archive" tabindex="-1" hidden>
-      <div class="discovery-wrap archive-page-wrap">
-        <header class="discovery-heading">
-          <div><p class="section-context">Manifest-listed UTC dates</p><h1>Archive</h1><p class="discovery-intro">Browse the dates included in the current rolling snapshot. This is a bounded date index, not a permanent archive.</p></div>
-          <div class="archive-window" aria-label="Current captured window"><span>Snapshot window</span><p><time id="archive-window-start">Awaiting verification</time><span aria-hidden="true"> — </span><time id="archive-window-end">Awaiting verification</time></p></div>
-        </header>
-        <p class="archive-status" id="archive-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Waiting for the validated manifest…</p>
-        <ol class="archive-day-list" id="archive-day-list" aria-busy="true" aria-label="Manifest-listed UTC day summaries"><li class="discovery-placeholder">Day summaries will appear after manifest verification.</li></ol>
-        <button class="secondary-action overview-retry" id="archive-page-retry" type="button" hidden>Try again</button>
-      </div>
-    </section>
-
-    <section class="page page-center" id="page-center" role="tabpanel" aria-labelledby="tab-center" tabindex="-1" hidden>
-      <div class="center-wrap">
-        <header class="center-heading">
-          <div><p class="section-context">A dated local archive · Not live</p><h1>Explore</h1><p class="center-intro">Search and filter records from the verified 30-day snapshot. Follow source evidence separately from severity and probability.</p></div>
-          <div class="snapshot-summary" aria-label="Snapshot totals"><p><strong id="snapshot-total">—</strong><span>records</span></p><p><strong id="snapshot-kev-total">—</strong><span>KEV records</span></p><p><strong id="snapshot-epss-total">—</strong><span>EPSS scored</span></p></div>
-        </header>
-
-        <section class="snapshot-status-strip" data-snapshot-status aria-label="Snapshot capture metadata">
-          <p class="snapshot-status-strip__state" data-snapshot-state data-state="loading" role="status" aria-live="polite" aria-atomic="true">Waiting to load the static snapshot…</p>
-          <dl class="snapshot-status-strip__facts">
-            <div><dt>Capture generated</dt><dd><time data-snapshot-generated>Not verified</time></dd></div>
-            <div class="snapshot-status-strip__window"><dt>30-day UTC activity window</dt><dd><time data-snapshot-window-start>Not verified</time><span aria-hidden="true"> — </span><time data-snapshot-window-end>Not verified</time></dd></div>
-            <div class="snapshot-status-strip__headline-duplicate"><dt>CVE records</dt><dd data-snapshot-records>Not verified</dd></div>
-            <div class="snapshot-status-strip__headline-duplicate"><dt>KEV records</dt><dd data-snapshot-kev>Not verified</dd></div>
-            <div class="snapshot-status-strip__epss"><dt>EPSS score date</dt><dd><time data-snapshot-epss-date>Not verified</time></dd></div>
-          </dl>
-        </section>
-        <p class="epss-warning" id="epss-warning" role="note" hidden><span class="epss-warning__label">FIRST EPSS</span><span class="epss-warning__copy" id="epss-warning-copy"></span></p>
-
-        <section class="severity-distribution" aria-label="Filter by CVSS severity">
-          <div class="severity-tabs" id="severity-tabs" role="group" aria-label="Filter records by CVSS severity">
-            <button class="severity-tab is-selected" type="button" aria-pressed="true" data-severity="all"><span>All</span><strong data-count="all">—</strong></button>
-            <button class="severity-tab" type="button" aria-pressed="false" data-severity="critical"><span><i class="severity-dot critical-dot" aria-hidden="true"></i>Critical</span><strong data-count="critical">—</strong></button>
-            <button class="severity-tab" type="button" aria-pressed="false" data-severity="high"><span><i class="severity-dot high-dot" aria-hidden="true"></i>High</span><strong data-count="high">—</strong></button>
-            <button class="severity-tab" type="button" aria-pressed="false" data-severity="medium"><span><i class="severity-dot medium-dot" aria-hidden="true"></i>Medium</span><strong data-count="medium">—</strong></button>
-            <button class="severity-tab" type="button" aria-pressed="false" data-severity="low"><span><i class="severity-dot low-dot" aria-hidden="true"></i>Low</span><strong data-count="low">—</strong></button>
-            <button class="severity-tab" type="button" aria-pressed="false" data-severity="unrated"><span><i class="severity-dot unrated-dot" aria-hidden="true"></i>Unrated</span><strong data-count="unrated">—</strong></button>
-          </div>
-          <p class="severity-note">Unrated groups source None/Unknown; the original CVSS value remains unchanged.</p>
-        </section>
-
-        <div class="center-search-anchor" aria-hidden="true"></div>
-        <div class="center-dock">
-          <div class="search-wrap">
-            <label class="search-label" for="record-search">Search the verified snapshot</label>
-            <div class="search-field-wrap">
-              <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg>
-              <input id="record-search" type="search" placeholder="CVE ID, product or summary" autocomplete="off" spellcheck="false" aria-label="Search CVE identifiers, product names, summaries and descriptions" aria-keyshortcuts="/">
-              <kbd aria-hidden="true">/</kbd>
-            </div>
-          </div>
-        </div>
-
-        <div class="filter-controls" id="filter-controls">
-          <details class="date-filter" id="date-filter"><summary id="date-summary">Activity date · loading window</summary>
-            <form class="date-form" id="date-form"><label for="date-from">From<input id="date-from" type="date" required></label><label for="date-to">To<input id="date-to" type="date" required></label><button class="date-apply" type="submit">Apply dates</button></form>
-          </details>
-          <div class="filter-extra-controls" role="group" aria-label="Additional CVE filters">
-            <label class="vendor-filter" for="vendor-filter"><span>Vendor</span><input id="vendor-filter" type="search" maxlength="200" placeholder="Affected vendor" autocomplete="off" spellcheck="false" aria-label="Filter by explicitly supplied affected or CISA KEV vendor"></label>
-            <label class="source-filter" for="source-filter"><span>Source</span><select id="source-filter"><option value="all">All sources</option><option value="NVD">NVD</option><option value="GitHub Advisory Database">GitHub advisories</option><option value="CISA KEV">CISA KEV</option></select></label>
-            <label class="epss-filter" for="epss-min"><span>EPSS minimum</span><span class="percent-input"><input id="epss-min" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="Any" aria-describedby="epss-filter-hint"><span>%</span></span><span class="sr-only" id="epss-filter-hint">Records without an EPSS score are excluded when a minimum is set.</span></label>
-            <label class="cvss-filter" for="cvss-min"><span>CVSS minimum</span><input id="cvss-min" type="number" min="0" max="10" step="0.1" inputmode="decimal" placeholder="Any" aria-describedby="cvss-filter-hint"><span class="sr-only" id="cvss-filter-hint">Records without a numeric CVSS score are excluded when a minimum is set. This score filter is separate from the severity categories.</span></label>
-            <label class="kev-filter" for="kev-only"><input id="kev-only" type="checkbox"><span>CISA KEV only</span></label>
-          </div>
-          <label class="page-size-control" for="page-size">Rows<select id="page-size"><option value="24" selected>24</option><option value="48">48</option><option value="96">96</option></select></label>
-        </div>
-
-        <div class="feed-view" id="feed-view" aria-busy="true">
-          <div class="feed-meta"><p class="result-status" id="result-status" role="status" aria-live="polite" aria-atomic="true">Loading the captured local snapshot…</p><span class="sort-note">Newest activity first</span></div>
-          <section class="snapshot-loader" id="snapshot-loader" aria-labelledby="snapshot-loader-title" aria-describedby="snapshot-loader-copy" hidden>
-            <div class="snapshot-loader__intro"><span class="snapshot-loader__mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 2.5 29.5 16 16 29.5 2.5 16 16 2.5Z"/><path d="M16 8v16M9.1 12l13.8 8M22.9 12 9.1 20"/></svg></span><div><p class="snapshot-loader__context">Local snapshot</p><h2 id="snapshot-loader-title">Verifying the CVE archive</h2><p id="snapshot-loader-copy">Records appear only after every required file is complete and verified.</p></div></div>
-            <p class="snapshot-loader__status" id="snapshot-loader-status" role="status" aria-live="polite" aria-atomic="true">Waiting for the snapshot manifest.</p>
-            <div class="snapshot-loader__checks"><div class="snapshot-loader__check"><span>Snapshot manifest</span><span class="snapshot-loader__state" id="snapshot-manifest-state">Waiting</span></div><div class="snapshot-loader__check"><span>EPSS score file</span><span class="snapshot-loader__state" id="snapshot-epss-state">Waiting for daily shards</span></div><div class="snapshot-loader__meter"><div class="snapshot-loader__check snapshot-loader__check--meter"><label for="snapshot-shard-progress">Daily shards</label><span class="snapshot-loader__count" id="snapshot-shard-count" role="status" aria-live="polite" aria-atomic="true">Waiting for manifest</span></div><progress class="snapshot-loader__progress" id="snapshot-shard-progress" max="1" value="0" aria-label="Daily shards verified" hidden></progress></div></div>
-          </section>
-          <div class="record-list" id="record-list" role="list" aria-label="CVE records from the captured local snapshot" aria-busy="true"></div>
-          <nav class="pagination" id="pagination" aria-label="CVE record pages" hidden><button class="page-button" id="page-prev" type="button" aria-label="Go to previous page">Previous</button><span class="page-indicator" id="page-indicator" aria-live="polite">Page 1 of 1</span><button class="page-button" id="page-next" type="button" aria-label="Go to next page">Next</button></nav>
-        </div>
-
-        <section class="detail-view" id="detail-view" aria-labelledby="detail-heading" hidden><button class="back-button" id="back-to-results" type="button"><span aria-hidden="true">←</span> Back to results</button><div id="detail-content"></div></section>
-        <footer class="center-provenance"><p id="snapshot-provenance">This is a bundled capture, not a live feed. Feed records and source text are treated as untrusted data and displayed as text. Only links you choose to open leave this local preview.</p><div class="source-links" aria-label="Feed sources"><a href="https://nvd.nist.gov/developers/vulnerabilities" target="_blank" rel="noopener noreferrer">NVD</a><a href="https://github.com/advisories" target="_blank" rel="noopener noreferrer">GitHub advisories</a><a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener noreferrer">CISA KEV</a><a href="https://www.first.org/epss/data" target="_blank" rel="noopener noreferrer">FIRST EPSS</a></div></footer>
-      </div>
-    </section>
-
-    <section class="page page-community" id="page-community" role="tabpanel" aria-labelledby="tab-community" tabindex="-1" hidden>
-      <div class="community-inner">
-        <h1 id="community-heading" class="sr-only">Community</h1>
-        <section class="terminal-frame" role="group" aria-labelledby="terminal-title">
-          <header class="terminal-bar">
-            <div class="terminal-window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
-            <h2 class="terminal-window-title" id="terminal-title">user@subzero: ~/SubZer0</h2>
-            <span class="terminal-shell-tag" aria-hidden="true">zsh</span>
-          </header>
-          <div class="terminal-screen" aria-live="off">
-            <pre class="terminal-banner" role="img" aria-label="SubZer0 rendered in ANSI Shadow">███████╗██╗   ██╗██████╗ ███████╗███████╗██████╗  ██████╗&#32;
+<!-- ============ COMMUNITY ============ -->
+<section class="page" id="page-community" hidden>
+  <div class="term glass">
+    <div class="term-bar"><span class="t-dot r"></span><span class="t-dot y"></span><span class="t-dot g"></span>
+      <span class="term-title">user@subzero: ~/SubZer0</span></div>
+    <pre class="term-banner" aria-hidden="true">███████╗██╗   ██╗██████╗ ███████╗███████╗██████╗  ██████╗
 ██╔════╝██║   ██║██╔══██╗╚══███╔╝██╔════╝██╔══██╗██╔═████╗
 ███████╗██║   ██║██████╔╝  ███╔╝ █████╗  ██████╔╝██║██╔██║
-╚════██║██║   ██║██╔══██╗ ███╔╝  ██╔══╝ ██╔══██╗████╔╝██║&#32;
+╚════██║██║   ██║██╔══██╗ ███╔╝  ██╔══╝ ██╔══██╗████╔╝██║
 ███████║╚██████╔╝██████╔╝███████╗███████╗██║  ██║╚██████╔╝
-╚══════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝&#32;
-&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;&#32;</pre>
-            <div class="terminal-session">
-              <p class="terminal-line" id="info-command-line"><span class="prompt-host">user@subzero</span><span class="prompt-directory"> ~/SubZer0</span><span class="prompt-symbol"> $ </span><code id="info-command"></code><span class="terminal-caret" id="typing-caret" aria-hidden="true"></span></p>
-              <div class="terminal-info" id="terminal-info" hidden><p class="info-name">SubZer0</p><p class="info-subtitle">CVE Intelligence &amp; Vulnerability Research</p><p class="info-description">A platform for discovering, tracking<br>and exploring security vulnerabilities.</p><div class="info-group"><p class="info-label">CREATED BY</p><p class="info-values">  @BugCod3<br>  @RootAccessClub</p></div><div class="info-group info-status-group"><p class="info-label">STATUS</p><p class="info-values">  <span class="online-dot" aria-hidden="true">●</span> ONLINE</p></div></div>
-              <p class="terminal-line idle-prompt" id="idle-prompt" hidden><span class="prompt-host">user@subzero</span><span class="prompt-directory"> ~/SubZer0</span><span class="prompt-symbol"> $ </span><span class="terminal-caret" aria-hidden="true"></span></p>
-              <div class="action-session" id="action-session" hidden><p class="terminal-line action-command-line"><span class="prompt-host">user@subzero</span><span class="prompt-directory"> ~/SubZer0</span><span class="prompt-symbol"> $ </span><code id="action-command"></code></p><p class="terminal-status" id="action-status" role="status" aria-live="polite" aria-atomic="true"></p></div>
-            </div>
-            <div class="community-actions" role="group" aria-label="Community actions">
-              <button class="community-action" id="join-bugcod3" type="button" data-community="bugcod3" aria-label="Join BugCod3 on Telegram" disabled><span class="community-action__icon" aria-hidden="true"><img src="assets/telegram-mark.svg" alt="" width="24" height="24"></span><span class="community-action__label">Join BugCod3</span></button>
-              <button class="community-action" id="join-rootaccessclub" type="button" data-community="rootAccessClub" aria-label="Join RootAccessClub on Telegram" disabled><span class="community-action__icon" aria-hidden="true"><img src="assets/telegram-mark.svg" alt="" width="24" height="24"></span><span class="community-action__label">Join RootAccessClub</span></button>
-            </div>
-          </div>
-        </section>
+╚══════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝</pre>
+    <div class="term-body">
+      <p><span class="t-user">user@subzero</span><span class="t-path"> ~/SubZer0</span> $ <span class="t-cmd" id="typed"></span><span class="caret"></span></p>
+      <div class="t-out" id="term-out" hidden>
+        <p class="t-name">SubZer0 v2 — Zero-Day Radar</p>
+        <p class="t-dim">Faster · Interactive · Bilingual-ready</p>
+        <p class="t-dim">CREATED BY</p>
+        <p>  @BugCod3 · @RootAccessClub</p>
+        <p><span class="t-green">●</span> ONLINE</p>
       </div>
-    </section>
-  </main>
+      <div class="term-actions">
+        <a class="btn btn-primary" href="https://t.me/RootAccessClub" target="_blank" rel="noopener">Join @RootAccessClub</a>
+        <a class="btn btn-ghost" href="https://t.me/BugCod3" target="_blank" rel="noopener">Join @BugCod3</a>
+        <a class="btn btn-ghost" href="https://github.com/iliya-bashrc/SubZer0" target="_blank" rel="noopener">GitHub repo</a>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
 
-  <script src="community.js" defer></script>
-  <script src="app.js" defer></script>
+<!-- record detail modal -->
+<dialog id="detail" class="glass"></dialog>
+
+<script src="app.js" defer></script>
 </body>
 </html>
