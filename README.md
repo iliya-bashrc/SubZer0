@@ -78,6 +78,18 @@ python3 verify_community_ansi_shadow.py --community-only
 
 `scripts/verify_pages.py` checks whether the public Pages site serves the expected application assets and a manifest-consistent snapshot. It is intended for post-deployment verification, not for claiming that an unmerged branch is live.
 
+## Optional Cloudflare Worker preview
+
+GitHub Pages remains the primary static deployment and has no Worker dependency. The optional Worker is only a static-asset pass-through; it does not provide an API or contact vulnerability sources. Its Wrangler configuration requires a `previews` block, and the feature-branch preview build stages an allowlisted `dist/` containing the app shell, images and verified snapshot. Repository scripts, tests and documentation are not copied into that asset bundle. Cloudflare's branch trigger runs `node scripts/build_worker_assets.mjs` before `npx wrangler preview`; it does not run a production deploy command.
+
+To exercise the Worker path locally without publishing:
+
+```bash
+node scripts/build_worker_assets.mjs
+node --test tests/worker.test.mjs tests/worker-assets.test.mjs
+npx --yes wrangler@4.147.0 deploy --dry-run
+```
+
 ## License
 
 No license file is present in this repository, so no license is declared here.
