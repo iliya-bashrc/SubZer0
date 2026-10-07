@@ -1411,7 +1411,14 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
             edge_inset = 3
             x = page.evaluate('window.innerWidth') - edge_inset if direction == 'left' else edge_inset
         dx = -distance if direction == 'left' else distance
-        swipe(x, y, dx, steps=steps, delay_ms=delay_ms)
+        # On slower runners a first drag can race the previous swipe settlement; retry until the route commits.
+        for _ in range(3):
+            swipe(x, y, dx, steps=steps, delay_ms=delay_ms)
+            if page.locator('.page:not([hidden])').get_attribute('id') != active_id:
+                return
+            page.wait_for_timeout(400)
+        assert page.locator('.page:not([hidden])').get_attribute('id') != active_id, (
+            f'Swipe did not commit from {active_id}: {direction}')
 
     def point(selector: str, x_fraction: float = 0.5, y_fraction: float = 0.5) -> tuple[int, int]:
         box = page.locator(selector).bounding_box()
