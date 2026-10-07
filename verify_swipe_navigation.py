@@ -10,7 +10,11 @@ Run: /path/to/python verify_swipe_navigation.py --base-url http://localhost:8000
 from __future__ import annotations
 
 import argparse
+import functools
+import http.server
+import os
 import sys
+import threading
 from playwright.sync_api import sync_playwright
 
 ORDER = ["page-overview", "page-latest", "page-center", "page-archive", "page-community"]
@@ -18,8 +22,16 @@ ORDER = ["page-overview", "page-latest", "page-center", "page-archive", "page-co
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://localhost:8000/")
+    ap.add_argument("--base-url", default=None)
     args = ap.parse_args()
+    server = None
+    if args.base_url is None:
+        # Serve the repository itself, like the other browser suites do.
+        root = os.path.dirname(os.path.abspath(__file__))
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        args.base_url = f"http://127.0.0.1:{server.server_address[1]}/"
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     failures: list[str] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
@@ -100,6 +112,8 @@ def main() -> int:
         check("zero page errors during gestures", not errors, "; ".join(errors))
         browser.close()
 
+    if server is not None:
+        server.shutdown()
     print(f"\n{'ALL SWIPE CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}")
     return 0 if not failures else 1
 
