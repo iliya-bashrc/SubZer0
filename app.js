@@ -2174,14 +2174,10 @@
       if ((!desktopPointer && event.pointerType !== 'touch') || !event.isPrimary || event.button !== 0 || gesture) return;
       const target = event.target;
       if (!(target instanceof Element) || hasTextSelection()) return;
-      // Fields, dialogs and horizontal scrollers always keep their own gesture.
-      if (target.closest(fieldSelector) || hasHorizontalScrollSurface(target)) return;
-      if (desktopPointer) {
-        // A mouse drag that starts on a control or over selectable text is user intent,
-        // not navigation.
-        if (target.closest(controlSelector)) return;
-        if (target.closest(textSurfaceSelector) && hasTextAtPoint(event.clientX, event.clientY)) return;
-      }
+      // A gesture that starts on a control, field, dialog or horizontal scroller belongs to
+      // that element, not to page navigation. Read-only surfaces stay swipeable.
+      if (target.closest(controlSelector) || target.closest(fieldSelector) || hasHorizontalScrollSurface(target)) return;
+      if (desktopPointer && target.closest(textSurfaceSelector) && hasTextAtPoint(event.clientX, event.clientY)) return;
       const page = target.closest('.page');
       if (!page || page.hidden || page !== pages.get(activePage)) return;
       stopSettlement(page);
