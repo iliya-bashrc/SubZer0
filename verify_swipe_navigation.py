@@ -17,7 +17,7 @@ import sys
 import threading
 from playwright.sync_api import sync_playwright
 
-ORDER = ["page-overview", "page-latest", "page-center", "page-archive", "page-community"]
+ORDER = ["page-overview", "page-latest", "page-center", "page-kev", "page-archive", "page-community"]
 
 
 def main() -> int:
@@ -68,13 +68,13 @@ def main() -> int:
             pg.wait_for_timeout(750)
 
         seq = [active()]
-        for _ in range(4):
+        for _ in range(len(ORDER) - 1):
             swipe(340, 40)
             seq.append(active())
         check("swipe forward covers every page in canonical order", seq == ORDER, str(seq))
 
         seq = [active()]
-        for _ in range(4):
+        for _ in range(len(ORDER) - 1):
             swipe(40, 340)
             seq.append(active())
         check("swipe backward covers every page in reverse order", seq == list(reversed(ORDER)), str(seq))

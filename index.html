@@ -37,6 +37,9 @@
           <button class="nav-tab" id="tab-center" type="button" role="tab" aria-selected="false" aria-controls="page-center" tabindex="-1" data-page="center">
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.3"/><path d="m12.5 12.5 4 4"/></svg><span>Explore</span>
           </button>
+          <button class="nav-tab" id="tab-kev" type="button" role="tab" aria-selected="false" aria-controls="page-kev" tabindex="-1" data-page="kev">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 17 6v5c0 3.6-2.9 6-7 7.5-4.1-1.5-7-3.9-7-7.5V6l7-3.5Z"/><path d="m7 10 2.2 2.2L13.4 8"/></svg><span>KEV Watch</span>
+          </button>
           <button class="nav-tab" id="tab-archive" type="button" role="tab" aria-selected="false" aria-controls="page-archive" tabindex="-1" data-page="archive">
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="13" rx="1"/><path d="M6.5 2.5v3M13.5 2.5v3M3 8h14M6 11h2M10 11h2M6 14h2"/></svg><span>Archive</span>
           </button>
@@ -118,10 +121,6 @@
               <h3 class="pulse-block__title">Severity composition</h3>
               <div class="severity-bar" id="severity-bar" role="img" aria-label="Severity composition will appear after manifest verification" aria-busy="true"></div>
               <ul class="severity-legend" id="severity-legend" aria-busy="true"></ul>
-              <dl class="pulse-facts pulse-facts--echo">
-                <div><dt>Known exploited</dt><dd id="pulse-kev-echo">—</dd></div>
-                <div><dt>EPSS scored</dt><dd id="pulse-epss-echo">—</dd></div>
-              </dl>
             </div>
 
             <div class="pulse-block">
@@ -192,6 +191,22 @@
         <p class="discovery-status" id="latest-page-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Verifying the snapshot index…</p>
         <button class="secondary-action overview-retry" id="latest-page-retry" type="button" hidden>Try again</button>
         <a class="primary-action primary-action-link" id="latest-open-explore" href="?page=center">Open full Explore index</a>
+      </div>
+    </section>
+
+    <section class="page page-kev" id="page-kev" role="tabpanel" aria-labelledby="tab-kev" tabindex="-1" hidden>
+      <div class="discovery-wrap kev-wrap">
+        <header class="discovery-heading">
+          <div><p class="section-context">CISA Known Exploited Vulnerabilities</p><h1>KEV Watch</h1><p class="discovery-intro">Records from the captured CISA KEV catalog that fall inside this snapshot's 31-day window. Catalog due dates are tracked as published, not as a live feed.</p></div>
+          <p class="discovery-count"><strong id="kev-record-count">—</strong><span>in window</span></p>
+        </header>
+        <div class="kev-capture-facts" aria-label="KEV capture metadata">
+          <p class="kev-status" id="kev-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Waiting for manifest verification…</p>
+          <button class="secondary-action overview-retry" id="kev-retry" type="button" hidden>Try again</button>
+        </div>
+        <ol class="kev-list" id="kev-list" aria-busy="true" aria-label="Known exploited vulnerabilities in this snapshot window">
+          <li class="discovery-placeholder">KEV records will appear after manifest verification.</li>
+        </ol>
       </div>
     </section>
 

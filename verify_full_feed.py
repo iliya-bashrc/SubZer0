@@ -438,7 +438,7 @@ def center_search_release_audit(browser, origin: str, issues: dict, expected_cou
               wrapWidth:document.querySelector('.search-wrap').getBoundingClientRect().width
             })''')
             assert not expanded_state['compact'] and not expanded_state['released'], f'rail must stay expanded until the user crosses the actual docking threshold at {width}x{height}: {expanded_state}'
-            compact_target = min(460, expanded_state['wrapWidth'] - (32 if width <= 720 else 0))
+            compact_target = min(460, expanded_state['wrapWidth'] - (32 if width <= 768 else 0))
             if (width, height) in {(1440, 900), (390, 844)}:
                 page.screenshot(path=str(SCREENSHOTS / f'center-search-full-{width}x{height}.png'), animations='disabled')
 
@@ -533,7 +533,7 @@ def center_search_release_audit(browser, origin: str, issues: dict, expected_cou
             }''')
             assert deep['scrollY'] >= 1900 and deep['released'] and deep['compact'] and deep['position'] == 'static', f'rail must leave sticky positioning before results flow under it: {deep}'
             assert deep['documentWidth'] == deep['width'] == width, f'released Search action/nav overflows at {width}x{height}: {deep}'
-            if width <= 720:
+            if width <= 768:
                 assert not deep['action']['hidden'] and deep['action']['right'] <= deep['inner']['right']+1, f'mobile Search action must fit the compact header at {width}x{height}: {deep}'
                 assert deep['tabs']['position'] == 'fixed' and deep['tabs']['left'] >= 0 and deep['tabs']['right'] <= deep['width'], f'mobile page tabs must occupy the visible fixed bottom rail at {width}x{height}: {deep}'
             else:
@@ -1346,7 +1346,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # Swipe previews are visible before the route is committed; wait for the semantic active state first.
         expect(page.locator(f'#tab-{name}')).to_have_attribute('aria-selected', 'true')
         expect(page.locator(f'#page-{name}')).to_be_visible()
-        for candidate in ('overview', 'latest', 'center', 'archive', 'community'):
+        for candidate in ('overview', 'latest', 'center', 'kev', 'archive', 'community'):
             tab = page.locator(f'#tab-{candidate}')
             selected = candidate == name
             actual = tab.get_attribute('aria-selected')
@@ -1541,7 +1541,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         expect_active('latest')
         expect(page.locator('#latest-page-status')).to_contain_text('verified latest records')
 
-        # All four adjacent routes work; the state remains synchronized with the existing tabs.
+        # All adjacent routes work; the state remains synchronized with the existing tabs.
         drag_from_edge('right')
         expect_active('overview')
         drag_from_edge('left')
@@ -1549,6 +1549,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         drag_from_edge('left')
         expect_active('center')
         expect(page.locator('#snapshot-total')).to_have_text(nfmt(manifest['totals']['cves']), timeout=120_000)
+        drag_from_edge('left')
+        expect_active('kev')
         drag_from_edge('left')
         expect_active('archive')
         drag_from_edge('left')
@@ -1567,6 +1569,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
         expect_active('archive')
         expect(page).to_have_url(f'{origin}/?page=archive')
+        swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
+        expect_active('kev')
         page.wait_for_function(
             "() => !document.querySelector('.is-swipe-tracking') && !document.querySelector('.is-swipe-settling')",
             timeout=5_000)
@@ -1595,6 +1599,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
           };
         }""")
         assert safe_start == {'page': 'page-center', 'blocked': False}, f'Post-pagination swipe did not start on a safe Center background: {safe_start}'
+        drag_from_edge('left', y=150)
+        expect_active('kev')
         drag_from_edge('left', y=150)
         expect_active('archive')
         drag_from_edge('left', y=150)
@@ -1635,6 +1641,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
 
         # Swiping from the safe page background preserves the detail, search, and URL state.
         page.evaluate('window.scrollTo(0, 0)')
+        drag_from_edge('left')
+        expect_active('kev')
         drag_from_edge('left')
         expect_active('archive')
         drag_from_edge('left')
@@ -1696,8 +1704,8 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         }""")
         assert safe_start == {'page': 'page-center', 'blocked': False}, f'Post-pagination swipe did not start on a safe Center background: {safe_start}'
         drag_from_edge('left', y=150)
-        expect_active('archive')
-        assert not page.locator('#page-archive').evaluate('element => element.classList.contains("page-enter")')
+        expect_active('kev')
+        assert not page.locator('#page-kev').evaluate('element => element.classList.contains("page-enter")')
         page.locator('#tab-community').click()
         expect_active('community')
         assert not page.locator('#page-community').evaluate('element => element.classList.contains("page-enter")')
@@ -1831,7 +1839,7 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         assert expect_active_name == 'true' and desktop_page.evaluate('document.activeElement.id') == 'tab-latest'
         desktop_page.keyboard.press('Home')
         assert desktop_page.locator('#tab-overview').get_attribute('aria-selected') == 'true'
-        for page_name in ('overview', 'latest', 'center', 'archive', 'community'):
+        for page_name in ('overview', 'latest', 'center', 'kev', 'archive', 'community'):
             desktop_page.locator(f'#tab-{page_name}').click()
             desktop_page.locator(f'#tab-{page_name}').focus()
             desktop_page.keyboard.press('Shift+Tab')
@@ -2243,7 +2251,7 @@ def main() -> None:
             width_metrics = {}
             for width in (320, 360, 375, 390, 414, 768, 1024, 1280, 1440):
                 width_metrics[width] = {}
-                for tab in ('overview', 'latest', 'center', 'archive', 'community'):
+                for tab in ('overview', 'latest', 'center', 'kev', 'archive', 'community'):
                     page.locator(f'#tab-{tab}').click()
                     width_metrics[width][tab] = width_audit(page, width)
             search_release_metrics = center_search_release_audit(browser, origin, issues, expected_count, manifest)
@@ -2261,7 +2269,7 @@ def main() -> None:
             for link_id in ('join-bugcod3', 'join-rootaccessclub'):
                 expect(page.locator(f'#{link_id}')).to_be_enabled()
             page.screenshot(path=str(SCREENSHOTS / '04-community-desktop.png'))
-            print('PASS: all five pages fit 320–1440 CSS px; Community is reachable, accessible, and uses safe external links.')
+            print('PASS: all six pages fit 320–1440 CSS px; Community is reachable, accessible, and uses safe external links.')
 
             discovery_metrics = run_discovery_and_retry_tests(browser, origin, manifest, overview)
             print('PASS: captured source status, Latest links, rolling Archive filters, and fail-closed explicit retry.')

@@ -7,6 +7,8 @@
   const LIMITS = Object.freeze({
     manifestBytes: 512 * 1024,
     overviewBytes: 64 * 1024,
+    searchIndexBytes: 12 * 1024 * 1024,
+    shardMapBytes: 2 * 1024 * 1024,
     shardBytes: 16 * 1024 * 1024,
     epssBytes: 4 * 1024 * 1024,
     snapshotBytes: 128 * 1024 * 1024,
@@ -21,6 +23,8 @@
   const LATEST_PREVIEW_LIMIT = 50;
   const PAGE_SIZES = new Set([24, 48, 96]);
   const CVE_ID_RE = /^CVE-\d{4,}-\d+$/i;
+  // Single canonical page order — nav, swipe, keyboard, palette and URL routing all derive from this.
+  const CANONICAL_PAGES = Object.freeze(['overview', 'latest', 'center', 'kev', 'archive', 'community']);
   const BASE_SEVERITIES = ['critical', 'high', 'medium', 'low'];
   const VALID_SEVERITIES = new Set([...BASE_SEVERITIES, 'unrated']);
   const initialUrlParams = new URLSearchParams(window.location.search);
@@ -76,6 +80,10 @@
   const activityChart = $('#activity-chart');
   const activityChartData = $('#activity-chart-data');
   const archiveDayList = $('#archive-day-list');
+  const kevList = $('#kev-list');
+  const kevStatus = $('#kev-status');
+  let kevIndexRows = null;
+  let kevIndexLoading = false;
   const overviewRetryButtons = $$('.overview-retry');
   const recordList = $('#record-list');
   const snapshotLoader = $('#snapshot-loader');
@@ -223,6 +231,25 @@
 
   function isFiniteScore(value) {
     return typeof value === 'number' && Number.isFinite(value);
+  }
+
+  // KEV Watch reads the compact index, whose severities are the raw feed categories.
+  const VALID_SEVERITY_KEYS = new Set([...BASE_SEVERITIES, 'none', 'unknown']);
+  function sourceSeverityFromName(value) {
+    const name = safeString(value).toLowerCase();
+    if (name === 'none') return 'None';
+    if (name === 'unknown') return 'Unknown';
+    return BASE_SEVERITIES.includes(name) ? name[0].toUpperCase() + name.slice(1) : 'Not provided';
+  }
+
+  function makeSeverityTagFrom(value, score) {
+    const name = safeString(value).toLowerCase();
+    const category = name === 'none' || name === 'unknown' ? name : BASE_SEVERITIES.includes(name) ? name : 'unrated';
+    const tag = document.createElement('span');
+    tag.className = `severity-label ${category === 'none' || category === 'unknown' ? 'unrated' : category}`;
+    tag.textContent = severityName(category);
+    tag.title = `Source CVSS category: ${sourceSeverityFromName(value)}${isFiniteScore(score) ? ` · CVSS ${score.toFixed(1)}` : ''}`;
+    return tag;
   }
 
   function getEpss(record) {
@@ -925,6 +952,123 @@
     $('#source-check-age').textContent = `Approximate snapshot age at page load: ${approximateSnapshotAge(candidate.generated_at)} · uses this device's clock.`;
   }
 
+  function validateKevIndex(payload, candidate) {
+    const declared = candidate.search_index;
+    if (!Array.isArray(payload) || payload.length !== declared.count) throw new Error('KEV search index size does not match the manifest.');
+    payload.forEach((row) => {
+      if (!Array.isArray(row) || row.length !== 9 || !CVE_ID_RE.test(safeString(row[0]))) throw new Error('KEV search index row shape is invalid.');
+    });
+    return payload;
+  }
+
+  async function loadKevWatch({ retry = false } = {}) {
+    if (!kevList || !kevStatus || kevIndexLoading) return;
+    kevIndexLoading = true;
+    try {
+      if (!manifest) manifest = await getManifest();
+      const candidate = manifest;
+      if (!candidate.search_index) throw new Error('Manifest does not declare a search index.');
+      const rows = await fetchVerifiedJson(candidate.search_index, LIMITS.searchIndexBytes,
+        retry ? FETCH_CACHE.retry : FETCH_CACHE.data,
+        { validate: (payload) => validateKevIndex(payload, candidate), storeOffline: false });
+      kevIndexRows = rows;
+      renderKevWatch(candidate);
+    } catch {
+      if (kevList) { kevList.replaceChildren(); kevList.setAttribute('aria-busy', 'false'); }
+      if (kevStatus) kevStatus.textContent = 'KEV records are unavailable because the verified KEV index could not be read. Choose Try again to re-request it.';
+      const kevRetry = $('#kev-retry');
+      if (kevRetry) kevRetry.hidden = false;
+    } finally {
+      kevIndexLoading = false;
+    }
+  }
+
+  function renderKevWatchFromIndex(candidate) {
+    const rows = kevIndexRows.filter((row) => row[4] === 1);
+    const count = $('#kev-record-count');
+    if (count) count.textContent = nf.format(rows.length);
+    if (!rows.length) {
+      const empty = document.createElement('li');
+      empty.className = 'discovery-placeholder';
+      empty.textContent = 'The verified index contains no CISA KEV records inside this snapshot window.';
+      kevList.append(empty);
+    }
+    rows.forEach((row) => {
+      const [id, title, sev, score, , epss, activityDate, publishedDate, products] = row;
+      const item = document.createElement('li');
+      item.className = `kev-item severity-${VALID_SEVERITY_KEYS.has(sev) ? sev : 'unknown'}`;
+      const link = document.createElement('a');
+      link.className = 'kev-item__id';
+      link.href = `?page=center&cve=${encodeURIComponent(id)}`;
+      link.setAttribute('aria-label', `Open ${id} dossier in Explore`);
+      link.textContent = id;
+      const body = document.createElement('div');
+      body.className = 'kev-item__body';
+      addText(body, 'p', 'kev-item__title', safeString(title, 'Title not recorded in the index'));
+      const details = [];
+      if (products) details.push(`Affected: ${products}`);
+      if (activityDate) details.push(`Activity ${formatDate(activityDate)}`);
+      if (publishedDate && publishedDate !== activityDate) details.push(`Published ${formatDate(publishedDate)}`);
+      details.push(`Source severity ${sourceSeverityFromName(sev)}`);
+      addText(body, 'p', 'kev-item__meta', details.join(' · '));
+      const signals = document.createElement('div');
+      signals.className = 'kev-item__signals';
+      signals.append(makeSeverityTagFrom(sev, score));
+      if (typeof score === 'number' && score > 0) addText(signals, 'span', 'kev-item__cvss', `CVSS ${score.toFixed(1)}`);
+      if (typeof epss === 'number' && Number.isFinite(epss)) addText(signals, 'span', 'kev-item__epss', `EPSS ${(epss * 100).toFixed(2)}%`);
+      item.append(link, body, signals);
+      kevList.append(item);
+    });
+    kevList.setAttribute('aria-busy', 'false');
+    kevStatus.textContent = `The hash-verified index lists ${nf.format(rows.length)} CISA KEV records inside the ${nf.format(candidate.days.length)}-day window (manifest total: ${nf.format(candidate.totals.known_exploited)}). Index entries are index metadata; open a dossier for shard-verified evidence.`;
+  }
+
+  function renderKevWatch(candidate) {
+    if (!kevList || !kevStatus) return;
+    kevList.replaceChildren();
+    if (Array.isArray(kevIndexRows) && kevIndexRows.length) return renderKevWatchFromIndex(candidate);
+    const kevRecords = records.filter((record) => record.kev && typeof record.kev === 'object');
+    const count = $('#kev-record-count');
+    if (count) count.textContent = nf.format(kevRecords.length);
+    if (!records.length) {
+      kevStatus.textContent = 'KEV records are unavailable because the snapshot could not be verified. Choose Try again to re-request it.';
+      return;
+    }
+    kevRecords.forEach((record) => {
+      const kev = record.kev;
+      const item = document.createElement('li');
+      item.className = `kev-item severity-${severityKey(record)}`;
+      const link = document.createElement('a');
+      link.className = 'kev-item__id';
+      link.href = `?page=center&cve=${encodeURIComponent(record.id)}`;
+      link.setAttribute('aria-label', `Open ${record.id} dossier in Explore`);
+      link.textContent = record.id;
+      const body = document.createElement('div');
+      body.className = 'kev-item__body';
+      addText(body, 'p', 'kev-item__title', safeString(record.title, 'Title not supplied'));
+      const meta = document.createElement('p');
+      meta.className = 'kev-item__meta';
+      const parts = [
+        `Added ${formatDate(kev.date_added, 'date not supplied')}`,
+        [safeString(kev.vendor, ''), safeString(kev.product, '')].filter(Boolean).join(' · ') || null,
+        kev.due_date ? `Due ${formatDate(kev.due_date)}` : null,
+        kev.ransomware ? `Ransomware use: ${safeString(kev.ransomware)}` : null
+      ].filter(Boolean);
+      meta.textContent = parts.join(' · ');
+      body.append(meta);
+      const signals = document.createElement('div');
+      signals.className = 'kev-item__signals';
+      signals.append(makeSeverityTag(record));
+      if (isFiniteScore(record.score)) addText(signals, 'span', 'kev-item__cvss', `CVSS ${record.score.toFixed(1)}`);
+      const epss = getEpss(record);
+      if (epss) addText(signals, 'span', 'kev-item__epss', `EPSS ${(epss.score * 100).toFixed(2)}%`);
+      item.append(link, body, signals);
+      kevList.append(item);
+    });
+    kevList.setAttribute('aria-busy', 'false');
+    kevStatus.textContent = `The verified snapshot contains ${nf.format(kevRecords.length)} records listed in the captured CISA KEV catalog (manifest total: ${nf.format(candidate.totals.known_exploited)}). Catalog due dates are published metadata, not deadlines set by this site.`;
+  }
+
   function renderLatestRows() {
     latestPageList.replaceChildren();
     const query = latestSearchInput.value.trim().toLocaleLowerCase();
@@ -1152,6 +1296,7 @@
       const count = Number(totals[severity]) || 0;
       if (count <= 0) return;
       const item = document.createElement('li');
+      item.dataset.severity = severity;
       item.style.setProperty('--legend-color', PULSE_LEGEND_COLORS[severity] || '#57676e');
       const label = document.createElement('span');
       label.textContent = severity[0].toUpperCase() + severity.slice(1);
@@ -1207,8 +1352,6 @@
     setPulse('pulse-kev', nf.format(totals.known_exploited));
     const epssText = `${nf.format(candidate.epss.scored_cves)} / ${nf.format(totals.cves)}`;
     setPulse('pulse-epss', epssText);
-    setPulse('pulse-kev-echo', nf.format(totals.known_exploited));
-    setPulse('pulse-epss-echo', epssText);
     const stamp = document.getElementById('threat-pulse-stamp');
     if (stamp) stamp.textContent = `Derived from ${nf.format(totals.cves)} records · window ending ${formatDate(candidate.window.end)}`;
   }
@@ -1223,6 +1366,7 @@
     renderActivityChart(candidate);
     renderSourceChecks(candidate);
     renderLatestPage(payload, candidate);
+    renderKevWatch(candidate);
 
     overviewLatestList.replaceChildren();
     payload.records.slice(0, 4).forEach((record) => {
@@ -1338,6 +1482,8 @@
       latestPageList.replaceChildren();
       latestPageList.setAttribute('aria-busy', 'false');
       $('#latest-page-status').textContent = 'The latest-record index could not be verified. Choose Try again to re-request it.';
+      if (kevList) { kevList.replaceChildren(); kevList.setAttribute('aria-busy', 'false'); }
+      if (kevStatus) kevStatus.textContent = 'KEV records are unavailable because the snapshot could not be verified. Choose Try again to re-request it.';
       $('#latest-record-count').textContent = 'Unavailable';
       $('#latest-generated-at').textContent = 'Unavailable';
       $('#latest-activity-at').textContent = 'Unavailable';
@@ -1496,6 +1642,7 @@
       acceptSnapshotSidecar();
 
       setSnapshotStats();
+      renderKevWatch(manifest);
       const freshness = snapshotFreshnessLabel(manifest);
       const fullCaptureMessage = snapshotCacheFallbackUsed
         ? `OFFLINE · all ${nf.format(manifest.days.length)} daily shards and EPSS verified against the captured manifest (${formatTimestamp(manifest.generated_at, 'unavailable')}). This is not live data.`
@@ -2008,6 +2155,7 @@
     const pageChanged = activePage !== name;
     finishActiveSwipeSettlement();
     if (name === 'center') startSnapshot();
+    if (name === 'kev') loadKevWatch();
     const next = pages.get(name);
     const previous = pages.get(activePage);
     if (activePage === 'community' && name !== 'community') cancelCommunityTransition();
@@ -2045,6 +2193,7 @@
     { label: 'Go to Overview', tag: 'Page', page: 'overview', icon: '<rect x="3" y="3" width="5" height="5" rx=".5"/><rect x="12" y="3" width="5" height="5" rx=".5"/><rect x="3" y="12" width="5" height="5" rx=".5"/><rect x="12" y="12" width="5" height="5" rx=".5"/>' },
     { label: 'Go to Latest', tag: 'Page', page: 'latest', icon: '<path d="M4 5h12M4 10h12M4 15h8"/>' },
     { label: 'Go to Explore', tag: 'Page', page: 'center', icon: '<circle cx="8.5" cy="8.5" r="5.2"/><path d="m12.6 12.6 4 4"/>' },
+    { label: 'Go to KEV Watch', tag: 'Page', page: 'kev', icon: '<path d="M10 2.5 17 6v5c0 3.6-2.9 6-7 7.5-4.1-1.5-7-3.9-7-7.5V6l7-3.5Z"/><path d="m7 10 2.2 2.2L13.4 8"/>' },
     { label: 'Go to Archive', tag: 'Page', page: 'archive', icon: '<rect x="3" y="4.5" width="14" height="12" rx="1"/><path d="M3 8h14M7 2.5v3M13 2.5v3"/>' },
     { label: 'Go to Community', tag: 'Page', page: 'community', icon: '<path d="m7 7-3.4 3L7 13M13 7l3.4 3L13 13"/>' },
   ];
@@ -2075,6 +2224,10 @@
         ? commands.filter((command) => command.label.toLowerCase().includes(q))
         : commands;
       options = source.map((command) => ({ kind: 'command', command }));
+      if (!q) {
+        if (activeCveId) options.push({ kind: 'current-cve', id: activeCveId });
+        options.push({ kind: 'reset-filters' });
+      }
       if (cveQuery) options.unshift({ kind: 'cve', id: cveQuery });
       activeIndex = 0;
       list.replaceChildren();
@@ -2091,7 +2244,7 @@
         item.setAttribute('role', 'option');
         item.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
         item.dataset.index = String(index);
-        if (option.kind === 'cve') {
+        if (option.kind === 'cve' || option.kind === 'current-cve') {
           const strong = document.createElement('strong');
           strong.textContent = option.id;
           strong.style.font = '600 12.5px ui-monospace, "SFMono-Regular", Consolas, monospace';
@@ -2100,6 +2253,14 @@
           tag.className = 'command-tag';
           tag.textContent = 'Open dossier';
           item.prepend(iconMarkup(PALETTE_COMMANDS[2]));
+          item.append(tag);
+        } else if (option.kind === 'reset-filters') {
+          const label = document.createElement('span');
+          label.textContent = 'Reset Explore filters';
+          item.append(label);
+          const tag = document.createElement('span');
+          tag.className = 'command-tag';
+          tag.textContent = 'Action';
           item.append(tag);
         } else {
           item.append(iconMarkup(option.command));
@@ -2120,6 +2281,11 @@
       close();
       if (option.kind === 'cve') {
         window.location.assign(`?page=center&cve=${encodeURIComponent(option.id)}`);
+      } else if (option.kind === 'current-cve') {
+        if (activeCveId) window.location.assign(`?page=center&cve=${encodeURIComponent(activeCveId)}`);
+      } else if (option.kind === 'reset-filters') {
+        if (activePage !== 'center') switchPage('center');
+        clearFilters();
       } else {
         switchPage(option.command.page);
       }
@@ -2152,8 +2318,8 @@
     }
 
     function PAGES_COMMAND_PAGES() {
-      // Every declared page gets its command; the canonical order lives in bindSwipeNavigation.
-      return new Set(['overview', 'latest', 'center', 'archive', 'community']);
+      // Every declared page gets its command; the canonical order lives in CANONICAL_PAGES.
+      return new Set(CANONICAL_PAGES);
     }
 
     input.addEventListener('input', () => render(input.value));
@@ -2181,7 +2347,7 @@
     const main = $('#main-content');
     if (!main || typeof window.PointerEvent !== 'function') return;
 
-    const pageOrder = ['overview', 'latest', 'center', 'archive', 'community'];
+    const pageOrder = CANONICAL_PAGES;
     // Only genuine interactive controls veto a gesture: a drag that starts on a
     // link/button/field belongs to that control, not to page navigation.
     const controlSelector = [
@@ -2678,6 +2844,8 @@
     });
     $('#explore-cves').addEventListener('click', () => switchPage('center'));
     overviewRetryButtons.forEach((button) => button.addEventListener('click', () => loadOverview({ retry: true })));
+    const kevRetry = $('#kev-retry');
+    if (kevRetry) kevRetry.addEventListener('click', () => { kevRetry.hidden = true; loadKevWatch({ retry: true }); });
     $('.wordmark').addEventListener('click', (event) => {
       event.preventDefault();
       switchPage('overview');
@@ -2846,7 +3014,7 @@
         returnToSearch();
       }
       if (event.key === 'Escape' && !detailView.hidden) backToResults();
-      const pageOrderForKeys = ['overview', 'latest', 'center', 'archive', 'community'];
+      const pageOrderForKeys = CANONICAL_PAGES;
       // Focus inside the nav uses the roving-tabindex handlers; do not double-navigate.
       const onNavTab = target instanceof HTMLElement && target.classList.contains('nav-tab');
       if (!typing && !onNavTab && !event.ctrlKey && !event.metaKey && !event.altKey &&

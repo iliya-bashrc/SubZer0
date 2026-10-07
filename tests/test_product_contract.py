@@ -35,8 +35,8 @@ class ProductContractTests(unittest.TestCase):
 
     def test_canonical_page_order_covers_every_dom_page(self):
         dom_pages = {m for m in re.findall(r'id="page-([a-z-]+)"', self.index) if not m.startswith(("indicator", "size", "prev", "next"))}
-        declared = re.search(r"pageOrder\s*=\s*\[([^\]]+)\]", self.app)
-        self.assertIsNotNone(declared, "app.js must declare a canonical pageOrder")
+        declared = re.search(r"CANONICAL_PAGES\s*=\s*Object\.freeze\(\[([^\]]+)\]\)", self.app)
+        self.assertIsNotNone(declared, "app.js must declare CANONICAL_PAGES as the single page-order source")
         order = set(re.findall(r"'([a-z]+)'", declared.group(1)))
         self.assertEqual(dom_pages, order, f"DOM pages {sorted(dom_pages)} != canonical order {sorted(order)}")
 
@@ -56,6 +56,31 @@ class ProductContractTests(unittest.TestCase):
     def test_community_has_no_github_cta(self):
         community_section = self.index.split('id="page-community"', 1)[-1]
         self.assertNotIn("github.com/iliya-bashrc/SubZer0", community_section)
+
+    def test_every_page_has_one_nav_entry_and_palette_command(self):
+        pages = [m for m in re.findall(r'id="page-([a-z-]+)"', self.index) if not m.startswith(("indicator", "size", "prev", "next"))]
+        tabs = re.findall(r'id="tab-([a-z-]+)"', self.index)
+        self.assertEqual(sorted(pages), sorted(tabs), "every page needs exactly one nav tab")
+        for page in pages:
+            with self.subTest(page=page):
+                self.assertIn(f"page: '{page}'", self.app, f"page {page} has no palette command entry")
+
+    def test_single_canonical_page_order_source(self):
+        # No page-order array may be re-declared anywhere else: navigation state has ONE source.
+        redeclarations = re.findall(r"(?:pageOrder|pageOrderForKeys)\s*=\s*\[", self.app)
+        self.assertEqual(redeclarations, [], "page order must only come from CANONICAL_PAGES")
+
+    def test_kev_watch_reads_only_the_verified_index(self):
+        # KEV Watch must reuse the manifest/hash verification path, never a raw fetch.
+        self.assertIn("validateKevIndex", self.app)
+        self.assertIn("candidate.search_index", self.app)
+        self.assertRegex(self.app, r"fetchVerifiedJson\(candidate\.search_index")
+        self.assertNotIn("fetch('snapshot/data/search_index.json')", self.app)
+
+    def test_metallic_tokens_are_pinned_by_the_pages_suite(self):
+        styles = (ROOT / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("--steel-bright: #64747b;", styles)
+        self.assertIn("--steel-edge: #3b4a51;", styles)
 
 
 if __name__ == "__main__":
