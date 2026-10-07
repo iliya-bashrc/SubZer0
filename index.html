@@ -61,13 +61,26 @@
     </div>
   </aside>
 
+  <div class="command-palette" id="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+    <div class="command-palette__scrim" data-palette-close></div>
+    <div class="command-palette__panel" role="document">
+      <div class="command-palette__input-row">
+        <svg class="command-palette__icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m12.6 12.6 4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        <input class="command-palette__input" id="command-palette-input" type="text" placeholder="Type a command or search CVEs…" autocomplete="off" spellcheck="false" aria-label="Command palette input">
+        <kbd class="command-palette__kbd">Esc</kbd>
+      </div>
+      <ul class="command-palette__list" id="command-palette-list" role="listbox" aria-label="Commands"></ul>
+      <p class="command-palette__hint"><kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> run · <kbd>Ctrl K</kbd> toggle</p>
+    </div>
+  </div>
+
   <main id="main-content" tabindex="-1">
     <section class="page page-overview is-current" id="page-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
       <div class="overview-wrap">
         <header class="overview-heading">
           <div class="overview-heading__copy">
             <p class="section-context">Vulnerability intelligence</p>
-            <h1>CVE intelligence, with its evidence attached.</h1>
+            <h1>CVE intelligence, with <em>the evidence attached</em>.</h1>
             <p class="overview-lead">A verified, dated view of records across NVD, GitHub advisories and CISA KEV. Compare the signals; open the source record when you need the detail.</p>
           </div>
           <button class="primary-action" id="explore-cves" type="button">Explore records</button>
@@ -89,6 +102,39 @@
           <article class="overview-kpi"><span class="overview-kpi__label">CISA KEV</span><strong id="overview-kev">—</strong><span class="overview-kpi__note">records listed in the capture</span></article>
           <article class="overview-kpi"><span class="overview-kpi__label">EPSS coverage</span><strong id="overview-epss">—</strong><span class="overview-kpi__note" id="overview-epss-note">score set not verified</span></article>
           <article class="overview-kpi overview-kpi--date"><span class="overview-kpi__label">Window end</span><strong id="overview-window-end">—</strong><span class="overview-kpi__note">UTC activity date</span></article>
+        </section>
+
+        <section class="threat-pulse" aria-labelledby="threat-pulse-heading">
+          <div class="threat-pulse__head">
+            <div>
+              <h2 id="threat-pulse-heading">Threat pulse</h2>
+              <p>Composition of the captured window. Derived from manifest totals and per-day shard counts — not a risk score.</p>
+            </div>
+            <p class="threat-pulse__stamp" id="threat-pulse-stamp">Awaiting verification</p>
+          </div>
+
+          <div class="threat-pulse__split">
+            <div class="pulse-block pulse-block--severity">
+              <h3 class="pulse-block__title">Severity composition</h3>
+              <div class="severity-bar" id="severity-bar" role="img" aria-label="Severity composition will appear after manifest verification" aria-busy="true"></div>
+              <ul class="severity-legend" id="severity-legend" aria-busy="true"></ul>
+              <dl class="pulse-facts pulse-facts--echo">
+                <div><dt>Known exploited</dt><dd id="pulse-kev-echo">—</dd></div>
+                <div><dt>EPSS scored</dt><dd id="pulse-epss-echo">—</dd></div>
+              </dl>
+            </div>
+
+            <div class="pulse-block">
+              <h3 class="pulse-block__title">Recent activity <span class="pulse-block__unit">records / day</span></h3>
+              <div class="pulse-spark" id="pulse-spark" role="img" aria-label="Recent daily activity will appear after manifest verification" aria-busy="true"></div>
+              <dl class="pulse-facts" id="pulse-facts">
+                <div><dt>Peak day</dt><dd id="pulse-peak">—</dd></div>
+                <div><dt>Quietest day</dt><dd id="pulse-quiet">—</dd></div>
+                <div><dt>Known exploited</dt><dd id="pulse-kev">—</dd></div>
+                <div><dt>EPSS scored</dt><dd id="pulse-epss">—</dd></div>
+              </dl>
+            </div>
+          </div>
         </section>
 
         <div class="overview-grid">

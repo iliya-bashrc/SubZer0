@@ -1050,6 +1050,21 @@
     const svg = document.createElementNS(namespace, 'svg');
     svg.setAttribute('viewBox', '0 0 720 136');
     svg.setAttribute('aria-hidden', 'true');
+    const defs = document.createElementNS(namespace, 'defs');
+    const gradient = document.createElementNS(namespace, 'linearGradient');
+    gradient.setAttribute('id', 'sz-bar');
+    gradient.setAttribute('x1', '0');
+    gradient.setAttribute('y1', '0');
+    gradient.setAttribute('x2', '0');
+    gradient.setAttribute('y2', '1');
+    [['0%', '#79c2d6'], ['100%', '#2c5563']].forEach(([offset, color]) => {
+      const stop = document.createElementNS(namespace, 'stop');
+      stop.setAttribute('offset', offset);
+      stop.setAttribute('stop-color', color);
+      gradient.append(stop);
+    });
+    defs.append(gradient);
+    svg.append(defs);
     const entries = candidate.days;
     const maximum = Math.max(1, ...entries.map((day) => day.count));
     const left = 38;
@@ -1105,12 +1120,106 @@
     end.textContent = formatDate(entries.at(-1).date);
   }
 
+  const PULSE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'none', 'unknown'];
+  const PULSE_LEGEND_COLORS = { critical: '#f4756b', high: '#f09a52', medium: '#e3c05a', low: '#7fc4de', none: '#7f8f96', unknown: '#93a1a8' };
+
+  function renderThreatPulse(candidate) {
+    const bar = document.getElementById('severity-bar');
+    const legend = document.getElementById('severity-legend');
+    if (!bar || !legend) return;
+    const totals = candidate.totals;
+    const grandTotal = Math.max(1, totals.cves);
+    bar.replaceChildren();
+    PULSE_SEVERITIES.forEach((severity) => {
+      const count = Number(totals[severity]) || 0;
+      if (count <= 0) return;
+      const segment = document.createElement('span');
+      segment.className = 'severity-bar__segment';
+      segment.dataset.severity = severity;
+      segment.style.width = `${((count / grandTotal) * 100).toFixed(2)}%`;
+      const label = document.createElement('span');
+      label.className = 'sr-only';
+      label.textContent = `${severity}: ${nf.format(count)}`;
+      segment.append(label);
+      bar.append(segment);
+    });
+    bar.setAttribute('aria-busy', 'false');
+    bar.setAttribute('aria-label', `Severity composition: ${PULSE_SEVERITIES
+      .map((severity) => `${severity} ${nf.format(Number(totals[severity]) || 0)}`)
+      .join(', ')}.`);
+    legend.replaceChildren();
+    PULSE_SEVERITIES.forEach((severity) => {
+      const count = Number(totals[severity]) || 0;
+      if (count <= 0) return;
+      const item = document.createElement('li');
+      item.style.setProperty('--legend-color', PULSE_LEGEND_COLORS[severity] || '#57676e');
+      const label = document.createElement('span');
+      label.textContent = severity[0].toUpperCase() + severity.slice(1);
+      const strong = document.createElement('strong');
+      strong.textContent = nf.format(count);
+      item.append(label, strong);
+      legend.append(item);
+    });
+    legend.setAttribute('aria-busy', 'false');
+
+    const spark = document.getElementById('pulse-spark');
+    const entries = candidate.days;
+    if (spark && Array.isArray(entries) && entries.length) {
+      const namespace = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(namespace, 'svg');
+      svg.setAttribute('viewBox', '0 0 300 56');
+      svg.setAttribute('aria-hidden', 'true');
+      const maximum = Math.max(1, ...entries.map((day) => day.count));
+      const step = 298 / entries.length;
+      const points = entries.map((day, index) => [
+        1 + step * index + step / 2,
+        54 - Math.max(1.5, (day.count / maximum) * 48),
+      ]);
+      const area = document.createElementNS(namespace, 'path');
+      area.setAttribute('class', 'spark-area');
+      area.setAttribute('d', `M 1 56 L ${points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L ')} L 299 56 Z`);
+      const line = document.createElementNS(namespace, 'path');
+      line.setAttribute('class', 'spark-line');
+      line.setAttribute('d', `M ${points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L ')}`);
+      svg.append(area, line);
+      const peakDay = entries.reduce((best, day) => (day.count > best.count ? day : best), entries[0]);
+      const peakDot = document.createElementNS(namespace, 'circle');
+      peakDot.setAttribute('cx', String(peakDay ? points[entries.indexOf(peakDay)][0] : 0));
+      peakDot.setAttribute('cy', String(peakDay ? points[entries.indexOf(peakDay)][1] : 0));
+      peakDot.setAttribute('r', '2.4');
+      peakDot.setAttribute('fill', '#8fd0e2');
+      svg.append(peakDot);
+      spark.replaceChildren(svg);
+      spark.setAttribute('aria-busy', 'false');
+      spark.setAttribute('aria-label', `Daily record counts across the ${entries.length}-day window; peak ${nf.format(peakDay.count)} on ${peakDay.date}.`);
+    }
+
+    const peak = entries && entries.length
+      ? entries.reduce((best, day) => (day.count > best.count ? day : best), entries[0]) : null;
+    const quiet = entries && entries.length
+      ? entries.reduce((best, day) => (day.count < best.count ? day : best), entries[0]) : null;
+    const setPulse = (id, text) => {
+      const node = document.getElementById(id);
+      if (node) node.textContent = text;
+    };
+    setPulse('pulse-peak', peak ? `${nf.format(peak.count)} · ${formatDate(peak.date)}` : '—');
+    setPulse('pulse-quiet', quiet ? `${nf.format(quiet.count)} · ${formatDate(quiet.date)}` : '—');
+    setPulse('pulse-kev', nf.format(totals.known_exploited));
+    const epssText = `${nf.format(candidate.epss.scored_cves)} / ${nf.format(totals.cves)}`;
+    setPulse('pulse-epss', epssText);
+    setPulse('pulse-kev-echo', nf.format(totals.known_exploited));
+    setPulse('pulse-epss-echo', epssText);
+    const stamp = document.getElementById('threat-pulse-stamp');
+    if (stamp) stamp.textContent = `Derived from ${nf.format(totals.cves)} records · window ending ${formatDate(candidate.window.end)}`;
+  }
+
   function renderOverview(payload, candidate) {
     $('#overview-total').textContent = nf.format(candidate.totals.cves);
     $('#overview-kev').textContent = nf.format(candidate.totals.known_exploited);
     $('#overview-epss').textContent = `${nf.format(candidate.epss.scored_cves)} / ${nf.format(candidate.totals.cves)}`;
     $('#overview-epss-note').textContent = `scored in the ${candidate.epss.score_date ? formatDate(candidate.epss.score_date) : 'undated'} set`;
     $('#overview-window-end').textContent = formatDate(candidate.window.end);
+    renderThreatPulse(candidate);
     renderActivityChart(candidate);
     renderSourceChecks(candidate);
     renderLatestPage(payload, candidate);
@@ -1932,6 +2041,142 @@
     scheduleSearchDockSync();
   }
 
+  const PALETTE_COMMANDS = [
+    { label: 'Go to Overview', tag: 'Page', page: 'overview', icon: '<rect x="3" y="3" width="5" height="5" rx=".5"/><rect x="12" y="3" width="5" height="5" rx=".5"/><rect x="3" y="12" width="5" height="5" rx=".5"/><rect x="12" y="12" width="5" height="5" rx=".5"/>' },
+    { label: 'Go to Latest', tag: 'Page', page: 'latest', icon: '<path d="M4 5h12M4 10h12M4 15h8"/>' },
+    { label: 'Go to Explore', tag: 'Page', page: 'center', icon: '<circle cx="8.5" cy="8.5" r="5.2"/><path d="m12.6 12.6 4 4"/>' },
+    { label: 'Go to Archive', tag: 'Page', page: 'archive', icon: '<rect x="3" y="4.5" width="14" height="12" rx="1"/><path d="M3 8h14M7 2.5v3M13 2.5v3"/>' },
+    { label: 'Go to Community', tag: 'Page', page: 'community', icon: '<path d="m7 7-3.4 3L7 13M13 7l3.4 3L13 13"/>' },
+  ];
+
+  function bindCommandPalette() {
+    const palette = document.getElementById('command-palette');
+    const input = document.getElementById('command-palette-input');
+    const list = document.getElementById('command-palette-list');
+    if (!palette || !input || !list || typeof window.PointerEvent !== 'function') return;
+
+    let options = [];
+    let activeIndex = 0;
+
+    function iconMarkup(command) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 20 20');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.innerHTML = command.icon; // static trusted string from PALETTE_COMMANDS above
+      return svg;
+    }
+
+    function render(query) {
+      const q = (query || '').trim().toLowerCase();
+      const pages = PAGES_COMMAND_PAGES();
+      const commands = PALETTE_COMMANDS.filter((command) => pages.has(command.page));
+      const cveQuery = q.length >= 7 && /^cve-\d{4}-\d{4,}$/i.test(q) ? q.toUpperCase() : null;
+      const source = q
+        ? commands.filter((command) => command.label.toLowerCase().includes(q))
+        : commands;
+      options = source.map((command) => ({ kind: 'command', command }));
+      if (cveQuery) options.unshift({ kind: 'cve', id: cveQuery });
+      activeIndex = 0;
+      list.replaceChildren();
+      if (!options.length) {
+        const empty = document.createElement('li');
+        empty.className = 'command-palette__empty';
+        empty.textContent = 'No matching command.';
+        list.append(empty);
+        return;
+      }
+      options.forEach((option, index) => {
+        const item = document.createElement('li');
+        item.className = `command-palette__option${index === activeIndex ? ' is-active' : ''}`;
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+        item.dataset.index = String(index);
+        if (option.kind === 'cve') {
+          const strong = document.createElement('strong');
+          strong.textContent = option.id;
+          strong.style.font = '600 12.5px ui-monospace, "SFMono-Regular", Consolas, monospace';
+          item.append(strong);
+          const tag = document.createElement('span');
+          tag.className = 'command-tag';
+          tag.textContent = 'Open dossier';
+          item.prepend(iconMarkup(PALETTE_COMMANDS[2]));
+          item.append(tag);
+        } else {
+          item.append(iconMarkup(option.command));
+          const label = document.createElement('span');
+          label.textContent = option.command.label;
+          item.append(label);
+          const tag = document.createElement('span');
+          tag.className = 'command-tag';
+          tag.textContent = option.command.tag;
+          item.append(tag);
+        }
+        item.addEventListener('click', () => runOption(option));
+        list.append(item);
+      });
+    }
+
+    function runOption(option) {
+      close();
+      if (option.kind === 'cve') {
+        window.location.assign(`?page=center&cve=${encodeURIComponent(option.id)}`);
+      } else {
+        switchPage(option.command.page);
+      }
+    }
+
+    function moveSelection(delta) {
+      if (!options.length) return;
+      activeIndex = (activeIndex + delta + options.length) % options.length;
+      [...list.children].forEach((node, index) => {
+        node.classList.toggle('is-active', index === activeIndex);
+        node.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+      });
+      list.children[activeIndex]?.scrollIntoView({ block: 'nearest' });
+    }
+
+    function open() {
+      palette.hidden = false;
+      render('');
+      input.value = '';
+      input.focus();
+    }
+
+    function close() {
+      palette.hidden = true;
+      input.blur();
+    }
+
+    function toggle() {
+      if (palette.hidden) open(); else close();
+    }
+
+    function PAGES_COMMAND_PAGES() {
+      // Every declared page gets its command; the canonical order lives in bindSwipeNavigation.
+      return new Set(['overview', 'latest', 'center', 'archive', 'community']);
+    }
+
+    input.addEventListener('input', () => render(input.value));
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); moveSelection(1); }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); moveSelection(-1); }
+      else if (event.key === 'Enter') { event.preventDefault(); options[activeIndex] && runOption(options[activeIndex]); }
+    });
+    palette.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('[data-palette-close]')) close();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        toggle();
+      } else if (event.key === 'Escape' && !palette.hidden) {
+        event.preventDefault();
+        close();
+      }
+    });
+  }
+
   function bindSwipeNavigation() {
     const main = $('#main-content');
     if (!main || typeof window.PointerEvent !== 'function') return;
@@ -2440,6 +2685,8 @@
     headerSearchReturn.addEventListener('click', returnToSearch);
     $('#back-to-results').addEventListener('click', backToResults);
     $('#telegram-cta').addEventListener('click', handleTelegramClick);
+    bindCommandPalette();
+
     bindSwipeNavigation();
     window.addEventListener('popstate', restoreLocationState);
     document.addEventListener('click', (event) => {

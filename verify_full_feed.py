@@ -1732,6 +1732,10 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         desktop_page.evaluate('window.getSelection()?.removeAllRanges()')
 
         # The real snapshot activity chart is an interaction surface, never a desktop swipe corridor.
+        # The Threat Pulse panel sits above the chart, so bring the panel into the viewport before
+        # trusting elementFromPoint (points outside the viewport cannot be hit-tested).
+        desktop_page.locator('.activity-panel').evaluate('el => el.scrollIntoView({ block: \'center\' })')
+        desktop_page.wait_for_timeout(250)
         activity = desktop_page.locator('.activity-panel').bounding_box()
         assert activity is not None
         chart_point = (round(activity['x'] + activity['width'] * 0.96), round(activity['y'] + activity['height'] * 0.08))
