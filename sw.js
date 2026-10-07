@@ -1,34 +1,51 @@
 'use strict';
 
-/*
- * SubZer0 service worker (v2).
- * Shell = cache-first so the app opens offline.
- * Snapshot JSON = network-first with cache fallback, so freshness is never
- * faked from a stale cache when the network is available.
- * Daily shards are cached on demand with an LRU-style date trim.
- */
-
-const CACHE_NAME = 'subzero-offline-v2';
+const CACHE_NAME = 'subzero-offline-v1';
+const CACHE_PREFIX = 'subzero-offline-';
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname;
 const SHELL_PATHS = [
   '',
   'index.html',
   'app.js',
+  'community.js',
   'styles.css',
+  'feed.css',
+  'severity-effects.css',
+  'community.css',
   'assets/telegram-mark.svg',
   'assets/telegram-bugcod3.svg',
   'assets/telegram-rootaccessclub.svg',
+  'snapshot/manifest.json',
+  'snapshot/data/overview.json'
 ];
 const SHELL_URLS = SHELL_PATHS.map((path) => new URL(path || './', SCOPE_URL).href);
 const MAX_SHARDS_TO_KEEP = 40;
 
-const SHARD_RE = /^snapshot\/data\/\d{4}-\d{2}-\d{2}\.json$/;
-const FRESH_JSON_RE = /^snapshot\/(manifest\.json|changes\.json|data\/(search_index|shard_map|epss)\.json)$/;
-
 function relativePath(url) {
   if (!url.pathname.startsWith(SCOPE_PATH)) return '';
   return url.pathname.slice(SCOPE_PATH.length);
+}
+
+function snapshotByteLimit(path) {
+  if (path === 'snapshot/manifest.json') return 512 * 1024;
+  if (path === 'snapshot/data/overview.json') return 64 * 1024;
+  if (path === 'snapshot/data/epss.json') return 4 * 1024 * 1024;
+  if (/^snapshot\/data\/\d{4}-\d{2}-\d{2}\.json$/.test(path)) return 16 * 1024 * 1024;
+  return 0;
+}
+
+function isShellPath(path) {
+  return SHELL_PATHS.includes(path);
+}
+
+function cacheableSnapshotSize(path, response) {
+  const maximum = snapshotByteLimit(path);
+  if (!maximum || !response.ok) return false;
+  const header = response.headers.get('content-length');
+  if (!header || !/^\d+$/.test(header)) return false;
+  const size = Number(header);
+  return Number.isSafeInteger(size) && size >= 0 && size <= maximum;
 }
 
 async function trimOldShards(cache) {
@@ -42,10 +59,112 @@ async function trimOldShards(cache) {
   await Promise.all(expired.map(({ request }) => cache.delete(request)));
 }
 
+async function cacheNetworkResponse(request, response, path) {
+  const shouldCache = isShellPath(path) || cacheableSnapshotSize(path, response);
+  if (!shouldCache) return;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(new Request(request.url, { method: 'GET' }), response.clone());
+    if (/^snapshot\/data\/\d{4}-\d{2}-\d{2}\.json$/.test(path)) await trimOldShards(cache);
+  } catch {
+    // Storage is opportunistic; the hash-verified network path remains fully usable.
+  }
+}
+
+function makeCacheCompletion(event) {
+  let resolve;
+  let finished = false;
+  const completion = new Promise((done) => { resolve = done; });
+  event.waitUntil(completion);
+  return (task) => {
+    if (finished) return;
+    finished = true;
+    resolve(task || undefined);
+  };
+}
+
+function cachedWithOfflineMarker(response) {
+  if (!response) return null;
+  const headers = new Headers(response.headers);
+  headers.set('X-SubZer0-Cache', 'offline-fallback');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+async function serveNavigation(request, event) {
+  const indexUrl = new URL('index.html', SCOPE_URL).href;
+  const finishCache = makeCacheCompletion(event);
+  if (request.headers.get('X-SubZer0-Offline') === 'true' || self.navigator.onLine === false) {
+    finishCache();
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      return cachedWithOfflineMarker(await cache.match(indexUrl));
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      finishCache(cacheNetworkResponse(new Request(indexUrl), response, 'index.html'));
+      return response;
+    }
+    if (response.status < 500) {
+      finishCache();
+      return response;
+    }
+  } catch {
+    // Reuse the app shell when the origin is unreachable.
+  }
+  finishCache();
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    return cachedWithOfflineMarker(await cache.match(indexUrl));
+  } catch {
+    return null;
+  }
+}
+
+async function serveStaticResource(request, path, event) {
+  const finishCache = makeCacheCompletion(event);
+  if (request.headers.get('X-SubZer0-Offline') === 'true' || self.navigator.onLine === false) {
+    finishCache();
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      return cachedWithOfflineMarker(await cache.match(new Request(request.url, { method: 'GET' })));
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      finishCache(cacheNetworkResponse(request, response, path));
+      return response;
+    }
+    if (response.status < 500) {
+      finishCache();
+      return response;
+    }
+  } catch {
+    // Fall back only to previously cached same-origin assets.
+  }
+  finishCache();
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    return cachedWithOfflineMarker(await cache.match(new Request(request.url, { method: 'GET' })));
+  } catch {
+    return null;
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await Promise.allSettled(SHELL_URLS.map((url) => cache.add(url)));
+    await cache.addAll(SHELL_URLS);
     await self.skipWaiting();
   })());
 });
@@ -53,7 +172,8 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)));
+    await Promise.all(names.filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)
+      .map((name) => caches.delete(name)));
     await self.clients.claim();
   })());
 });
@@ -61,39 +181,23 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;
-  const path = relativePath(new URL(request.url));
-  if (!path) return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin || !url.pathname.startsWith(SCOPE_PATH)) return;
 
-  // Freshness-critical JSON: network first, fall back to cache only offline.
-  if (FRESH_JSON_RE.test(path) || SHARD_RE.test(path)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE_NAME);
-      try {
-        const response = await fetch(request);
-        if (response.ok) {
-          cache.put(request, response.clone());
-          if (SHARD_RE.test(path)) trimOldShards(cache);
-        }
-        return response;
-      } catch (err) {
-        const cached = await cache.match(request);
-        if (cached) return cached;
-        throw err;
-      }
-    })());
+  if (request.mode === 'navigate') {
+    event.respondWith((async () => (await serveNavigation(request, event))
+      || new Response('The last verified SubZer0 app shell is not available offline.', {
+        status: 503,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      }))());
     return;
   }
 
-  // App shell: cache-first, revalidate in the background.
-  if (SHELL_PATHS.includes(path)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(request);
-      const network = fetch(request).then((response) => {
-        if (response.ok) cache.put(request, response.clone());
-        return response;
-      }).catch(() => null);
-      return cached || (await network) || Response.error();
-    })());
-  }
+  const path = relativePath(url);
+  if (!isShellPath(path) && !snapshotByteLimit(path)) return;
+  event.respondWith((async () => (await serveStaticResource(request, path, event))
+    || new Response('This static snapshot file is not cached. Reconnect to verify the complete capture.', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    }))());
 });

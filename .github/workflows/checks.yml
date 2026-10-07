@@ -39,7 +39,7 @@ jobs:
           node --check app.js
           node --check sw.js
           node --check community.js
-          python -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_preview.py verify_community_ansi_shadow.py
+          python -m py_compile scripts/*.py tests/*.py verify_full_feed.py verify_preview.py verify_community_ansi_shadow.py verify_swipe_navigation.py
 
       - name: Validate every committed snapshot byte, path, record, and digest
         run: python scripts/verify_data_snapshot.py
@@ -55,3 +55,5 @@ jobs:
 
       - name: Run Community behavior, keyboard, reduced-motion, and responsive checks
         run: python verify_community_ansi_shadow.py --community-only
+      - name: Browser regression - swipe navigation
+        run: python verify_swipe_navigation.py
