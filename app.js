@@ -2600,7 +2600,9 @@
       }
       if (event.key === 'Escape' && !detailView.hidden) backToResults();
       const pageOrderForKeys = ['overview', 'latest', 'center', 'archive', 'community'];
-      if (!typing && !event.ctrlKey && !event.metaKey && !event.altKey &&
+      // Focus inside the nav uses the roving-tabindex handlers; do not double-navigate.
+      const onNavTab = target instanceof HTMLElement && target.classList.contains('nav-tab');
+      if (!typing && !onNavTab && !event.ctrlKey && !event.metaKey && !event.altKey &&
           (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
         const index = pageOrderForKeys.indexOf(activePage);
         const delta = event.key === 'ArrowRight' ? 1 : -1;
