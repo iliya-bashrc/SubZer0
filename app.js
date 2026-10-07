@@ -242,6 +242,26 @@
     return BASE_SEVERITIES.includes(name) ? name[0].toUpperCase() + name.slice(1) : 'Not provided';
   }
 
+  // The captured product string replays its own vendor/product phrase (sometimes cut off
+  // mid-repeat). Keep exactly one copy: find the shortest period the full token sequence
+  // follows, then drop any trailing incomplete repeat.
+  function condenseProductList(value) {
+    const tokens = safeString(value).split(/\s+/).filter(Boolean).slice(0, 40);
+    if (tokens.length < 2) return tokens.join(' ');
+    const lower = tokens.map((token) => token.toLowerCase());
+    // Collapse only when the whole capture is an exact repeat of one phrase; anything else is
+    // kept verbatim — a near-repeat may be genuine product variants, not duplication.
+    for (let period = 2; period <= Math.floor(tokens.length / 2); period += 1) {
+      if (tokens.length % period !== 0) continue;
+      let repeated = true;
+      for (let index = period; index < tokens.length; index += 1) {
+        if (lower[index] !== lower[index % period]) { repeated = false; break; }
+      }
+      if (repeated) return tokens.slice(0, period).join(' ');
+    }
+    return tokens.join(' ');
+  }
+
   function makeSeverityTagFrom(value, score) {
     const name = safeString(value).toLowerCase();
     const category = name === 'none' || name === 'unknown' ? name : BASE_SEVERITIES.includes(name) ? name : 'unrated';
@@ -1006,7 +1026,10 @@
       body.className = 'kev-item__body';
       addText(body, 'p', 'kev-item__title', safeString(title, 'Title not recorded in the index'));
       const details = [];
-      if (products) details.push(`Affected: ${products}`);
+      if (products) {
+        const text = condenseProductList(products);
+        if (text) details.push(`Affected: ${text}`);
+      }
       if (activityDate) details.push(`Activity ${formatDate(activityDate)}`);
       if (publishedDate && publishedDate !== activityDate) details.push(`Published ${formatDate(publishedDate)}`);
       details.push(`Source severity ${sourceSeverityFromName(sev)}`);
