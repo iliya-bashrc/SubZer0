@@ -1945,9 +1945,6 @@
       '[role="dialog"]', '[aria-modal="true"]', '[contenteditable]:not([contenteditable="false"])',
       '.detail-view', '.snapshot-loader',
     ].join(',');
-    // Mouse/pen drags over dense reading surfaces are treated as text selection
-    // intent instead of navigation, so records, tables and the terminal stay usable.
-    const textSurfaceSelector = '.record-list, .record-row, .terminal-frame, .terminal-output, pre, table, .detail-view, .source-intelligence';
     const fieldSelector = [
       'input', 'select', 'textarea', 'option',
       '[role="combobox"]', '[role="textbox"]', '[role="dialog"]', '[aria-modal="true"]',
@@ -2177,7 +2174,8 @@
       // A gesture that starts on a control, field, dialog or horizontal scroller belongs to
       // that element, not to page navigation. Read-only surfaces stay swipeable.
       if (target.closest(controlSelector) || target.closest(fieldSelector) || hasHorizontalScrollSurface(target)) return;
-      if (desktopPointer && target.closest(textSurfaceSelector) && hasTextAtPoint(event.clientX, event.clientY)) return;
+      // A mouse drag over any glyph is text-selection intent, never navigation.
+      if (desktopPointer && hasTextAtPoint(event.clientX, event.clientY)) return;
       const page = target.closest('.page');
       if (!page || page.hidden || page !== pages.get(activePage)) return;
       stopSettlement(page);
