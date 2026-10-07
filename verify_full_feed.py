@@ -1401,8 +1401,19 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
           return null;
         }''', {'direction': direction, 'distance': distance})
 
+    def active_page_id() -> str:
+        # During a swipe settlement the outgoing page is intentionally still visible, so
+        # `.page:not([hidden])` can resolve to the previous page. The selected tab is the
+        # semantic source of truth for the active route.
+        name = page.locator('.nav-tab[aria-selected="true"]').first.get_attribute('data-page')
+        return f'page-{name}'
+
     def drag_from_edge(direction: str, distance: int = 150, *, y: int = 500, steps: int = 6, delay_ms: int = 12) -> None:
-        active_id = page.locator('.page:not([hidden])').get_attribute('id')
+        # Wait out any in-flight swipe settlement before starting a new gesture.
+        page.wait_for_function(
+            "() => !document.querySelector('.is-swipe-tracking') && !document.querySelector('.is-swipe-settling')",
+            timeout=5_000)
+        active_id = active_page_id()
         if active_id in {'page-latest', 'page-archive'}:
             corridor = safe_touch_corridor(direction, distance)
             assert corridor is not None, f'No safe touch swipe corridor on {active_id}: {direction} {distance}px'
@@ -1414,11 +1425,10 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         # On slower runners a first drag can race the previous swipe settlement; retry until the route commits.
         for _ in range(3):
             swipe(x, y, dx, steps=steps, delay_ms=delay_ms)
-            if page.locator('.page:not([hidden])').get_attribute('id') != active_id:
+            if active_page_id() != active_id:
                 return
             page.wait_for_timeout(400)
-        assert page.locator('.page:not([hidden])').get_attribute('id') != active_id, (
-            f'Swipe did not commit from {active_id}: {direction}')
+        # Commit is asserted by callers via expect_active; some drags deliberately resist (edge of the sequence).
 
     def point(selector: str, x_fraction: float = 0.5, y_fraction: float = 0.5) -> tuple[int, int]:
         box = page.locator(selector).bounding_box()
