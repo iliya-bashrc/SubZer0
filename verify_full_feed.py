@@ -1567,6 +1567,9 @@ def run_swipe_navigation_tests(browser, origin: str, manifest: dict) -> dict:
         swipe(panel_x, panel_y, 160, steps=6, delay_ms=12)
         expect_active('archive')
         expect(page).to_have_url(f'{origin}/?page=archive')
+        page.wait_for_function(
+            "() => !document.querySelector('.is-swipe-tracking') && !document.querySelector('.is-swipe-settling')",
+            timeout=5_000)
         page.locator('#tab-center').click()
         expect_active('center')
 
