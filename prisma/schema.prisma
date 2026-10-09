@@ -1,0 +1,103 @@
+// SubZer0 — Data Layer (Section 10)
+//
+// Canonical Prisma schema for the CVE intelligence platform.
+//
+// OPERATIONAL NOTE (binding for all future code):
+// The current production pipeline is a verified static snapshot
+// (snapshot/manifest.json + day shards + search_index + EPSS sidecar, each
+// SHA-256-checked by lib/snapshot.ts). This schema is the target model for the
+// Postgres-backed backend (Section 4). Fields that upstream sources do not
+// publish (CVSS vectors, CVSS v3.0/v2.0, EPSS trend history) exist as nullable
+// columns and MUST remain null until a verified source provides them — never
+// synthesized.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Cve {
+  id            String   @id // e.g. "CVE-2024-1234"
+  description   String
+  published     DateTime
+  lastModified  DateTime
+
+  // CVSS — nullable by design: upstream NVD/GHSA do not always publish
+  // vectors; v3.0/v2.0 rows stay null unless a verified source emits them.
+  cvssV31       Float?
+  cvssV31Vector String?
+  cvssV30       Float?
+  cvssV30Vector String?
+  cvssV2        Float?
+
+  // FIRST EPSS
+  epssScore      Float?
+  epssPercentile Float?
+  epssDate       DateTime?
+
+  // CISA KEV
+  kevListed    Boolean   @default(false)
+  kevDateAdded DateTime?
+
+  severity Severity @default(LOW)
+
+  pocReferences PocReference[]
+  references    Reference[]
+  cpeMatches    CpeMatch[]
+
+  @@index([severity, published])
+  @@index([kevListed])
+  @@index([epssScore])
+}
+
+model PocReference {
+  id        String   @id @default(cuid())
+  cveId     String
+  cve       Cve      @relation(fields: [cveId], references: [id])
+  source    String // "github" | "exploitdb" | "metasploit"
+  url       String
+  verified  Boolean  @default(false)
+  checkedAt DateTime @default(now())
+
+  @@index([cveId])
+}
+
+model Reference {
+  id     String @id @default(cuid())
+  cveId  String
+  cve    Cve    @relation(fields: [cveId], references: [id])
+  url    String
+  source String // "nvd" | "ghsa" | "vendor"
+  tags   String[]
+
+  @@index([cveId])
+}
+
+model CpeMatch {
+  id      String  @id @default(cuid())
+  cveId   String
+  cve     Cve     @relation(fields: [cveId], references: [id])
+  vendor  String
+  product String
+  version String?
+
+  @@index([cveId])
+  @@index([vendor, product])
+}
+
+model DailyShard {
+  date       DateTime @id
+  cveCount   Int
+  manifestOk Boolean  @default(false)
+}
