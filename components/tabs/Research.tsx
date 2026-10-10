@@ -67,7 +67,7 @@ export function Research() {
     if (!manifest) return;
     let cancelled = false;
     fetchVerifiedJson(
-      `/snapshot/${manifest.shard_map.path}`,
+      `${process.env.__NEXT_ROUTER_BASEPATH || ''}/snapshot/${manifest.shard_map.path}`,
       manifest.shard_map.sha256,
     )
       .then((m) => {

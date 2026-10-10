@@ -41,7 +41,7 @@ export function DossierView({ cveId }: { cveId: string }) {
     (async () => {
       try {
         const shardMap = (await fetchVerifiedJson(
-          `/snapshot/${manifest.shard_map.path}`,
+          `${process.env.__NEXT_ROUTER_BASEPATH || ''}/snapshot/${manifest.shard_map.path}`,
           manifest.shard_map.sha256,
         )) as Record<string, string>;
         const rec = await getCve(manifest, shardMap, cveId);
@@ -49,7 +49,7 @@ export function DossierView({ cveId }: { cveId: string }) {
         // Join EPSS score from the verified sidecar (not present in shard records).
         try {
           const epss = (await fetchVerifiedJson(
-            `/snapshot/${manifest.epss.path}`,
+            `${process.env.__NEXT_ROUTER_BASEPATH || ''}/snapshot/${manifest.epss.path}`,
             manifest.epss.sha256,
           )) as { scores?: Record<string, { score: number; percentile: number }> };
           const entry = epss.scores?.[cveId];
@@ -148,7 +148,7 @@ export function DossierView({ cveId }: { cveId: string }) {
             record={record}
             shardRecords={shardRecords}
             onSelect={(id) => {
-              window.location.href = `/cve/${id}/`;
+              window.location.href = `${process.env.__NEXT_ROUTER_BASEPATH || ''}/cve/${id}/`;
             }}
           />
         }

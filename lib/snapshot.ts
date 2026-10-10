@@ -8,7 +8,7 @@
  * unverified data.
  */
 
-export const SNAPSHOT_BASE = '/snapshot';
+export const SNAPSHOT_BASE = (process.env.__NEXT_ROUTER_BASEPATH || '') + '/snapshot';
 
 export interface ManifestDay {
   date: string;

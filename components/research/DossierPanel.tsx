@@ -99,7 +99,7 @@ export function DossierPanel({ open, cveId, manifest, shardMap, onClose }: Dossi
         const rec = await getCve(manifest, shardMap, cveId);
         try {
           const epss = (await fetchVerifiedJson(
-            `/snapshot/${manifest.epss.path}`,
+            `${process.env.__NEXT_ROUTER_BASEPATH || ''}/snapshot/${manifest.epss.path}`,
             manifest.epss.sha256,
           )) as { scores?: Record<string, { score: number; percentile: number }> };
           const entry = epss.scores?.[cveId];

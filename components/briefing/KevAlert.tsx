@@ -34,7 +34,7 @@ export const KevAlert = memo(function KevAlert({ items }: { items: KevRow[] }) {
           {items.slice(0, 8).map((k) => (
             <li key={k.id}>
               <a
-                href={`/cve/${k.id}/`}
+                href={`${process.env.__NEXT_ROUTER_BASEPATH || ''}/cve/${k.id}/`}
                 className="group flex items-center gap-3 rounded-md px-2 py-3
                            transition-colors hover:bg-bg-hover"
               >
