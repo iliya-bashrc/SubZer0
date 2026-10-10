@@ -173,11 +173,14 @@ export function Research() {
         </div>
 
         <div className="min-w-0 flex-1">
-          <ResultsTable
-            rows={rows}
-            onOpen={openDossier}
-            onResetFilters={() => setFilters({ ...DEFAULT_FILTERS, severities: new Set() })}
-          />
+          {/* mt for mobile only: keep the floating filters chip clear of card 1 */}
+          <div className="mt-0 lg:mt-0 max-lg:pt-9 h-full">
+            <ResultsTable
+              rows={rows}
+              onOpen={openDossier}
+              onResetFilters={() => setFilters({ ...DEFAULT_FILTERS, severities: new Set() })}
+            />
+          </div>
         </div>
       </div>
 

@@ -13,7 +13,7 @@ import type { CveListItem } from '@/lib/snapshot';
  */
 
 const ROW_H = 48;
-const CARD_H = 108;
+const CARD_H = 118; // 108px card + 10px gap below (virtualized spacer)
 
 interface ResultsTableProps {
   rows: CveListItem[];
@@ -167,9 +167,9 @@ export const ResultsTable = memo(function ResultsTable({ rows, onOpen, onResetFi
                   key={item.id}
                   onClick={(e) => onOpen(item.id, e.currentTarget)}
                   aria-label={`Open dossier for ${item.id}${item.kev ? ', CISA KEV listed' : ''}`}
-                  className="absolute inset-x-0 cursor-pointer rounded-lg border border-line-soft
+                  className="absolute inset-x-0 cursor-pointer rounded-lg border border-line
                              bg-bg-raised p-3.5 text-left transition-colors hover:bg-bg-hover"
-                  style={{ height: vRow.size, transform: `translateY(${vRow.start}px)` }}
+                  style={{ height: vRow.size - 10, transform: `translateY(${vRow.start}px)` }}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-mono text-[13px] text-ink">
