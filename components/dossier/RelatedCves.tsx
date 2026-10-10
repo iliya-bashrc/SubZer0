@@ -84,7 +84,7 @@ export const RelatedCves = memo(function RelatedCves({ record, shardRecords, onS
             ))}
           </ul>
         ) : (
-          <div className="text-[12px] text-ink-3">—</div>
+          <div className="text-[12px] text-ink-3">— no other CVE for this vendor in the verified feed</div>
         )}
       </div>
 
