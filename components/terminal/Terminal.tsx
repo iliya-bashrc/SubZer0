@@ -37,7 +37,8 @@ type Block =
   | { id: string; type: 'prompt'; text: string }
   | { id: string; type: 'ascii' }
   | { id: string; type: 'info' }
-  | { id: string; type: 'help' };
+  | { id: string; type: 'help' }
+  | { id: string; type: 'link'; href: string };
 
 type Phase = 'boot' | 'ready' | 'executing';
 
@@ -164,7 +165,12 @@ function useTerminalCore() {
         setPhase('ready');
         return;
       }
-      if (cmd.href) { await sleep(REDIRECT_DELAY); window.location.href = cmd.href; return; }
+      if (cmd.href) {
+        setBlocks((b) => [...b, { id: nextId(), type: 'link', href: cmd.href! }]);
+        await sleep(REDIRECT_DELAY);
+        window.location.href = cmd.href;
+        return;
+      }
       setPhase('ready');
     },
     [phase, typeText]
@@ -186,7 +192,7 @@ function useTerminalCore() {
     return (
       <div className={framed ? 'border-t border-line bg-bg-elevated px-4 py-3' : ''}>
         <div className="flex flex-wrap gap-2">
-          {COMMANDS.filter((c) => c.name !== './info').map((c) => (
+          {COMMANDS.map((c) => (
             <button key={c.name} onClick={() => runCommand(c)} disabled={phase !== 'ready'}
               className="px-3 py-1.5 rounded-md bg-bg-hover
                          hover:enabled:bg-bg-elevated hover:enabled:text-accent
@@ -277,11 +283,37 @@ function HelpBlock() {
     </div>
   );
 }
+function LinkBlock({ href }: { href: string }) {
+  const isBugCod3 = href.includes('BugCod3');
+  const handle = isBugCod3 ? '@BugCod3' : '@RootAccessClub';
+  return (
+    <div className="my-3 max-w-md overflow-hidden rounded-lg border border-line bg-bg-elevated">
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+        <span className="text-[11px] font-semibold text-accent">Telegram</span>
+        <span className="font-mono text-[11px] text-ink-2">{handle}</span>
+      </div>
+      <div className="px-3 py-3 text-[12px] leading-relaxed text-ink-2">
+        {isBugCod3
+          ? 'BugCod3 — security research channel. Opening in 1s…'
+          : 'RootAccessClub — security & hacking community. Opening in 1s…'}
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          className="mt-2 block font-mono text-[12px] text-accent underline decoration-accent/40 underline-offset-2"
+        >
+          {href}
+        </a>
+      </div>
+    </div>
+  );
+}
 function BlockView({ block }: { block: Block }) {
   switch (block.type) {
     case 'prompt': return <Line><Prompt /><span>{block.text}</span></Line>;
     case 'ascii':  return <AsciiBlock />;
     case 'info':   return <InfoBlock />;
     case 'help':   return <HelpBlock />;
+    case 'link':   return <LinkBlock href={block.href} />;
   }
 }
