@@ -13,7 +13,7 @@ import type { CveListItem } from '@/lib/snapshot';
  */
 
 const ROW_H = 48;
-const CARD_H = 132;
+const CARD_H = 108;
 
 interface ResultsTableProps {
   rows: CveListItem[];
@@ -161,6 +161,7 @@ export const ResultsTable = memo(function ResultsTable({ rows, onOpen, onResetFi
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {items.map((vRow) => {
               const item = rows[vRow.index];
+              const hasMetrics = item.score > 0 || item.epss != null;
               return (
                 <button
                   key={item.id}
@@ -176,20 +177,25 @@ export const ResultsTable = memo(function ResultsTable({ rows, onOpen, onResetFi
                     </span>
                     <SevCell sev={item.sev} />
                   </div>
-                  <div className="mt-2.5 grid grid-cols-2 gap-2">
-                    <div>
-                      <div className="text-[10px] font-medium uppercase text-ink-3 tracking-[0.04em]">CVSS</div>
-                      <div className="font-mono text-[13px] text-ink">
-                        {item.score > 0 ? item.score.toFixed(1) : <Dash mono />}
-                      </div>
+                  {hasMetrics ? (
+                    <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                      {item.score > 0 && (
+                        <span className="font-mono text-[13px] text-ink">
+                          <span className="mr-1 text-[10px] font-medium uppercase tracking-[0.04em] text-ink-3">CVSS</span>
+                          {item.score.toFixed(1)}
+                        </span>
+                      )}
+                      {item.epss != null && (
+                        <span className="font-mono text-[13px] text-ink">
+                          <span className="mr-1 text-[10px] font-medium uppercase tracking-[0.04em] text-ink-3">EPSS</span>
+                          {item.epss.toFixed(3)}
+                        </span>
+                      )}
+                      {item.kev && <span className="kev-mark">KEV</span>}
                     </div>
-                    <div>
-                      <div className="text-[10px] font-medium uppercase text-ink-3 tracking-[0.04em]">EPSS</div>
-                      <div className="font-mono text-[13px] text-ink">
-                        {item.epss != null ? item.epss.toFixed(3) : <Dash mono />}
-                      </div>
-                    </div>
-                  </div>
+                  ) : item.kev ? (
+                    <div className="mt-2"><span className="kev-mark">KEV</span></div>
+                  ) : null}
                   <div className="mt-2 font-mono text-[11px] text-ink-3">{item.publishedDate}</div>
                 </button>
               );
