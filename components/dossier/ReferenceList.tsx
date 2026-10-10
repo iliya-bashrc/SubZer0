@@ -59,9 +59,9 @@ export const ReferenceList = memo(function ReferenceList({
   }
 
   return (
-    <section className="space-y-2">
+    <section className="space-y-3">
       <h3 className="label-xs">References · {refs.length}</h3>
-      <ul className="space-y-0.5">
+      <ul className="divide-y divide-line-soft">
         {refs.map((ref) => {
           const badge = sourceLabel(ref.source, ref.tags);
           return (
@@ -70,29 +70,29 @@ export const ReferenceList = memo(function ReferenceList({
                 href={ref.url}
                 target="_blank"
                 rel="noopener noreferrer nofollow"
-                className="group flex w-full items-start gap-2 rounded-md px-2 py-2 transition-colors hover:bg-bg-hover"
+                className="group flex w-full items-start gap-3 rounded-md px-2 py-3 transition-colors hover:bg-bg-hover"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-[11px] text-ink-3">{domainOf(ref.url)}</div>
-                  <div className="mt-0.5 truncate text-[13px] text-ink group-hover:text-ink">
+                  <div className="truncate font-mono text-[11px] leading-5 text-ink-3">{domainOf(ref.url)}</div>
+                  <div className="mt-1 truncate text-[13px] leading-6 text-ink group-hover:text-ink">
                     {ref.label}
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
                     <span
-                      className="shrink-0 text-[11px]"
+                      className="shrink-0 text-[11px] leading-5"
                       style={badge.exploit ? { color: 'var(--color-critical)' } : undefined}
                     >
                       {badge.label}
                     </span>
                     {(ref.tags ?? []).length > 0 && (
-                      <span className="text-[11px] text-ink-3">{(ref.tags ?? []).join(' · ')}</span>
+                      <span className="text-[11px] leading-5 text-ink-3">{(ref.tags ?? []).join(' · ')}</span>
                     )}
-                    {checked && <span className="font-mono text-[11px] text-ink-3">{checked}</span>}
+                    {checked && <span className="font-mono text-[11px] leading-5 text-ink-3">{checked}</span>}
                   </div>
                 </div>
                 <span
                   aria-hidden="true"
-                  className="mt-0.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100
+                  className="mt-1.5 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100
                              group-focus-visible:opacity-100"
                 >
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
