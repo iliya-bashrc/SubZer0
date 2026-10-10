@@ -36,7 +36,7 @@ export function Briefing() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/briefing.json')
+    fetch(`${process.env.__NEXT_ROUTER_BASEPATH || ''}/briefing.json`)
       .then((r) => {
         if (!r.ok) throw new Error(`briefing.json ${r.status}`);
         return r.json() as Promise<BriefingData>;
