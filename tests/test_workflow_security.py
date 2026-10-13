@@ -52,7 +52,8 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertNotIn("pip install", publish)
         self.assertNotIn("playwright", publish.lower())
         self.assertNotIn("unittest", publish)
-        self.assertIn("git ls-remote origin refs/heads/main", publish)
+        self.assertIn("git ls-remote", publish)
+        self.assertIn("refs/heads/main | cut -f1", publish)
         self.assertIn("main changed during validation", publish)
 
     def test_snapshot_commits_use_owner_identity_not_github_actions_bot(self):
