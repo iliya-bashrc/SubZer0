@@ -165,7 +165,7 @@ export function Research() {
           className="absolute right-3 top-14 z-30 rounded-md border border-line-soft bg-bg-raised/90 px-3 py-1.5
                      text-[11px] text-ink-2  lg:hidden"
         >
-          {railOpen ? 'hide filters' : 'filters'}
+          {railOpen ? 'Hide filters' : 'Filters'}
         </button>
 
         <div className={`${railOpen ? 'block' : 'hidden'} lg:block`}>
