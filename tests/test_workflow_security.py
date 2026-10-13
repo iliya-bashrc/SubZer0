@@ -46,7 +46,8 @@ class WorkflowSecurityTests(unittest.TestCase):
         publish = _job_block(self.update, "publish")
         self.assertIn("permissions:\n      contents: write", publish)
         self.assertIn("persist-credentials: false", publish)
-        self.assertIn("git push origin HEAD:refs/heads/main", publish)
+        self.assertIn("git -c \"http.https://github.com/.extraheader", publish)
+        self.assertIn("push origin HEAD:refs/heads/main", publish)
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", publish)
         self.assertNotIn("pip install", publish)
         self.assertNotIn("playwright", publish.lower())
@@ -65,7 +66,7 @@ class WorkflowSecurityTests(unittest.TestCase):
         # Phase 1 for the Next.js site: Pages verification is owned by the
         # existing deploy workflow, so the updater stops after publishing.
         self.assertNotIn("verify-pages:", self.update)
-        self.assertEqual(len(re.findall(r"(?m)^\s+git push\b", self.update)), 1)
+        self.assertEqual(len(re.findall(r"(?m)^\s+git .*push origin HEAD:refs/heads/main", self.update)), 1)
 
     def test_all_actions_are_pinned_and_pull_request_checks_are_read_only(self):
         for workflow in (self.update, self.checks):
