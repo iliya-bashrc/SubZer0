@@ -133,9 +133,9 @@ jobs:
         run: |
           set -euo pipefail
           BASE_SHA="$(cat "$RUNNER_TEMP/validated-candidate/base.sha")"
-          REMOTE_SHA="$(git ls-remote origin refs/heads/main | cut -f1)"
+          REMOTE_SHA="$(git ls-remote "https://x-access-token:${GITHUB_TOKEN}@github.com/iliya-bashrc/SubZer0.git" refs/heads/main | cut -f1)"
           if [ "$REMOTE_SHA" != "$BASE_SHA" ]; then
             echo "main moved after candidate validation; refusing to push."
             exit 1
           fi
-          git push origin HEAD:refs/heads/main
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" push origin HEAD:refs/heads/main
