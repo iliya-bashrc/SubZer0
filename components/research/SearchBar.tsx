@@ -71,8 +71,8 @@ export const SearchBar = memo(function SearchBar({
                        focus-visible:shadow-[0_0_0_3px_oklch(0.78_0.13_230/0.35)]
                        focus-visible:border-accent"
           />
-          <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded
-                          bg-bg-hover px-1.5 py-0.5 font-mono text-[10px] text-ink-3">
+          <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded
+                          bg-bg-hover px-1.5 py-0.5 font-mono text-[10px] text-ink-3 sm:block">
             Ctrl+K
           </kbd>
         </div>

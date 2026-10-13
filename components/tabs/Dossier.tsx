@@ -178,7 +178,7 @@ export function Dossier() {
           <div className="font-mono text-[13px]" style={{ color: 'var(--color-accent)' }}>Dossier</div>
           <p className="mt-2 text-[12px] leading-relaxed text-ink-3">
             Open a CVE from Research, or navigate to{' '}
-            <code className="font-mono text-ink-2">/cve/CVE-XXXX-YYYY/</code> for a direct deep-dive. Every record
+            <code className="whitespace-nowrap font-mono text-ink-2">/cve/CVE-XXXX-YYYY/</code> for a direct deep-dive. Every record
             is SHA-256 verified before display.
           </p>
         </div>

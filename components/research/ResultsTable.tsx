@@ -157,7 +157,7 @@ export const ResultsTable = memo(function ResultsTable({ rows, onOpen, onResetFi
 
       {/* ===== <768px: virtualized card list (virtualization preserved) ===== */}
       {isMobile === true && (
-        <div className="px-3 pb-3 pt-3">
+        <div className="px-3 pb-6 pt-3">
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {items.map((vRow) => {
               const item = rows[vRow.index];

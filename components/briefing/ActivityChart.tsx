@@ -46,7 +46,7 @@ export const ActivityChart = memo(function ActivityChart({ daily }: { daily: Day
         <h3 className="text-[16px] font-semibold text-ink">Publication activity</h3>
         <span className="text-[13px] text-ink-3">
           Last 30 days
-          {active ? ` · ${active.date}: ${active.count}` : ` · peak ${daily[peakIdx].count}`}
+          {active ? ` · ${active.date}: ${active.count.toLocaleString('en-US')}` : ` · peak ${daily[peakIdx].count.toLocaleString('en-US')}`}
         </span>
       </div>
 
