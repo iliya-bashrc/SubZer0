@@ -602,12 +602,12 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
     snapshot_bytes += len(epss_raw)
 
     # Optional subzer0-ng index artifacts: validated when present in the manifest.
-    for artifact_key in ("search_index", "shard_map"):
+    for artifact_key in ("search_index", "shard_map", "poc_ids"):
         artifact_meta = manifest.get(artifact_key)
         if not isinstance(artifact_meta, dict) or not artifact_meta.get("path"):
             continue
         artifact_path = str(artifact_meta["path"])
-        if artifact_path not in {"data/search_index.json", "data/shard_map.json"}:
+        if artifact_path not in {"data/search_index.json", "data/shard_map.json", "data/poc_ids.json"}:
             raise SnapshotValidationError(f"manifest.{artifact_key}.path is not an allowed index artifact")
         artifact_raw = (root / artifact_path).read_bytes()
         if artifact_meta.get("bytes") != len(artifact_raw):

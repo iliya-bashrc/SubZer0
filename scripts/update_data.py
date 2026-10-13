@@ -1469,6 +1469,20 @@ def write_snapshot(
         shard_map_bytes = _json_bytes(shard_map)
         (data_root / "search_index.json").write_bytes(index_bytes)
         (data_root / "shard_map.json").write_bytes(shard_map_bytes)
+        # Compact POC-id list (derived once here instead of the client fetching
+        # all 31 day shards just to find exploit-tagged records).
+        EXPLOIT_TAG = re.compile(r"exploit|poc|proof of concept", re.IGNORECASE)
+        poc_ids = [
+            str(record.get("id") or "")
+            for record in records
+            if any(
+                EXPLOIT_TAG.search(str(tag or ""))
+                for ref in (record.get("refs") or [])
+                for tag in (ref.get("tags") or [])
+            )
+        ]
+        poc_bytes = _json_bytes(poc_ids)
+        (data_root / "poc_ids.json").write_bytes(poc_bytes)
         manifest["search_index"] = {
             "schema_version": 1,
             "path": "data/search_index.json",
@@ -1482,6 +1496,13 @@ def write_snapshot(
             "bytes": len(shard_map_bytes),
             "sha256": hashlib.sha256(shard_map_bytes).hexdigest(),
             "count": len(shard_map),
+        }
+        manifest["poc_ids"] = {
+            "schema_version": 1,
+            "path": "data/poc_ids.json",
+            "bytes": len(poc_bytes),
+            "sha256": hashlib.sha256(poc_bytes).hexdigest(),
+            "count": len(poc_ids),
         }
         _write_json(stage_root / "manifest.json", manifest)
 

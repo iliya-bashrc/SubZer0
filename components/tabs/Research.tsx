@@ -21,28 +21,25 @@ function usePocIds(): Set<string> | null {
     if (!manifest) return;
     let cancelled = false;
     (async () => {
-      // Derive from the KEV-lightweight route: fetch each day shard once and
-      // collect exploit-tagged ids, then cache in module scope.
+      // Single compact fetch (~3 KB) — the updater derives the exploit-tagged
+      // id list server-side now, so the client no longer downloads all 31 day
+      // shards (~6 MB) just to build this set. Cache in module scope.
       const cached = (globalThis as { __szPocIds?: Set<string> }).__szPocIds;
       if (cached) {
         setPocIds(cached);
         return;
       }
       try {
-        const { loadDayShard } = await import('@/lib/snapshot');
-        const set = new Set<string>();
-        const EXPLOIT_TAG = /exploit|poc|proof of concept/i;
-        for (const day of manifest.days) {
-          const records = await loadDayShard(manifest, day.date);
-          for (const r of records) {
-            if ((r.refs ?? []).some((x) => (x.tags ?? []).some((t) => EXPLOIT_TAG.test(t)))) {
-              set.add(r.id);
-            }
-          }
-          if (cancelled) return;
-        }
+        const { fetchVerifiedJson } = await import('@/lib/snapshot');
+        const pocMeta = (manifest as { poc_ids?: { path: string; sha256: string } }).poc_ids;
+        if (!pocMeta) throw new Error('manifest has no poc_ids section');
+        const ids = (await fetchVerifiedJson(
+          `${process.env.__NEXT_ROUTER_BASEPATH || ''}/snapshot/${pocMeta.path}`,
+          pocMeta.sha256,
+        )) as string[];
+        const set = new Set(ids);
         (globalThis as { __szPocIds?: Set<string> }).__szPocIds = set;
-        setPocIds(set);
+        if (!cancelled) setPocIds(set);
       } catch {
         if (!cancelled) setPocIds(null);
       }

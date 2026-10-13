@@ -79,7 +79,7 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
         if path.is_file() or path.is_symlink()
     }
     derived_artifacts = actual_paths - expected_paths - {"data/changes.json"}
-    if derived_artifacts - {"data/search_index.json", "data/shard_map.json"}:
+    if derived_artifacts - {"data/search_index.json", "data/shard_map.json", "data/poc_ids.json"}:
         raise producer.FeedError("Legacy snapshot contains missing or undeclared data files; refusing to discard any files")
 
     records: list[dict[str, Any]] = []
@@ -130,6 +130,7 @@ def migrate_snapshot(snapshot_root: Path = ROOT / "snapshot") -> dict[str, Any]:
     # must not advertise them without the staged files to back the digests.
     manifest.pop("search_index", None)
     manifest.pop("shard_map", None)
+    manifest.pop("poc_ids", None)
 
     stage_root = Path(tempfile.mkdtemp(prefix=f".{root.name}.migration-", dir=root.parent))
     try:
