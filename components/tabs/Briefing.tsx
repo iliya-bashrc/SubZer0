@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { isSnapshotStale, staleBannerCopy } from '@/lib/staleness';
 import { HeroStrip } from '@/components/briefing/HeroStrip';
 import { ActivityChart } from '@/components/briefing/ActivityChart';
 import { KevAlert } from '@/components/briefing/KevAlert';
@@ -81,8 +82,16 @@ export function Briefing() {
     return k.date_added >= data.window.start.slice(0, 10);
   });
 
+  const stale = isSnapshotStale(data.generated_at);
+
   return (
     <div className="mx-auto h-full max-w-[1200px] space-y-4 overflow-y-auto overscroll-contain px-4 py-6 pb-[calc(1.5rem+2.5rem)] sm:px-6" style={{ touchAction: 'pan-y' }}>
+      {stale && (
+        <div className="card flex items-start gap-3 border-amber-500/30 bg-amber-500/5 p-3.5" role="status">
+          <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+          <p className="text-[12.5px] leading-relaxed text-ink-2">{staleBannerCopy(data.generated_at)}</p>
+        </div>
+      )}
       <HeroStrip
         total={data.totals.cves}
         lastSync={data.generated_at}
