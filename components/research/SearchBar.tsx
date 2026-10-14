@@ -49,7 +49,7 @@ export const SearchBar = memo(function SearchBar({
   }, []);
 
   return (
-    <div className="sticky top-0 z-20 bg-bg">
+    <div className="sticky top-0 z-20 bg-bg px-4 pt-3 pb-2 max-sm:pt-4 max-sm:pb-3">
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
           <input

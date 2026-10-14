@@ -184,7 +184,7 @@ export function Research() {
           onClick={() => setRailOpen((v) => !v)}
           aria-label={railOpen ? 'Hide filters' : 'Show filters'}
           aria-expanded={railOpen}
-          className="absolute right-3 top-14 z-30 rounded-md border border-line-soft bg-bg-raised/90 px-3 py-1.5
+          className="absolute right-3 top-[76px] z-30 mb-2 rounded-md border border-line-soft bg-bg-raised/90 px-3 py-1.5
                      text-[11px] text-ink-2  lg:hidden"
         >
           {railOpen ? 'Hide filters' : 'Filters'}
@@ -196,7 +196,7 @@ export function Research() {
 
         <div className="min-w-0 flex-1">
           {/* mt for mobile only: keep the floating filters chip clear of card 1 */}
-          <div className="mt-0 lg:mt-0 max-lg:pt-9 h-full">
+          <div className="mt-0 lg:mt-0 max-lg:pt-14 h-full">
             <ResultsTable
               rows={rows}
               onOpen={openDossier}
