@@ -3,6 +3,7 @@ import { Inter, Inter_Tight, JetBrains_Mono } from 'next/font/google';
 import { AppShell } from '@/components/shell/AppShell';
 import { SnapshotProvider } from '@/components/SnapshotProvider';
 import { SiteFooter } from '@/components/shell/SiteFooter';
+import { ServiceWorkerRegistrar } from '@/components/shell/ServiceWorkerRegistrar';
 import './globals.css';
 
 /* STEP 1 — typography: Inter (UI), Inter Tight (display headings),
@@ -39,6 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
           {/* Section 12: global footer — always visible, never a modal backdrop. */}
           <SiteFooter />
+          <ServiceWorkerRegistrar />
         </SnapshotProvider>
       </body>
     </html>

@@ -111,6 +111,31 @@ export function Research() {
 
   const closeDossier = useCallback(() => setDossierOpen(false), []);
 
+  // History-aware drawer: opening pushes a history entry so the browser/app Back
+  // gesture (Android habit) closes the drawer instead of leaving the app.
+  const pushedRef = useRef(false);
+  useEffect(() => {
+    if (dossierOpen && !pushedRef.current) {
+      pushedRef.current = true;
+      window.history.pushState({ szDrawer: true }, '');
+    } else if (!dossierOpen && pushedRef.current) {
+      pushedRef.current = false;
+      // We initiated the close (Esc / backdrop / X): consume the pushed entry
+      // silently. A popstate-driven close resets the flag before this runs.
+      window.history.back();
+    }
+  }, [dossierOpen]);
+  useEffect(() => {
+    const onPop = () => {
+      if (pushedRef.current) {
+        pushedRef.current = false;
+        setDossierOpen(false);
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   // Restore focus to the triggering row (or the results region) once closed.
   useEffect(() => {
     if (dossierOpen) return;
