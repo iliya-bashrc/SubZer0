@@ -148,6 +148,7 @@ class _JSONIngressBudget:
 ALLOWED_SOURCE_HOSTS = {
     "services.nvd.nist.gov", "api.github.com", "www.cisa.gov",
     "epss.empiricalsecurity.com", "api.first.org",
+    "gitlab.com",
 }
 
 
