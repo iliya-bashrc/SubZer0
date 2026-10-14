@@ -158,15 +158,28 @@ async function sha256Hex(buf: ArrayBuffer): Promise<string> {
 
 /** Fetch any snapshot asset and verify its SHA-256. Fails closed. Exported for callers. */
 export async function fetchVerifiedJson(path: string, expected: string): Promise<unknown> {
-  const res = await fetch(path, { cache: 'force-cache' });
-  if (!res.ok) throw new Error(`Snapshot asset unavailable: ${path} (${res.status})`);
-  const buf = await res.arrayBuffer();
+  // Verify-then-retry: between deploys a browser or proxy may still serve the
+  // previous snapshot asset under the same URL (max-age=600). First fetch
+  // bypasses caches; on a hash mismatch we retry ONCE with a cache-busting
+  // query. If the second fetch also mismatches, this is a genuine integrity
+  // problem and the call still fails closed.
+  const buf = await fetchAsset(path);
   const hex = await sha256Hex(buf);
-  if (hex.toLowerCase() !== expected.toLowerCase()) {
+  if (hex.toLowerCase() === expected.toLowerCase()) {
+    return JSON.parse(new TextDecoder().decode(buf));
+  }
+  const bust = await fetchAsset(`${path}${path.includes('?') ? '&' : '?'}v=${expected.slice(0, 12)}`);
+  const hex2 = await sha256Hex(bust);
+  if (hex2.toLowerCase() !== expected.toLowerCase()) {
     throw new Error(`Integrity check failed for ${path}`);
   }
-  const text = new TextDecoder().decode(buf);
-  return JSON.parse(text);
+  return JSON.parse(new TextDecoder().decode(bust));
+}
+
+async function fetchAsset(path: string): Promise<ArrayBuffer> {
+  const res = await fetch(path, { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`Snapshot asset unavailable: ${path} (${res.status})`);
+  return res.arrayBuffer();
 }
 
 /* ------------------------------------------------------------------ */
