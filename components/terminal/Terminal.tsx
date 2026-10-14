@@ -176,17 +176,50 @@ function useTerminalCore() {
     [phase, typeText]
   );
 
-  function Buffer({ height, className = '' }: { height?: number; className?: string }) {
-    return (
-      <div ref={scrollRef}
-           className={`terminal-scroll px-4 py-4 font-mono text-[13px]
-                      leading-relaxed text-ink/90 overflow-y-auto ${className}`}
-           style={{ ...(height ? { height } : {}), touchAction: 'pan-y' }}>
-        {blocks.map((b) => <BlockView key={b.id} block={b} />)}
-        <Line><Prompt /><span>{typed}</span><Cursor /></Line>
-      </div>
-    );
-  }
+  const bufferKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (phase !== 'ready') return;
+    const num = Number(e.key);
+    if (num >= 1 && num <= COMMANDS.length) {
+      e.preventDefault();
+      runCommand(COMMANDS[num - 1]);
+      return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // Free typing: Enter executes the chip matching the typed prefix (e.g. type "info" + Enter).
+      typedBuf.current += e.key;
+      e.preventDefault();
+      setTyped((t) => t + e.key);
+      return;
+    }
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      typedBuf.current = typedBuf.current.slice(0, -1);
+      setTyped((t) => t.slice(0, -1));
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = typedBuf.current.trim().replace(/^\.\//, '').toLowerCase();
+      typedBuf.current = '';
+      const match = COMMANDS.find((c) => c.name.replace('./', '').toLowerCase() === q)
+        || COMMANDS.find((c) => c.name.replace('./', '').toLowerCase().startsWith(q) && q.length > 0);
+      if (match) runCommand(match);
+      else if (q) setBlocks((b) => [...b, { id: nextId(), type: 'prompt', text: q }, { id: nextId(), type: 'help' }]);
+      setTyped('');
+    }
+  }, [phase, runCommand]);
+
+  const typedBuf = useRef('');
+
+  // Buffer must be a MODULE-LEVEL stable component (see TerminalBuffer below).
+  // A component defined inside the hook gets a new function identity on every state
+  // change, React remounts the div, and keyboard focus is silently lost after each
+  // keystroke. Latest state reaches the stable component via a ref.
+  const latest = useRef({ blocks, typed, onKeyDown: bufferKeyDown });
+  latest.current = { blocks, typed, onKeyDown: bufferKeyDown };
+  const Buffer = useCallback((props: { height?: number; className?: string }) => (
+    <TerminalBuffer scrollRef={scrollRef} {...latest.current} {...props} />
+  ), []);
 
   function CommandBar({ framed = false }: { framed?: boolean }) {
     return (
@@ -194,7 +227,9 @@ function useTerminalCore() {
         <div className="flex flex-wrap gap-2">
           {COMMANDS.map((c) => (
             <button key={c.name} onClick={() => runCommand(c)} disabled={phase !== 'ready'}
-              className="px-3 py-1.5 rounded-md bg-bg-hover
+              tabIndex={0}
+              className="px-3 py-1.5 rounded-md bg-bg-hover focus-visible:outline-none
+                         focus-visible:ring-2 focus-visible:ring-accent/60
                          hover:enabled:bg-bg-elevated hover:enabled:text-accent
                          active:enabled:bg-accent-soft active:enabled:text-accent
                          text-[12px] font-mono text-ink-2
@@ -212,6 +247,28 @@ function useTerminalCore() {
 }
 
 /* ============ block rendering (shared by both layouts) ============ */
+
+// Module-level so its identity never changes -> the scroll div never remounts and
+// keyboard focus survives re-renders (typed text, new blocks, etc.).
+function TerminalBuffer({ height, className = '', blocks, typed, onKeyDown, scrollRef }:
+  { height?: number; className?: string; blocks: Block[]; typed: string;
+    onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+    scrollRef: React.RefObject<HTMLDivElement | null> }) {
+  return (
+    <div ref={scrollRef}
+         tabIndex={0}
+         role="log"
+         aria-label="Terminal output"
+         onKeyDown={onKeyDown}
+         className={`terminal-scroll px-4 py-4 font-mono text-[13px]
+                    leading-relaxed text-ink/90 overflow-y-auto outline-none
+                    focus-visible:ring-1 focus-visible:ring-accent/40 ${className}`}
+         style={{ ...(height ? { height } : {}), touchAction: 'pan-y' }}>
+      {blocks.map((b) => <BlockView key={b.id} block={b} />)}
+      <Line><Prompt /><span>{typed}</span><Cursor /></Line>
+    </div>
+  );
+}
 
 function Line({ children }: { children: React.ReactNode }) {
   return <div className="flex items-start whitespace-pre-wrap break-words">{children}</div>;
