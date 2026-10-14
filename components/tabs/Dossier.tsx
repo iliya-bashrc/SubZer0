@@ -157,9 +157,16 @@ export function DossierView({ cveId }: { cveId: string }) {
   );
 }
 
-/** In-app destination: ?cve=CVE-… deep link, or the empty guidance state. */
+/**
+ * In-app destination. Empty state = a real CVE lookup: paste any CVE ID and the
+ * verified dossier opens here (plus one-click jump into the newest records).
+ * ?cve=CVE-… deep links skip straight to DossierView.
+ */
+const CVE_ID_RE = /^CVE-\d{4}-\d{4,}$/i;
+
 export function Dossier() {
   const [cveId, setCveId] = useState<string | null>(null);
+  const { index } = useSnapshot();
 
   useEffect(() => {
     const read = () => {
@@ -171,16 +178,72 @@ export function Dossier() {
     return () => window.removeEventListener('popstate', read);
   }, []);
 
+  const openCve = (id: string) => {
+    const base = process.env.__NEXT_ROUTER_BASEPATH || '';
+    window.location.href = `${base}/cve/${encodeURIComponent(id.toUpperCase())}/`;
+  };
+
+  const recent = index.slice(0, 6);
+
   if (!cveId) {
     return (
-      <div className="flex h-full items-center justify-center p-6" style={{ touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
-        <div className="card max-w-md p-6 text-center">
-          <div className="font-mono text-[13px]" style={{ color: 'var(--color-accent)' }}>Dossier</div>
-          <p className="mt-2 text-[12px] leading-relaxed text-ink-3">
-            Open a CVE from Research, or navigate to{' '}
-            <code className="whitespace-nowrap font-mono text-ink-2">/cve/CVE-XXXX-YYYY/</code> for a direct deep-dive. Every record
-            is SHA-256 verified before display.
-          </p>
+      <div className="h-full overflow-y-auto overscroll-contain" style={{ touchAction: 'pan-y' }}>
+        <div className="mx-auto max-w-md space-y-5 px-4 py-10">
+          <div className="card p-6">
+            <div className="font-mono text-[13px]" style={{ color: 'var(--color-accent)' }}>Dossier lookup</div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                const value = String(data.get('cve') || '').trim().toUpperCase();
+                if (CVE_ID_RE.test(value)) openCve(value);
+              }}
+              className="mt-4"
+            >
+              <input
+                name="cve"
+                required
+                title="CVE-YYYY-NNNN+ (digits only after the year)"
+                placeholder="CVE-2026-97471"
+                aria-label="CVE ID"
+                spellCheck={false}
+                autoCapitalize="characters"
+                className="w-full rounded-lg border border-line bg-bg-raised px-4 py-3 font-mono text-[14px] text-ink
+                           placeholder:text-ink-3 focus:border-accent focus:outline-none"
+              />
+              <button
+                type="submit"
+                className="mt-3 w-full rounded-lg px-4 py-2.5 text-[13px] font-medium text-bg
+                           transition-opacity hover:opacity-90"
+                style={{ backgroundColor: 'var(--color-accent)' }}
+              >
+                Open dossier
+              </button>
+            </form>
+            <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
+              Every record is SHA-256 verified before display.
+            </p>
+          </div>
+
+          {recent.length > 0 && (
+            <div className="card p-6">
+              <div className="font-mono text-[11px] uppercase tracking-wide text-ink-3">Newest in window</div>
+              <ul className="mt-3 space-y-1">
+                {recent.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      onClick={() => openCve(item.id)}
+                      className="flex w-full items-baseline justify-between gap-3 rounded-md px-2 py-2 text-left
+                                 transition-colors hover:bg-bg-hover"
+                    >
+                      <span className="truncate font-mono text-[12px] text-accent">{item.id}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-ink-3">{item.publishedDate}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     );
