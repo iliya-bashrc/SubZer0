@@ -13,7 +13,7 @@ import type { CveListItem } from '@/lib/snapshot';
  */
 
 const ROW_H = 48;
-const CARD_H = 118; // 108px card + 10px gap below (virtualized spacer)
+const CARD_H = 126; // 116px card (title line added) + 10px gap below (virtualized spacer)
 
 interface ResultsTableProps {
   rows: CveListItem[];
@@ -177,6 +177,11 @@ export const ResultsTable = memo(function ResultsTable({ rows, onOpen, onResetFi
                     </span>
                     <SevCell sev={item.sev} />
                   </div>
+                  {item.title && item.title !== item.id && (
+                    <div className="mt-1.5 truncate text-[12px] leading-snug text-ink-2">
+                      {item.title}
+                    </div>
+                  )}
                   {hasMetrics ? (
                     <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                       {item.score > 0 && (
