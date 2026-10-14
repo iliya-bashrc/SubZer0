@@ -29,7 +29,8 @@ class WorkflowSecurityTests(unittest.TestCase):
         cls.requirements = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
 
     def test_candidate_validation_job_is_read_only_and_checkout_does_not_persist_credentials(self):
-        self.assertIn("permissions:\n  contents: read", self.update)
+        self.assertIn("permissions:\n  actions: write\n  contents: read", self.update)
+        self.assertIn("Trigger the site deploy for the new snapshot", self.update)
         prepare = _job_block(self.update, "prepare", "publish")
         self.assertIn("permissions:\n      contents: read", prepare)
         self.assertIn("persist-credentials: false", prepare)

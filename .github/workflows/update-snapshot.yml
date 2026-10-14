@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -139,3 +140,20 @@ jobs:
             exit 1
           fi
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" push origin HEAD:refs/heads/main
+
+      - name: Trigger the site deploy for the new snapshot
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if gh api -X POST repos/"$GITHUB_REPOSITORY"/actions/workflows/deploy.yml/dispatches -f ref=main >/dev/null 2>&1; then
+              echo "Deploy dispatched."
+              exit 0
+            fi
+            echo "Dispatch attempt $attempt failed; retrying in 15s."
+            sleep 15
+          done
+          echo "Could not dispatch deploy; the site will refresh on the next code push."
+          exit 0
