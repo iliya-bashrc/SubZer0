@@ -408,7 +408,7 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
             raise SnapshotValidationError(f"Source check time does not match the complete snapshot for {item['name']}")
         if "note" in item:
             _text(item["note"], f"source_status.{item['name']}.note", 2_048, allow_empty=True, multiline=True)
-    expected_status_names = set(CORE_SOURCES) | {"FIRST EPSS"}
+    expected_status_names = set(CORE_SOURCES) | {"FIRST EPSS", "Exploit-DB"}
     if set(status_by_name) != expected_status_names:
         raise SnapshotValidationError("Manifest source status names do not match the required source set")
     for source in CORE_SOURCES:
@@ -434,9 +434,10 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
         "GitHub Security Advisory Database",
         "CISA Known Exploited Vulnerabilities catalog",
         "FIRST EPSS",
+        "Exploit-DB",
     }
     if not isinstance(sources, list) or len(sources) != len(expected_source_names):
-        raise SnapshotValidationError("manifest.sources must contain the four expected source references")
+        raise SnapshotValidationError("manifest.sources must contain the five expected source references")
     source_by_name: dict[str, dict[str, Any]] = {}
     for source in sources:
         if not isinstance(source, dict) or not isinstance(source.get("name"), str) or source["name"] in source_by_name:

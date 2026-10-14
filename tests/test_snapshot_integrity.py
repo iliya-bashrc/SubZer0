@@ -50,6 +50,7 @@ class SnapshotIntegrityTests(unittest.TestCase):
             {"name": "NVD CVE API 2.0", "ok": True, "records": 1, "pages": 1, "checked_at": feed.iso_z(self.now)},
             {"name": "GitHub Security Advisory Database", "ok": True, "advisories": 1, "pages": 1, "checked_at": feed.iso_z(self.now)},
             {"name": "CISA KEV", "ok": True, "catalog_records": 1, "checked_at": feed.iso_z(self.now)},
+            {"name": "Exploit-DB", "ok": True, "exploit_cves": 0, "checked_at": feed.iso_z(self.now)},
         ]
         manifest, shards = feed.build_manifest(records, start, self.now, self.now, statuses, 1, 1, 1)
         epss = {

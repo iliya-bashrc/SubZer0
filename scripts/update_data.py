@@ -59,8 +59,16 @@ SOURCE_CREDITS = [
     {"name": "NVD CVE API 2.0", "url": "https://nvd.nist.gov/developers/vulnerabilities"},
     {"name": "GitHub Security Advisory Database", "url": "https://github.com/advisories"},
     {"name": "CISA Known Exploited Vulnerabilities catalog", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"},
+    {"name": "Exploit-DB", "url": "https://www.exploit-db.com/"},
 ]
 EPSS_SOURCE = {"name": "FIRST EPSS", "url": "https://www.first.org/epss/data"}
+
+# Exploit-DB: official CSV of public exploits (GitLab raw). Adds real-world
+# exploit coverage beyond the conservative NVD/GHSA reference tags. Optional:
+# a fetch or parse failure never blocks the core snapshot (fail-open enrich).
+EXPLOITDB_CSV_URL = "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
+MAX_EXPLOITDB_BYTES = 32 * 1024 * 1024
+MAX_EXPLOITDB_ROWS = 200_000
 
 
 class FeedError(RuntimeError):
@@ -518,6 +526,47 @@ def fetch_epss_csv(allowed_cves: set[str] | None = None) -> tuple[dict[str, dict
         raise FeedError(f"Could not read FIRST EPSS daily data: {exc}") from exc
 
 
+def fetch_exploitdb_cves(request_fn: Callable[..., tuple[Any, Any]] = request_json) -> set[str]:
+    """Download Exploit-DB's official CSV and return every CVE id with a public exploit.
+
+    Optional enrichment: the caller treats any failure as 'EDB unavailable this
+    run' and keeps publishing the core snapshot. Validation mirrors the other
+    feeds: same-host HTTPS only, byte-capped, row-capped, strict column shape.
+    """
+    _validate_source_url(EXPLOITDB_CSV_URL)
+    request = urllib.request.Request(EXPLOITDB_CSV_URL, headers={"User-Agent": USER_AGENT, "Accept": "text/csv"})
+    try:
+        opener = urllib.request.build_opener(_SameHostHTTPSRedirect())
+        with opener.open(request, timeout=120) as response:
+            content_length = _header(response.headers, "Content-Length")
+            if content_length:
+                if not re.fullmatch(r"\d+", content_length):
+                    raise FeedError("Exploit-DB returned an invalid Content-Length")
+                if int(content_length) > MAX_EXPLOITDB_BYTES:
+                    raise FeedError("Exploit-DB CSV exceeded its byte limit")
+            raw = response.read(MAX_EXPLOITDB_BYTES + 1)
+            if len(raw) > MAX_EXPLOITDB_BYTES:
+                raise FeedError("Exploit-DB CSV exceeded its byte limit")
+    except (OSError, urllib.error.URLError) as exc:
+        raise FeedError(f"Could not read Exploit-DB CSV: {exc}") from exc
+    text = raw.decode("utf-8", errors="strict")
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None or "codes" not in reader.fieldnames:
+        raise FeedError("Exploit-DB CSV is missing its expected columns")
+    cves: set[str] = set()
+    rows = 0
+    for row in reader:
+        rows += 1
+        if rows > MAX_EXPLOITDB_ROWS:
+            raise FeedError("Exploit-DB CSV exceeded its row limit")
+        codes = str(row.get("codes") or "")
+        for match in re.finditer(r"CVE-\d{4}-\d{4,}", codes, re.IGNORECASE):
+            normalized = _cve_id(match.group(0).upper())
+            if normalized:
+                cves.add(normalized)
+    return cves
+
+
 def fetch_epss_api(cve_ids: set[str], request_fn: Callable[..., tuple[Any, Any]] = request_json) -> dict[str, dict[str, float]]:
     """Look up small batches of new CVEs; FIRST limits the cve parameter to 2000 characters."""
     ids = sorted(cve_ids)
@@ -756,6 +805,7 @@ def build_records(
     kev_items: list[dict[str, Any]],
     start: datetime,
     end: datetime,
+    exploitdb_cves: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Merge source records by canonical CVE ID, keeping both attribution and links."""
     records: dict[str, dict[str, Any]] = {}
@@ -938,6 +988,8 @@ def build_records(
         add_ref(record, "CISA KEV catalog", "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "CISA")
 
     for record in records.values():
+        if exploitdb_cves and record["id"] in exploitdb_cves:
+            add_ref(record, "Public exploit", f"https://www.exploit-db.com/search?cve={record['id']}", "Exploit-DB", ["Exploit"])
         if not record["title"]:
             record["title"] = record["id"]
         if not record["desc"]:
@@ -1069,7 +1121,10 @@ def build_manifest(
             "cisa_kev_catalog_records": kev_total,
             "distinct_cve_records": sharded_total,
             "utc_days_sharded": len(day_summaries),
-            "sources_complete": all(item.get("ok") is True for item in source_status),
+            "exploitdb_cves": next((item.get("exploit_cves", 0) for item in source_status if item.get("name") == "Exploit-DB"), 0),
+            # Core-source completeness deliberately ignores the fail-open
+            # Exploit-DB enrichment: an EDB outage must not flip this flag.
+            "sources_complete": all(item.get("ok") is True for item in source_status if item.get("name") != "Exploit-DB"),
         },
         "sources": SOURCE_CREDITS,
         "source_status": source_status,
@@ -1571,7 +1626,15 @@ def refresh(
     kev_items, kev_total = fetch_kev(request_with_budget)
     if not kev_items or kev_total != len(kev_items):
         raise FeedError("CISA KEV returned no or inconsistent catalog records; refusing to publish a partial feed")
-    records = build_records(nvd_items, ghsa_items, kev_items, start, end)
+    # Exploit-DB is fail-open enrichment: an outage never blocks the core feed.
+    exploitdb_cves: set[str] = set()
+    exploitdb_ok = False
+    try:
+        exploitdb_cves = fetch_exploitdb_cves()
+        exploitdb_ok = True
+    except FeedError as exc:
+        print(f"Exploit-DB unavailable this run (core feed unaffected): {exc}", file=sys.stderr)
+    records = build_records(nvd_items, ghsa_items, kev_items, start, end, exploitdb_cves)
     if not records or len(records) > MAX_CORE_RECORDS:
         raise FeedError(f"Merged CVE result is empty or exceeds the {MAX_CORE_RECORDS:,}-record safety limit")
     epss_snapshot, epss_status = build_epss_snapshot(records, output_dir, as_of, epss_csv_loader, epss_request_with_budget)
@@ -1579,13 +1642,15 @@ def refresh(
         {"name": "NVD CVE API 2.0", "ok": True, "pages": nvd_pages, "records": nvd_total, "checked_at": iso_z(as_of)},
         {"name": "GitHub Security Advisory Database", "ok": True, "pages": ghsa_pages, "advisories": len(ghsa_items), "checked_at": iso_z(as_of)},
         {"name": "CISA KEV", "ok": True, "catalog_records": kev_total, "checked_at": iso_z(as_of)},
+        {"name": "Exploit-DB", "ok": exploitdb_ok, "exploit_cves": len(exploitdb_cves), "checked_at": iso_z(as_of)},
     ]
     manifest, shards = build_manifest(records, start, end, as_of, statuses, nvd_total, len(ghsa_items), kev_total)
     add_epss_metadata(manifest, epss_snapshot, epss_status)
     write_snapshot(output_dir, manifest, shards, epss_snapshot)
     print(
         f"Complete snapshot: {len(records)} unique CVEs across {len(manifest['days'])} UTC day shards; "
-        f"NVD {nvd_total}/{nvd_pages} pages, GitHub {len(ghsa_items)}/{ghsa_pages} pages, CISA {kev_total} catalog entries; "
+        f"NVD {nvd_total}/{nvd_pages} pages, GitHub {len(ghsa_items)}/{ghsa_pages} pages, CISA {kev_total} catalog entries, "
+        f"Exploit-DB {len(exploitdb_cves)} exploit-tagged CVEs {'(ok)' if exploitdb_ok else '(unavailable this run)'}; "
         f"FIRST EPSS {epss_status['scores']}/{epss_status['records']} scores dated {epss_status['score_date'] or 'unavailable'}; "
         f"window {iso_z(start)} to {iso_z(end)}"
     )
