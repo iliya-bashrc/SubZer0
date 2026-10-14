@@ -1,15 +1,39 @@
 <div align="center">
 
+<img src="docs/assets/subzero-readme-banner.svg" alt="SubZer0 — CVE intelligence and vulnerability research" width="600"/>
+
 # ❄️ SubZer0 — CVE Intelligence Platform
 
 **Zero-noise vulnerability radar. Newest CVEs, real exploit signals, verified byte-for-byte.**
+
+<a href="https://iliya-bashrc.github.io/SubZer0/"><img src="docs/assets/telegram-mark.svg" alt="SubZer0 mark" width="72"/></a>
 
 [![Live site](https://img.shields.io/badge/live-iliya--bashrc.github.io%2FSubZer0-0aa1e8?style=flat-square)](https://iliya-bashrc.github.io/SubZer0/)
 [![CI](https://img.shields.io/github/actions/workflow/status/iliya-bashrc/SubZer0/checks.yml?branch=main&label=CI&style=flat-square)](https://github.com/iliya-bashrc/SubZer0/actions)
 [![Data refresh](https://img.shields.io/badge/data-refresh%20every%206h-7b61ff?style=flat-square)](https://github.com/iliya-bashrc/SubZer0/actions/workflows/update-snapshot.yml)
 ![License](https://img.shields.io/badge/use-educational%20only-dd3322?style=flat-square)
 
-*by [@BugCod3](https://t.me/BugCod3) & [@RootAccessClub](https://t.me/RootAccessClub)*
+</div>
+
+## About
+
+SubZer0 is a **fully static, serverless CVE radar** built for the
+[@RootAccessClub](https://t.me/RootAccessClub) community. It tracks the newest
+publications across five authoritative feeds, enriches every record with
+exploit-intelligence signals, and guarantees every byte it shows you is the
+byte the pipeline verified — SHA-256 checked in your browser before render.
+
+- **No servers, no database, no tracking** — the entire product is a static
+  export on GitHub Pages; GitHub Actions is the only "backend"
+- **Fail-closed by design** — a single tampered or mismatched byte aborts the
+  page instead of showing unverified data
+- **Maintainers:** [@BugCod3](https://t.me/BugCod3) (security research) and
+  [@RootAccessClub](https://t.me/RootAccessClub) (community & education)
+
+<div align="center">
+
+<a href="https://t.me/BugCod3"><img src="docs/assets/telegram-bugcod3.svg" alt="BugCod3 on Telegram" width="120"/></a>
+<a href="https://t.me/RootAccessClub"><img src="docs/assets/telegram-rootaccessclub.svg" alt="RootAccessClub on Telegram" width="120"/></a>
 
 </div>
 
