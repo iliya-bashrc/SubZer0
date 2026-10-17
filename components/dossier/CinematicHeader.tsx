@@ -148,15 +148,15 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
 
         {/* short summary — hierarchy C, right after the title */}
         {record.desc ? (
-          <div className="mt-7 max-w-xl">
-            <p className={`text-[15px] leading-relaxed text-ink-2 brightness-110 ${expanded ? '' : 'line-clamp-3'}`}>
+          <div className="mt-6 max-w-xl">
+            <p className={`text-[15px] leading-[1.65] text-ink-2 brightness-110 ${expanded ? '' : 'line-clamp-3'}`}>
               {record.desc}
             </p>
             {record.desc.length > 180 ? (
               <button
                 onClick={() => setExpanded((e) => !e)}
                 aria-expanded={expanded}
-                className="mt-2 font-mono text-[11px] tracking-[0.2em] hover:text-ink"
+                className="mt-2 inline-block font-mono text-[11px] tracking-[0.16em] hover:text-ink"
                 style={{ color: TEAL }}
               >
                 {expanded ? 'COLLAPSE ▲' : 'READ FULL ADVISORY ▼'}
@@ -166,7 +166,7 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         ) : null}
 
         {/* editorial meta row — hierarchy D; teal accents on the values' labels */}
-        <dl className="mt-10 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-ink/15 pt-5 sm:grid-cols-4">
+        <dl className="mt-8 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-ink/15 pt-5 sm:grid-cols-4">
           {[
             { k: 'PUBLISHED', v: record.published?.slice(0, 10) ?? '—' },
             { k: 'SEVERITY', v: record.sev.charAt(0).toUpperCase() + record.sev.slice(1), sev: pal.fill },
