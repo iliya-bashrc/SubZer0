@@ -82,6 +82,14 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
           className="absolute inset-0 opacity-[0.035]"
           style={{ backgroundImage: 'repeating-linear-gradient(0deg, #FFFFFF14 0 1px, transparent 1px 3px)' }}
         />
+        {/* fine noise dither — prevents gradient banding on dark glows */}
+        <div
+          className="absolute inset-0 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'120\' height=\'120\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'2\'/%3E%3C/filter%3E%3Crect width=\'120\' height=\'120\' filter=\'url(%23n)\' opacity=\'0.5\'/%3E%3C/svg%3E")',
+          }}
+        />
         {/* vignette to pull focus into the composition */}
         <div
           className="absolute inset-0"
@@ -95,7 +103,7 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
         className="relative z-10 flex min-h-[100svh] flex-col
-                   px-6 pb-12 pt-16 sm:px-10 sm:pb-16 sm:pt-20 lg:px-20 lg:pb-24 lg:pt-24"
+                   px-6 pb-10 pt-24 sm:px-10 sm:pb-14 sm:pt-28 lg:px-20 lg:pb-16 lg:pt-36"
       >
         {/* filled rectangular label — kept in one lockup with the identifier
             (mt-auto pushes the whole lockup down together) */}
@@ -104,14 +112,14 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
             initial={useReducedMotion() ? false : { opacity: 0, scaleX: 0.6 }}
             animate={{ opacity: 1, scaleX: 1 }}
             transition={{ duration: 0.5, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className="inline-block origin-left px-3 py-[6px] font-mono text-[11px] font-semibold uppercase tracking-[0.22em]"
+            className="inline-block origin-left px-3 py-[6px] font-mono text-[11px] font-semibold uppercase tracking-[0.16em]"
             style={{ background: pal.fill, color: pal.ink }}
           >
-            {label}
+            {record.sev.charAt(0).toUpperCase() + record.sev.slice(1) + ' SEVERITY'}
           </motion.span>
           {record.kev ? (
             <span
-              className="inline-block border px-3 py-[6px] font-mono text-[11px] uppercase tracking-[0.22em]"
+              className="inline-block border px-3 py-[6px] font-mono text-[11px] uppercase tracking-[0.16em]"
               style={{ borderColor: pal.light, color: pal.light }}
             >
               CISA KEV LISTED
@@ -130,8 +138,8 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
 
         {/* short summary — hierarchy C, right after the title */}
         {record.desc ? (
-          <div className="mt-7 max-w-2xl">
-            <p className={`text-[14px] leading-relaxed text-ink-2 ${expanded ? '' : 'line-clamp-3'}`}>
+          <div className="mt-7 max-w-xl">
+            <p className={`text-[15px] leading-relaxed text-ink-2 brightness-110 ${expanded ? '' : 'line-clamp-3'}`}>
               {record.desc}
             </p>
             {record.desc.length > 180 ? (
@@ -148,16 +156,16 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         ) : null}
 
         {/* editorial meta row — hierarchy D; teal accents on the values' labels */}
-        <dl className="mt-10 grid grid-cols-2 gap-y-4 border-t border-ink/15 pt-5 sm:flex sm:justify-between sm:gap-y-4">
+        <dl className="mt-10 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-ink/15 pt-5 sm:grid-cols-4">
           {[
             { k: 'PUBLISHED', v: record.published?.slice(0, 10) ?? '—' },
-            { k: 'SEVERITY', v: record.sev.charAt(0).toUpperCase() + record.sev.slice(1) },
+            { k: 'SEVERITY', v: record.sev.charAt(0).toUpperCase() + record.sev.slice(1), sev: pal.fill },
             { k: 'CVSS', v: record.score != null && record.score > 0 ? record.score.toFixed(1) : '—' },
             { k: 'KEV', v: record.kev ? `Listed ${record.kev.date_added}` : 'Not listed' },
-          ].map((m) => (
-            <div key={m.k} className="min-w-24">
-              <dt className="font-mono text-[10px] tracking-[0.24em]" style={{ color: TEAL }}>{m.k}</dt>
-              <dd className="mt-1 font-mono text-[15px] text-ink">{m.v}</dd>
+          ].map((m, i) => (
+            <div key={m.k} className={`min-w-24 ${i === 3 ? "sm:text-right" : ""}`}>
+              <dt className="font-mono text-[10px] tracking-[0.18em]" style={{ color: '#8FBFCB' }}>{m.k}</dt>
+              <dd className="mt-1 font-mono text-[15px] text-ink" style={m.sev ? { color: m.sev } : undefined}>{m.v}</dd>
             </div>
           ))}
         </dl>
