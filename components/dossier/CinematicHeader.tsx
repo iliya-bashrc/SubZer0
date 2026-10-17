@@ -102,7 +102,7 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         initial={useReducedMotion() ? false : { opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 flex min-h-[100svh] flex-col
+        className="relative z-10 flex min-h-[100vh] supports-[height:100svh]:min-h-[100svh] flex-col
                    px-6 pb-10 pt-24 sm:px-10 sm:pb-14 sm:pt-28 lg:px-20 lg:pb-16 lg:pt-36"
       >
         {/* filled rectangular label — kept in one lockup with the identifier
@@ -133,7 +133,17 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
           className="select-text break-words font-display font-semibold leading-[0.92] tracking-[-0.05em] text-ink
                      text-[clamp(3.4rem,12vw,11rem)] lg:-ml-2"
         >
-          {record.id}
+          {/* break only after hyphens — never mid-number (no orphaned digits) */}
+          {record.id.split('-').map((part, i, arr) => (
+            <span key={i}>
+              {part}
+              {i < arr.length - 1 ? (
+                <>
+                  <wbr />-
+                </>
+              ) : null}
+            </span>
+          ))}
         </h1>
 
         {/* short summary — hierarchy C, right after the title */}
