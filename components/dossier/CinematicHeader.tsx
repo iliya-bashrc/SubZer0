@@ -95,10 +95,11 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
         className="relative z-10 flex min-h-[100svh] flex-col
-                   px-6 pb-12 pt-12 sm:px-10 sm:pb-16 sm:pt-16 lg:px-20 lg:pb-24 lg:pt-20"
+                   px-6 pb-12 pt-16 sm:px-10 sm:pb-16 sm:pt-20 lg:px-20 lg:pb-24 lg:pt-24"
       >
-        {/* filled rectangular label — small, heavy contrast against the oversized title */}
-        <div className="flex flex-wrap items-center gap-3">
+        {/* filled rectangular label — kept in one lockup with the identifier
+            (mt-auto pushes the whole lockup down together) */}
+        <div className="mt-auto flex flex-wrap items-center gap-3">
           <motion.span
             initial={useReducedMotion() ? false : { opacity: 0, scaleX: 0.6 }}
             animate={{ opacity: 1, scaleX: 1 }}
@@ -121,7 +122,7 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         {/* the identifier — the main visual headline, oversized with deliberate
             negative space; lg pushes it off-left for an asymmetrical title card */}
         <h1
-          className="mt-auto select-text break-words font-display font-semibold leading-[0.92] tracking-[-0.05em] text-ink
+          className="select-text break-words font-display font-semibold leading-[0.92] tracking-[-0.05em] text-ink
                      text-[clamp(3.4rem,12vw,11rem)] lg:-ml-2"
         >
           {record.id}
@@ -129,7 +130,7 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
 
         {/* short summary — hierarchy C, right after the title */}
         {record.desc ? (
-          <div className="mt-7 max-w-xl">
+          <div className="mt-7 max-w-2xl">
             <p className={`text-[14px] leading-relaxed text-ink-2 ${expanded ? '' : 'line-clamp-3'}`}>
               {record.desc}
             </p>
@@ -147,7 +148,7 @@ export function CinematicHeader({ record, onClose, standalone = true }: {
         ) : null}
 
         {/* editorial meta row — hierarchy D; teal accents on the values' labels */}
-        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-4 border-t border-ink/15 pt-5">
+        <dl className="mt-10 grid grid-cols-2 gap-y-4 border-t border-ink/15 pt-5 sm:flex sm:justify-between sm:gap-y-4">
           {[
             { k: 'PUBLISHED', v: record.published?.slice(0, 10) ?? '—' },
             { k: 'SEVERITY', v: record.sev.charAt(0).toUpperCase() + record.sev.slice(1) },
