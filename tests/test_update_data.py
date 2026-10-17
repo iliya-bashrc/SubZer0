@@ -366,6 +366,46 @@ class PipelineFailureTests(unittest.TestCase):
             with self.assertRaises(feed.FeedError):
                 feed.request_json(feed.NVD_API)
 
+    def test_malformed_json_is_retried_then_succeeds(self):
+        # Regression for the 2026-10-15 scheduled-refresh failure: the NVD CDN
+        # intermittently serves HTTP 200 with a body truncated mid-JSON. A
+        # malformed body must be retried inside request_json like any transient
+        # upstream error, not fail the whole refresh on the first attempt.
+        class Response:
+            headers = {}
+            def __init__(self, body): self.body = body
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self, size=-1): return self.body
+
+        good = json.dumps({"totalResults": 0, "vulnerabilities": []}).encode()
+        bodies = [b'{"totalResults": 0, "vulnerabi', good]  # truncated, then intact
+        opener = mock.Mock()
+        opener.open.side_effect = [Response(b) for b in bodies]
+        sleeps = []
+        with mock.patch.object(feed.time, "sleep", sleeps.append), \
+             mock.patch.object(feed.urllib.request, "build_opener", return_value=opener):
+            payload, _ = feed.request_json(feed.NVD_API)
+        self.assertEqual(payload, {"totalResults": 0, "vulnerabilities": []})
+        self.assertEqual(len(sleeps), 1)  # one retry pause, then success
+
+    def test_malformed_json_fails_closed_after_all_retries(self):
+        # Fail-closed preserved: persistent malformed bodies still abort the run.
+        class Response:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self, size=-1): return b'{"totalResults": 0, "vulnerabi'
+
+        opener = mock.Mock()
+        opener.open.return_value = Response()
+        sleeps = []
+        with mock.patch.object(feed.time, "sleep", sleeps.append), \
+             mock.patch.object(feed.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaisesRegex(feed.FeedError, "invalid UTF-8 JSON"):
+                feed.request_json(feed.NVD_API)
+        self.assertEqual(len(sleeps), 4)  # 5 attempts, 4 backoff pauses
+
 
 if __name__ == "__main__":
     unittest.main()

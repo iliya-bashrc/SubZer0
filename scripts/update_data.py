@@ -228,7 +228,19 @@ def request_json(url: str, headers: dict[str, str] | None = None, timeout: int =
                         parse_constant=_reject_json_constant,
                     )
                 except (UnicodeError, json.JSONDecodeError) as exc:
-                    raise FeedError("Upstream returned invalid UTF-8 JSON") from exc
+                    # Truncated/mangled upstream responses (observed from the NVD CDN:
+                    # HTTP 200 with a body cut mid-JSON) are TRANSIENT. Retry within
+                    # the existing loop like timeouts; only fail closed after all
+                    # attempts. Integrity and byte caps are untouched.
+                    if attempt == 4:
+                        raise FeedError("Upstream returned invalid UTF-8 JSON") from exc
+                    delay = min(30, 2 ** attempt)
+                    print(
+                        f"Upstream returned malformed JSON; retrying in {delay}s",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
                 return payload, response.headers
         except urllib.error.HTTPError as exc:
             retry_after = _header(exc.headers, "Retry-After")
@@ -282,6 +294,7 @@ def iter_nvd(
         payload, _ = request_fn(f"{NVD_API}?{query}", headers=headers)
         if not isinstance(payload, dict) or not isinstance(payload.get("vulnerabilities"), list):
             raise FeedError("NVD returned an unexpected response shape")
+        print(f"NVD page {int(start_index / page_size) + 1} fetched ({len(payload['vulnerabilities'])} records)", file=sys.stderr)
         reported_total = payload.get("totalResults")
         if isinstance(reported_total, bool) or not isinstance(reported_total, int) or not 0 <= reported_total <= MAX_NVD_RESULTS:
             raise FeedError("NVD returned an invalid or excessive totalResults count")
@@ -370,6 +383,8 @@ def iter_github_advisories(
         payload, response_headers = request_fn(url, headers=headers)
         if not isinstance(payload, list) or len(payload) > 100:
             raise FeedError("GitHub returned an unexpected advisory response shape")
+        pages += 1
+        print(f"GHSA page {pages} fetched ({len(payload)} advisories)", file=sys.stderr)
         for advisory in payload:
             if not isinstance(advisory, dict):
                 raise FeedError("GitHub returned a malformed advisory object")
@@ -383,7 +398,6 @@ def iter_github_advisories(
         next_url = _next_link(_header(response_headers, "Link"))
         if not payload and next_url:
             raise FeedError("GitHub returned an empty advisory page with a next-page cursor")
-        pages += 1
         url = next_url
     if pages == 0 or not items:
         raise FeedError("GitHub returned an empty advisory result set")
