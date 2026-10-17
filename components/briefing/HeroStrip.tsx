@@ -27,8 +27,8 @@ export const HeroStrip = memo(function HeroStrip({
   return (
     <header className="flex flex-wrap items-end justify-between gap-6 pb-10 pt-6">
       <div className="min-w-0">
-        <p className="text-[14px] text-ink-2">Welcome back</p>
-        <h2 className="mt-1 font-display text-[32px] font-bold leading-tight text-ink">
+        <p className="cine-label">BRIEFING — DAILY INTELLIGENCE</p>
+        <h2 className="mt-2 font-display text-[34px] font-bold leading-tight tracking-[-0.03em] text-ink">
           CVE Intelligence
         </h2>
         <p className="mt-1.5 text-[13px] text-ink-3" aria-live="polite" aria-atomic="true">

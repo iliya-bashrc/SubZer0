@@ -43,12 +43,12 @@ function SourceMark() {
 export const SourceGrid = memo(function SourceGrid({ sources }: { sources: SourceStatus[] }) {
   return (
     <section>
-      <h3 className="text-[16px] font-semibold text-ink">Sources</h3>
+      <h3 className="cine-label">SOURCES — VERIFIED PROVENANCE</h3>
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {sources.map((s) => {
           const m = metric(s);
           return (
-            <div key={s.name} className="card card-hover p-4">
+            <div key={s.name} className="card card-hover border-l-2 p-4" style={{ borderLeftColor: 'var(--color-cine-teal-deep)' }}>
               <div className="flex items-center gap-2.5 text-ink-2">
                 <SourceMark />
                 <span className="truncate text-[13px] text-ink">{s.name}</span>

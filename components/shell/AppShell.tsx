@@ -69,13 +69,20 @@ export function AppShell() {
             onClick={() => goTo(i)}
             aria-current={i === active ? 'page' : undefined}
             title="Ctrl+1..4 to switch"
-            className={`rounded-md px-3.5 py-2 text-[13px] font-medium transition-colors ${
+            className={`rounded-md px-3.5 py-2 text-[13px] font-medium transition-colors relative ${
               i === active
-                ? 'bg-bg-raised text-ink'
+                ? 'text-ink'
                 : 'text-ink-2 hover:bg-bg-hover hover:text-ink'
             }`}
           >
             {t}
+            {i === active && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-3 -bottom-px h-0.5"
+                style={{ background: 'var(--color-cine-teal)' }}
+              />
+            )}
           </button>
         ))}
         <button

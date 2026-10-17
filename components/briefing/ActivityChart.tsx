@@ -34,17 +34,17 @@ export const ActivityChart = memo(function ActivityChart({ daily }: { daily: Day
 
   if (daily.length === 0) {
     return (
-      <div className="card p-6 text-[13px] text-ink-3">No activity data in this window.</div>
+      <div className="cine-rule pt-6 text-[13px] text-ink-3">No activity data in this window.</div>
     );
   }
 
   const active = hover != null ? daily[hover] : null;
 
   return (
-    <section className="card p-5 sm:p-6">
-      <div className="flex items-baseline justify-between gap-4">
-        <h3 className="text-[16px] font-semibold text-ink">Publication activity</h3>
-        <span className="text-[13px] text-ink-3">
+    <section>
+      <div className="flex items-baseline justify-between gap-4 border-b border-line-soft pb-3">
+        <h3 className="cine-label">PUBLICATION ACTIVITY</h3>
+        <span className="font-mono text-[11px] text-ink-3">
           Last 30 days
           {active ? ` · ${active.date}: ${active.count.toLocaleString('en-US')}` : ` · peak ${daily[peakIdx].count.toLocaleString('en-US')}`}
         </span>
@@ -71,7 +71,7 @@ export const ActivityChart = memo(function ActivityChart({ daily }: { daily: Day
                 height: `${h}%`,
                 background: isPeak
                   ? 'var(--color-accent)'
-                  : 'color-mix(in oklch, var(--color-accent) 16%, transparent)',
+                  : 'color-mix(in oklch, var(--color-cine-teal) 38%, transparent)',
               }}
             />
           );

@@ -56,10 +56,10 @@ export const Stat = memo(function Stat({
   sub?: React.ReactNode;
 }) {
   return (
-    <div className="card p-5">
-      <div className="label-xs">{label}</div>
-      <div className="mt-2 truncate text-[28px] font-semibold leading-none tracking-tight text-ink tabular-nums">
-        {value}
+    <div className="relative border-l-2 pl-4" style={{ borderColor: 'var(--color-cine-teal-deep)' }}>
+      <div className="cine-label">{label}</div>
+      <div className="cine-figure mt-2 truncate text-[30px] text-ink tabular-nums">
+      {value}
       </div>
       {sub && <div className="mt-1.5 text-[12px] text-ink-3">{sub}</div>}
     </div>

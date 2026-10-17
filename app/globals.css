@@ -31,6 +31,18 @@
   --color-accent:      oklch(0.78 0.13 230);
   --color-accent-soft: oklch(0.78 0.13 230 / 0.12);
 
+  /* CINEMATIC SYSTEM (branch prototype/cinematic-dossier) — tokens extracted
+     from the approved CVE title card so every section shares one language. */
+  /* deep cinematic foundation (title-card ground; slightly bluer/blacker) */
+  --color-cine-bg:      #05070C;
+  /* restrained teal for secondary technical information */
+  --color-cine-teal:    #6FA8B8;
+  /* warm amber label surface */
+  --color-cine-amber:   var(--color-medium);
+  /* teal-tinted ambient light for section headers (very low opacity use) */
+  --color-cine-teal-deep: #1E5F74;
+  --color-cine-navy:    #23425E;
+
   --color-critical: oklch(0.62 0.20 25);
   --color-high:     oklch(0.72 0.16 55);
   --color-medium:   oklch(0.78 0.13 85);
@@ -80,6 +92,51 @@ h1, h2, h3, .font-display {
   letter-spacing: 0.04em;
   color: var(--color-ink-3);
 }
+
+/* ============================================================
+   CINEMATIC DESIGN SYSTEM (branch prototype) — shared vocabulary
+   extracted from the approved CVE title card. Principles:
+   typography-led hierarchy, hairline dividers instead of boxes,
+   restrained teal secondary accents, filled rectangular labels.
+   ============================================================ */
+
+/* section label — teal, tracked; the system's secondary voice */
+.cine-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-cine-teal);
+}
+
+/* filled rectangular status label (chip) — used sparingly */
+.cine-chip {
+  display: inline-block;
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  border-radius: 0; /* deliberately rectangular */
+}
+
+/* editorial hairline section divider */
+.cine-rule {
+  border: 0;
+  border-top: 1px solid oklch(0.96 0.003 240 / 0.15);
+}
+
+/* display numerals for editorial stats */
+.cine-figure {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
 
 ::selection { background: var(--color-accent-soft); color: var(--color-ink); }
 
