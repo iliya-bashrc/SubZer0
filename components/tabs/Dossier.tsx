@@ -114,29 +114,37 @@ export function DossierView({ cveId }: { cveId: string }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
-      className="mx-auto h-full max-w-3xl space-y-8 overflow-y-auto overscroll-contain px-4 py-6 sm:px-6"
+      className="h-full overflow-y-auto overscroll-contain bg-[#05070C]"
       style={{ touchAction: 'pan-y' }}
     >
-      {/* 1. Header — cinematic prototype hero (branch-only). Same verified record. */}
-      <CinematicHeader record={record} onClose={undefined} standalone />
+      {/* 1. Header — cinematic prototype hero (branch-only). Full-bleed:
+          negative margins cancel the column padding so the atmosphere owns
+          the whole viewport width, like a title card. */}
+      <div className="-mx-4 sm:-mx-6">
+        <CinematicHeader record={record} onClose={undefined} standalone />
+      </div>
 
       {/* 2..6 — SHARED dossier body (Scores → Exploit intel → Affected → References);
-          description lives in the cinematic header teaser on this branch. */}
-      <DossierContent
-        record={record}
-        epssPercentile={epssPercentile}
-        hideDescription
-        related={
-          /* 7. Related CVEs — full-page-only slot */
-          <RelatedCves
-            record={record}
-            shardRecords={shardRecords}
-            onSelect={(id) => {
-              window.location.href = `${process.env.__NEXT_ROUTER_BASEPATH || ''}/cve/${id}/`;
-            }}
-          />
-        }
-      />
+          description lives in the cinematic header teaser on this branch.
+          Full-bleed column: hero + body both own the viewport width, with an
+          inner prose measure so text stays readable. */}
+      <div className="mx-auto max-w-5xl px-6 pb-16 pt-10 sm:px-10 lg:px-16">
+        <DossierContent
+          record={record}
+          epssPercentile={epssPercentile}
+          hideDescription
+          related={
+            /* 7. Related CVEs — full-page-only slot */
+            <RelatedCves
+              record={record}
+              shardRecords={shardRecords}
+              onSelect={(id) => {
+                window.location.href = `${process.env.__NEXT_ROUTER_BASEPATH || ''}/cve/${id}/`;
+              }}
+            />
+          }
+        />
+      </div>
     </motion.div>
   );
 }

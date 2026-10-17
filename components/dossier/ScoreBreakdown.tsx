@@ -41,33 +41,27 @@ export const ScoreBreakdown = memo(function ScoreBreakdown({
   const hasCvss = cvssScore != null && cvssScore > 0;
 
   return (
-    <section className="space-y-3">
-      <h3 className="label-xs">Score breakdown</h3>
+    <section className="space-y-4">
+      <h3 className="label-xs">Assessment</h3>
 
-      <div className="card space-y-4 p-4">
-        {/* CVSS bar */}
+      {/* CINEMATIC v2: editorial numerals sitting directly on the atmosphere —
+          no borders, no cards, asymmetric stagger instead of a KPI grid. */}
+      <div>
+        {/* CVSS — the larger figure, first */}
         <div>
-          <div className="flex items-baseline justify-between">
-            <span className="text-[13px] font-medium text-ink">CVSS base score</span>
-            <span className="font-mono text-[14px] text-ink">
+          <div className="label-xs">CVSS BASE SCORE</div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span
+              className="font-display text-[72px] font-semibold leading-none tracking-[-0.03em]"
+              style={{ color: hasCvss ? barColor : 'var(--color-ink-3)' }}
+            >
               {hasCvss ? cvssScore!.toFixed(1) : '—'}
-              <span className="text-ink-3"> / 10</span>
             </span>
+            <span className="font-mono text-[13px] text-ink-3">/ 10</span>
           </div>
-          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-bg-hover">
-            {hasCvss && (
-              <div
-                className="h-full rounded-full transition-[width] duration-500"
-                style={{ width: `${(cvssScore! / 10) * 100}%`, background: barColor }}
-              />
-            )}
-          </div>
-          {!hasCvss && (
-            <div className="mt-1.5 text-[12px] text-ink-3">No CVSS base score in verified sources</div>
-          )}
-          {/* Vector rows — copy-to-clipboard when present (patch §5a) */}
+          {!hasCvss && <div className="mt-2 text-[12px] text-ink-3">No CVSS base score in verified sources</div>}
           {(cvssVector || cvss30Score != null || cvss2Score != null) && (
-            <div className="mt-3 space-y-2 border-t border-line pt-3">
+            <div className="mt-3 max-w-md space-y-2 border-t border-line pt-3">
               <VectorRow label="v3.1 vector" value={cvssVector} />
               {cvss30Score != null && (
                 <VectorRow label="v3.0 score" value={cvss30Vector ?? String(cvss30Score)} fallback={String(cvss30Score)} />
@@ -77,32 +71,24 @@ export const ScoreBreakdown = memo(function ScoreBreakdown({
           )}
         </div>
 
-        {/* EPSS bar */}
-        <div className="border-t border-line pt-4">
-          <div className="flex items-baseline justify-between">
-            <span className="text-[13px] font-medium text-ink">EPSS</span>
-            <span className="font-mono text-[14px] text-ink">
+        {/* EPSS — offset below and inset, breaking the symmetric grid */}
+        <div className="mt-8 ml-[18%] border-t border-line pt-5 sm:ml-[28%]">
+          <div className="label-xs" style={{ color: '#6FA8B8' }}>EPSS — EXPLOITATION PROBABILITY</div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="font-display text-[48px] font-semibold leading-none tracking-[-0.03em] text-ink">
               {epssScore != null ? epssScore.toFixed(3) : '—'}
             </span>
-          </div>
-          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-bg-hover">
-            {epssScore != null && (
-              <div
-                className="h-full rounded-full bg-accent transition-[width] duration-500"
-                style={{ width: `${Math.min(100, epssScore * 100)}%` }}
-              />
+            {epssPercentile != null && (
+              <span className="font-mono text-[13px] text-ink-3">p{((epssPercentile ?? 0) * 100).toFixed(1)}</span>
             )}
           </div>
-          <div className="mt-1.5 text-[12px] text-ink-3">
+          <div className="mt-2 text-[12px] text-ink-3">
             {epssScore != null
-              ? `Exploitation probability · percentile ${((epssPercentile ?? 0) * 100).toFixed(1)}%`
+              ? 'Exploitation probability · FIRST EPSS'
               : 'Not scored by FIRST EPSS'}
           </div>
           {/* 30-day trend: upstream publishes a single score snapshot only */}
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-[12px] text-ink-3">30-day trend</span>
-            <span className="text-[12px] text-ink-3">single snapshot — history not published upstream</span>
-          </div>
+          <div className="mt-2 text-[12px] text-ink-3">30-day trend: single snapshot — history not published upstream</div>
         </div>
       </div>
     </section>

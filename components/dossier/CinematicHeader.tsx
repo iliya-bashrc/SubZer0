@@ -1,154 +1,171 @@
 'use client';
 
 /*
- * CINEMATIC DOSSIER PROTOTYPE — branch prototype/cinematic-dossier only.
+ * CINEMATIC DOSSIER HERO — prototype/cinematic-dossier branch only. v2.
  *
- * Original visual direction inspired by the described language of the
- * VisionQuest end credits (large composed typography, small rectangular
- * accent labels, atmospheric lighting, editorial negative space). Not a
- * reproduction of any title card. Data is always the real verified record;
- * styling only. Falls back to the standard production panel visually via
- * an environment-free toggle (see CINEMATIC constant below) so the branch
- * stays comparable side-by-side.
+ * Full-bleed editorial composition (NOT a dashboard card): a filled
+ * rectangular severity label in oversized contrast to a geometric CVE
+ * identifier, set on a layered atmospheric scene — deep blue-black base,
+ * teal ambience + severity-colored key light, cool counter-light, film
+ * texture, vignette. Visual language inspired by the described VisionQuest
+ * end-credit typography; an original composition, not a reproduction.
+ * All data comes from the verified record — nothing fabricated.
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import type { CveRecord } from '@/lib/snapshot';
-import { DossierContent } from '@/components/dossier/DossierContent';
 
-const CINEMATIC = true; // flip to false to render the production drawer look
+/** Restrained teal for secondary technical info (direction §3). */
+const TEAL = '#6FA8B8';
 
 const SEV_LABEL: Record<string, string> = {
   critical: 'CRITICAL VULNERABILITY',
-  high: 'HIGH SEVERITY VULNERABILITY',
-  medium: 'MODERATE SEVERITY VULNERABILITY',
-  low: 'LOW SEVERITY VULNERABILITY',
+  high: 'HIGH SEVERITY',
+  medium: 'MODERATE SEVERITY',
+  low: 'LOW SEVERITY',
   none: 'UNSCORED ADVISORY',
   unknown: 'UNSCORED ADVISORY',
 };
 
-/** Atmo: fixed, blurred ambient fields behind the panel content (CSS only,
- *  respects reduced-motion because it never animates — static gradients). */
-function Atmo({ sev }: { sev: string }) {
-  const hue = sev === 'critical' ? 'var(--color-critical)' : sev === 'high' ? 'var(--color-high)' : 'var(--color-accent)';
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <div
-        className="absolute -top-40 left-1/2 h-[420px] w-[680px] -translate-x-1/2 rounded-full opacity-[0.10] blur-[120px]"
-        style={{ background: hue }}
-      />
-      <div
-        className="absolute -right-32 top-1/3 h-[300px] w-[300px] rounded-full opacity-[0.06] blur-[100px]"
-        style={{ background: hue }}
-      />
-    </div>
-  );
+/** severity → (label fill, label ink, key light color). Red/amber family. */
+function sevPalette(sev: string): { fill: string; ink: string; light: string } {
+  switch (sev) {
+    case 'critical': return { fill: 'var(--color-critical)', ink: '#0B0B0E', light: 'var(--color-critical)' };
+    case 'high':     return { fill: 'var(--color-high)',    ink: '#0B0B0E', light: 'var(--color-high)' };
+    case 'medium':   return { fill: 'var(--color-medium)',  ink: '#0B0B0E', light: 'var(--color-medium)' };
+    case 'low':      return { fill: 'var(--color-low)',     ink: '#0B0B0E', light: 'var(--color-accent)' };
+    default:         return { fill: '#2A2F3A',              ink: 'var(--color-ink-2)', light: 'var(--color-accent)' };
+  }
 }
 
-/** Small rectangular credit-style label. */
-function CreditLabel({ children, accent }: { children: string; accent?: boolean }) {
-  return (
-    <span
-      className="inline-block px-2 py-[3px] font-mono text-[10px] tracking-[0.18em] uppercase"
-      style={{
-        color: accent ? 'var(--color-critical)' : 'var(--color-ink-2)',
-        border: `1px solid ${accent ? 'var(--color-critical)' : 'var(--color-line-hi)'}`,
-        background: accent ? 'var(--color-critical-soft, rgba(229,72,77,0.08))' : 'transparent',
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-function MetaCell({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <div className="label-xs mb-1">{label}</div>
-      <div className={`truncate text-[13px] text-ink ${mono ? 'font-mono' : ''}`}>{value}</div>
-    </div>
-  );
-}
-
-export function CinematicHeader({ record, onClose, standalone = false }:
-  { record: CveRecord; onClose?: () => void; standalone?: boolean }) {
+export function CinematicHeader({ record, onClose, standalone = true }: {
+  record: CveRecord; onClose?: () => void; standalone?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const pal = sevPalette(record.sev);
   const label = SEV_LABEL[record.sev] ?? SEV_LABEL.unknown;
-  const accent = record.sev === 'critical' || record.sev === 'high' || Boolean(record.kev);
-
-  const meta = useMemo(() => {
-    const rows: { label: string; value: string }[] = [
-      { label: 'Published', value: record.published?.slice(0, 10) ?? '—' },
-      { label: 'Last modified', value: record.modified?.slice(0, 10) ?? '—' },
-      { label: 'CVSS', value: record.score != null && record.score > 0 ? `v3.1 · ${record.score.toFixed(1)}` : '—' },
-      { label: 'KEV catalog', value: record.kev ? `Listed ${record.kev.date_added}` : 'Not listed' },
-    ];
-    const vendor = record.affected?.[0]?.vendor;
-    const product = record.affected?.[0]?.product;
-    if (vendor || product) rows.splice(1, 0, { label: 'Affected', value: [vendor, product].filter(Boolean).join(' / ') });
-    return rows;
-  }, [record]);
 
   return (
-    <header className="relative z-10 border-b border-line px-5 pb-6 pt-5 sm:px-7">
-      <Atmo sev={record.sev} />
-
-      {/* eyebrow row: credit-style labels + close */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <CreditLabel accent={accent}>{label}</CreditLabel>
-          {record.kev ? <CreditLabel>KEV LISTED</CreditLabel> : null}
-        </div>
-        {onClose ? (
-          <button
-            onClick={onClose}
-            aria-label="Close dossier"
-            className="rounded-md p-1.5 text-ink-3 transition-colors hover:bg-bg-hover hover:text-ink"
-          >
-            <X size={16} strokeWidth={1.5} />
-          </button>
-        ) : (
-          <span aria-hidden="true" className="w-[34px]" />
-        )}
+    <section
+      className="relative isolate overflow-hidden"
+      aria-label={`${record.id} vulnerability dossier`}
+      style={{ background: '#05070C' }}
+    >
+      {/* ── atmospheric scene: layered light, texture, vignette ───────── */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        {/* deep teal ambience — large soft source, upper left */}
+        <div
+          className="absolute -left-40 -top-56 h-[80vh] w-[90vw] rounded-full opacity-[0.28] blur-[130px]"
+          style={{ background: 'radial-gradient(closest-side, #1E5F74, transparent)' }}
+        />
+        {/* key light — severity-colored warm source, right of center */}
+        <div
+          className="absolute right-[8%] top-[22%] h-[46vh] w-[52vw] rounded-full opacity-[0.22] blur-[110px]"
+          style={{ background: `radial-gradient(closest-side, ${pal.light}, transparent)` }}
+        />
+        {/* cool counter-light, bottom left */}
+        <div
+          className="absolute -bottom-48 left-[15%] h-[38vh] w-[46vw] rounded-full opacity-[0.14] blur-[100px]"
+          style={{ background: 'radial-gradient(closest-side, #23425E, transparent)' }}
+        />
+        {/* fine technical texture: sparse grid + scanline grain */}
+        <div
+          className="absolute inset-0 opacity-[0.05]"
+          style={{
+            backgroundImage:
+              'linear-gradient(#7A8CA012 1px, transparent 1px), linear-gradient(90deg, #7A8CA012 1px, transparent 1px)',
+            backgroundSize: '64px 64px',
+          }}
+        />
+        <div
+          className="absolute inset-0 opacity-[0.035]"
+          style={{ backgroundImage: 'repeating-linear-gradient(0deg, #FFFFFF14 0 1px, transparent 1px 3px)' }}
+        />
+        {/* vignette to pull focus into the composition */}
+        <div
+          className="absolute inset-0"
+          style={{ background: 'radial-gradient(120% 90% at 50% 30%, transparent 40%, #05070CE6 100%)' }}
+        />
       </div>
 
-      {/* the identifier: dominant, editorial, tight tracking */}
-      <h2
-        className="mt-4 select-text break-words font-display text-[clamp(1.9rem,7vw,2.9rem)] font-semibold leading-[1.02] tracking-[-0.03em] text-ink"
+      {/* ── composition ───────────────────────────────────────────────── */}
+      <motion.div
+        initial={useReducedMotion() ? false : { opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+        className="relative z-10 flex min-h-[100svh] flex-col
+                   px-6 pb-12 pt-12 sm:px-10 sm:pb-16 sm:pt-16 lg:px-20 lg:pb-24 lg:pt-20"
       >
-        {record.id}
-      </h2>
-
-      {/* metadata strip — editorial hairline grid, LEFT-aligned cells */}
-      <div className="mt-5 grid grid-cols-2 gap-x-8 gap-y-3 border-t border-line-soft pt-4 text-left sm:grid-cols-4">
-        {meta.map((m) => (
-          <MetaCell key={m.label} label={m.label} value={m.value} />
-        ))}
-      </div>
-
-      {/* supporting statement — clamped teaser; body description hidden until expanded */}
-      {record.desc ? (
-        <>
-          <p className={`mt-3 max-w-md text-[13px] leading-relaxed text-ink-2 ${expanded ? '' : 'line-clamp-2'}`}>
-            {record.desc}
-          </p>
-          {record.desc.length > 180 ? (
-            <button
-              onClick={() => setExpanded((e) => !e)}
-              className="mt-1 font-mono text-[11px] tracking-[0.14em] text-accent hover:text-ink"
-              aria-expanded={expanded}
+        {/* filled rectangular label — small, heavy contrast against the oversized title */}
+        <div className="flex flex-wrap items-center gap-3">
+          <motion.span
+            initial={useReducedMotion() ? false : { opacity: 0, scaleX: 0.6 }}
+            animate={{ opacity: 1, scaleX: 1 }}
+            transition={{ duration: 0.5, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+            className="inline-block origin-left px-3 py-[6px] font-mono text-[11px] font-semibold uppercase tracking-[0.22em]"
+            style={{ background: pal.fill, color: pal.ink }}
+          >
+            {label}
+          </motion.span>
+          {record.kev ? (
+            <span
+              className="inline-block border px-3 py-[6px] font-mono text-[11px] uppercase tracking-[0.22em]"
+              style={{ borderColor: pal.light, color: pal.light }}
             >
-              {expanded ? 'COLLAPSE ▲' : 'READ FULL ADVISORY ▼'}
-            </button>
+              CISA KEV LISTED
+            </span>
           ) : null}
-        </>
-      ) : null}
-    </header>
-  );
-}
+        </div>
 
-/** Exported for the drawer: production layout with cinematic header when CINEMATIC. */
-export function useCinematic() {
-  return CINEMATIC;
+        {/* the identifier — the main visual headline, oversized with deliberate
+            negative space; lg pushes it off-left for an asymmetrical title card */}
+        <h1
+          className="mt-auto select-text break-words font-display font-semibold leading-[0.92] tracking-[-0.05em] text-ink
+                     text-[clamp(3.4rem,12vw,11rem)] lg:-ml-2"
+        >
+          {record.id}
+        </h1>
+
+        {/* short summary — hierarchy C, right after the title */}
+        {record.desc ? (
+          <div className="mt-7 max-w-xl">
+            <p className={`text-[14px] leading-relaxed text-ink-2 ${expanded ? '' : 'line-clamp-3'}`}>
+              {record.desc}
+            </p>
+            {record.desc.length > 180 ? (
+              <button
+                onClick={() => setExpanded((e) => !e)}
+                aria-expanded={expanded}
+                className="mt-2 font-mono text-[11px] tracking-[0.2em] hover:text-ink"
+                style={{ color: TEAL }}
+              >
+                {expanded ? 'COLLAPSE ▲' : 'READ FULL ADVISORY ▼'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* editorial meta row — hierarchy D; teal accents on the values' labels */}
+        <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-4 border-t border-ink/15 pt-5">
+          {[
+            { k: 'PUBLISHED', v: record.published?.slice(0, 10) ?? '—' },
+            { k: 'SEVERITY', v: record.sev.charAt(0).toUpperCase() + record.sev.slice(1) },
+            { k: 'CVSS', v: record.score != null && record.score > 0 ? record.score.toFixed(1) : '—' },
+            { k: 'KEV', v: record.kev ? `Listed ${record.kev.date_added}` : 'Not listed' },
+          ].map((m) => (
+            <div key={m.k} className="min-w-24">
+              <dt className="font-mono text-[10px] tracking-[0.24em]" style={{ color: TEAL }}>{m.k}</dt>
+              <dd className="mt-1 font-mono text-[15px] text-ink">{m.v}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {/* onClose intentionally not rendered inside the v2 composition: the
+            deep-link page has browser navigation, and the drawer's close
+            control lives on the panel chrome above this hero. */}
+        {onClose ? null : null}
+      </motion.div>
+    </section>
+  );
 }
