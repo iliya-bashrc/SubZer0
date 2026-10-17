@@ -50,7 +50,7 @@ export const ReferenceList = memo(function ReferenceList({
   if (refs.length === 0) {
     return (
       <section className="space-y-3">
-        <h3 className="label-xs">References</h3>
+        <h3 className="cine-label">References</h3>
         <div className="text-[12px] text-ink-3">
           No references published by upstream sources.
         </div>
@@ -60,7 +60,7 @@ export const ReferenceList = memo(function ReferenceList({
 
   return (
     <section className="space-y-3">
-      <h3 className="label-xs">References · {refs.length}</h3>
+      <h3 className="cine-label">References · {refs.length}</h3>
       <ul className="divide-y divide-line-soft">
         {refs.map((ref) => {
           const badge = sourceLabel(ref.source, ref.tags);

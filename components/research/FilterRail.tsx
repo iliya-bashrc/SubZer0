@@ -16,7 +16,7 @@ const SEVERITIES: { key: IndexTuple[2]; label: string; varName: string }[] = [
   { key: 'low', label: 'Low', varName: 'var(--color-low)' },
 ];
 
-const LABEL = 'mb-2 text-[11px] font-medium uppercase text-ink-3 tracking-[0.05em]';
+const LABEL = 'cine-label mb-2';
 
 interface FilterRailProps {
   filters: Filters;

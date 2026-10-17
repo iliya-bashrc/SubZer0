@@ -60,12 +60,12 @@ export const ResultsTable = memo(function ResultsTable({ rows, onOpen, onResetFi
   if (rows.length === 0) {
     return (
       <div className="flex h-full items-center justify-center px-6">
-        <div className="card px-8 py-8 text-center" role="status">
+        <div className="px-8 py-8 text-center" role="status">
           <svg aria-hidden="true" viewBox="0 0 24 24" className="mx-auto h-10 w-10 text-ink-3" fill="none" stroke="currentColor" strokeWidth="1.5">
             <circle cx="11" cy="11" r="7" />
             <path d="m20 20-3.5-3.5" strokeLinecap="round" />
           </svg>
-          <div className="mt-3 text-[14px] font-medium text-ink-2">No CVEs match your filters</div>
+          <div className="cine-label mt-4">FINDINGS: NONE</div>
           <div className="mt-1 text-[13px] text-ink-3">
             Try a different query or clear the active filters.
           </div>

@@ -31,7 +31,7 @@ export const DossierContent = memo(function DossierContent({
           duplicate body copy until the header teaser is expanded. */}
       {!hideDescription && (
         <section>
-          <h3 className="label-xs mb-2">Description</h3>
+          <h3 className="cine-label mb-2">Description</h3>
           <p className="text-[13px] leading-relaxed text-ink">{record.desc}</p>
         </section>
       )}

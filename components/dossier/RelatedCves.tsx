@@ -53,7 +53,7 @@ export const RelatedCves = memo(function RelatedCves({ record, shardRecords, onS
 
   return (
     <section className="space-y-4">
-      <h3 className="label-xs">Related CVEs</h3>
+      <h3 className="cine-label">Related CVEs</h3>
 
       {/* By CWE — not published upstream */}
       <div>

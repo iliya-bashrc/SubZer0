@@ -37,7 +37,7 @@ export const AffectedProducts = memo(function AffectedProducts({
   if (affected.length === 0) {
     return (
       <section className="space-y-3">
-        <h3 className="label-xs">Affected products</h3>
+        <h3 className="cine-label">Affected products</h3>
         <div className="text-[12px] text-ink-3">
           No affected-product data published by upstream sources.
         </div>
@@ -48,7 +48,7 @@ export const AffectedProducts = memo(function AffectedProducts({
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between">
-        <h3 className="label-xs mb-0">Affected products · {rows.length}</h3>
+        <h3 className="cine-label mb-0">Affected products · {rows.length}</h3>
         <button
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
