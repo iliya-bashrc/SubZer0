@@ -23,14 +23,18 @@ export const DossierContent = memo(function DossierContent({
   record,
   epssPercentile,
   related,
-}: DossierContentProps) {
+  hideDescription = false,
+}: DossierContentProps & { hideDescription?: boolean }) {
   return (
     <>
-      {/* Description */}
-      <section>
-        <h3 className="label-xs mb-2">Description</h3>
-        <p className="text-[13px] leading-relaxed text-ink">{record.desc}</p>
-      </section>
+      {/* Description — the cinematic header already shows a teaser; hide the
+          duplicate body copy until the header teaser is expanded. */}
+      {!hideDescription && (
+        <section>
+          <h3 className="label-xs mb-2">Description</h3>
+          <p className="text-[13px] leading-relaxed text-ink">{record.desc}</p>
+        </section>
+      )}
 
       {/* Scores (vector string / circular CVSS gauge / EPSS + percentile) */}
       <ScoreBreakdown

@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { useSnapshot } from '@/components/SnapshotProvider';
 import { fetchVerifiedJson, getCve, type CveRecord } from '@/lib/snapshot';
 import { DossierContent } from '@/components/dossier/DossierContent';
+import { CinematicHeader } from '@/components/dossier/CinematicHeader';
 import { RelatedCves } from '@/components/dossier/RelatedCves';
 
 const SEV_VAR: Record<string, string | null> = {
@@ -106,7 +107,7 @@ export function DossierView({ cveId }: { cveId: string }) {
     );
   }
 
-  const sevKnown = SEV_VAR[record.sev] != null;
+  void SEV_VAR; // severity chips moved to CinematicHeader (branch prototype)
 
   return (
     <motion.div
@@ -116,32 +117,15 @@ export function DossierView({ cveId }: { cveId: string }) {
       className="mx-auto h-full max-w-3xl space-y-8 overflow-y-auto overscroll-contain px-4 py-6 sm:px-6"
       style={{ touchAction: 'pan-y' }}
     >
-      {/* 1. Header strip — text-first hero; Critical gets the single allowed pill */}
-      <header>
-        <h1 className="font-mono text-[28px] font-semibold tracking-[-0.01em] text-ink">
-          {record.id}
-        </h1>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          {record.sev === 'critical' ? (
-            <span className="sev-hero-critical" aria-label="critical severity">Critical</span>
-          ) : sevKnown ? (
-            <span className={`sev sev--${record.sev}`} aria-label={`${record.sev} severity`}>
-              {record.sev.charAt(0).toUpperCase() + record.sev.slice(1)}
-            </span>
-          ) : null}
-          <span className="font-mono text-[12px] text-ink-3">
-            published {record.published.slice(0, 10)} · modified {record.modified.slice(0, 10)}
-          </span>
-          {record.score != null && record.score > 0 && (
-            <span className="font-mono text-[12px] text-ink-3">CVSS {record.score.toFixed(1)}</span>
-          )}
-        </div>
-      </header>
+      {/* 1. Header — cinematic prototype hero (branch-only). Same verified record. */}
+      <CinematicHeader record={record} onClose={undefined} standalone />
 
-      {/* 2..6 — SHARED dossier body (Description → Scores → Exploit intel → Affected → References) */}
+      {/* 2..6 — SHARED dossier body (Scores → Exploit intel → Affected → References);
+          description lives in the cinematic header teaser on this branch. */}
       <DossierContent
         record={record}
         epssPercentile={epssPercentile}
+        hideDescription
         related={
           /* 7. Related CVEs — full-page-only slot */
           <RelatedCves

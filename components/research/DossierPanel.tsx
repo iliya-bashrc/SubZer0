@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { getCve, fetchVerifiedJson, type CveRecord, type Manifest } from '@/lib/snapshot';
 import { DossierContent } from '@/components/dossier/DossierContent';
+import { CinematicHeader } from '@/components/dossier/CinematicHeader';
 
 interface DossierPanelProps {
   open: boolean;
@@ -137,22 +138,12 @@ export function DossierPanel({ open, cveId, manifest, shardMap, onClose }: Dossi
             exit={{ x: '100%' }}
             transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
           >
-            {/* header strip */}
-            <div className="flex items-center justify-between border-b border-line px-5 py-4">
-              <div className="min-w-0">
-                {record ? (
-                  <>
-                    <div className="truncate font-mono text-[15px] font-semibold text-ink">
-                      {record.id}
-                    </div>
-                    {record.sev && record.sev !== 'none' && record.sev !== 'unknown' ? (
-                      <span className={`sev mt-1.5 sev--${record.sev}`} aria-label={`${record.sev} severity`}>
-                        {record.sev.charAt(0).toUpperCase() + record.sev.slice(1)}
-                        {record.score != null && record.score > 0 ? ` · CVSS ${record.score.toFixed(1)}` : ''}
-                      </span>
-                    ) : null}
-                  </>
-                ) : (
+            {/* header strip — cinematic prototype variant (branch-only) */}
+            <div className="relative border-b border-line">
+              {record ? (
+                <CinematicHeader record={record} onClose={onClose} />
+              ) : (
+                <div className="flex items-center justify-between px-5 py-4">
                   <div
                     role={error ? 'alert' : 'status'}
                     aria-live="polite"
@@ -160,15 +151,15 @@ export function DossierPanel({ open, cveId, manifest, shardMap, onClose }: Dossi
                   >
                     {error ? 'Verification failed' : 'Loading verified record…'}
                   </div>
-                )}
-              </div>
-              <button
-                onClick={onClose}
-                aria-label="Close dossier"
-                className="rounded-md p-1.5 text-ink-3 transition-colors hover:bg-bg-hover hover:text-ink"
-              >
-                <X size={16} strokeWidth={1.5} />
-              </button>
+                  <button
+                    onClick={onClose}
+                    aria-label="Close dossier"
+                    className="rounded-md p-1.5 text-ink-3 transition-colors hover:bg-bg-hover hover:text-ink"
+                  >
+                    <X size={16} strokeWidth={1.5} />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* body — SHARED component */}
@@ -182,7 +173,7 @@ export function DossierPanel({ open, cveId, manifest, shardMap, onClose }: Dossi
                 </div>
               )}
               {record && (
-                <DossierContent record={record} epssPercentile={epssPercentile} />
+                <DossierContent record={record} epssPercentile={epssPercentile} hideDescription />
               )}
               {/* Section 12: 1-line disclaimer pinned at the drawer bottom. */}
               <p className="select-text border-t border-line pt-3 text-[11px] leading-relaxed text-ink-3">
