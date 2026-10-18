@@ -1,4 +1,4 @@
-name: Build and deploy SubZer0 (Next.js static export)
+name: Build and deploy SubZer0 (static site)
 
 on:
   push:
@@ -17,32 +17,26 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Check out main
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
+      - name: Check the app script parses
+        run: node --check site/app.js && node --check site/sw.js
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Validate the committed snapshot before shipping it
+        run: python3 scripts/verify_data_snapshot.py --root public/snapshot
 
-      - name: Build static export
-        run: npm run build
-
-      - name: Disable Pages Jekyll processing
-        run: touch out/.nojekyll
+      - name: Assemble the site (shell + snapshot + RSS + JSON API)
+        run: python3 scripts/build_site.py --out _site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: out
+          path: _site
 
   deploy:
     needs: build

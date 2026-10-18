@@ -65,7 +65,7 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertNotIn("41898282+github-actions[bot]@users.noreply.github.com", publish)
 
     def test_public_pages_verification_job_is_absent_by_design(self):
-        # Phase 1 for the Next.js site: Pages verification is owned by the
+        # Pages verification is owned by the
         # existing deploy workflow, so the updater stops after publishing.
         self.assertNotIn("verify-pages:", self.update)
         self.assertEqual(len(re.findall(r"(?m)^\s+git .*push origin HEAD:refs/heads/main", self.update)), 1)

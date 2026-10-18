@@ -158,3 +158,10 @@ jobs:
           done
           echo "Could not dispatch deploy; the site will refresh on the next code push."
           exit 0
+
+      - name: Tell Telegram about CVEs that just became patch-now
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 scripts/notify_telegram.py --previous HEAD~1 || true

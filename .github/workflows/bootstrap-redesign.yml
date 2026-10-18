@@ -1,0 +1,33 @@
+name: One-time redesign bootstrap
+
+on:
+  push:
+    branches: [redesign-endcredits]
+    paths: [".bootstrap/**"]
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: redesign-endcredits
+
+      - name: Restore binary assets and remove the old Next.js app
+        run: |
+          set -euo pipefail
+          for f in $(cd .bootstrap && find . -name '*.b64'); do
+            target="${f#./}"; target="${target%.b64}"
+            mkdir -p "$(dirname "$target")"
+            base64 -d ".bootstrap/$f" > "$target"
+            git add -- "$target"
+          done
+          git rm -r -q --ignore-unmatch -- .bootstrap app components lib next.config.ts next-env.d.ts package.json package-lock.json postcss.config.mjs tsconfig.json tsconfig.tsbuildinfo public/briefing.json public/sw.js scripts/derive_briefing.mjs out_stage
+          git config user.name "iliya-bashrc"
+          git config user.email "iliya-bashrc@users.noreply.github.com"
+          git commit -m "Restore fonts and og image, remove the Next.js app and out_stage export"
+          git push origin HEAD:redesign-endcredits

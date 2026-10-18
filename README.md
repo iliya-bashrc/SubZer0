@@ -42,7 +42,7 @@ byte the pipeline verified — SHA-256 checked in your browser before render.
 ## What is this?
 
 SubZer0 cuts through CVE noise. Instead of dumping 250,000 advisories at you,
-it serves a rolling **30-day window** (~16,000 records) enriched with the
+it serves a rolling **30-day window** (~17,000 records) enriched with the
 signals that actually matter:
 
 | Signal | Source | Why it matters |
@@ -58,13 +58,14 @@ of CVEs that genuinely deserve your attention today.
 
 ## ⚡ Features
 
-- **🔎 Instant search** — debounced full-text over IDs, titles, vendors and products (`Ctrl/⌘+K` from anywhere)
-- **🎚️ Precision filters** — severity, CISA KEV, EPSS threshold, public-PoC, publication date range + presets
-- **🗂️ Dossier per CVE** — description, CVSS breakdown, EPSS percentile, exploit intel, affected products, references, related CVEs. Deep-linkable: `/cve/CVE-2026-XXXX-YYYY/`
-- **📟 Terminal tab** — a SubZer0 shell with `./info`, `./help`, `./clear` and channel shortcuts
-- **📱 Mobile-first** — bottom tab bar, swipeable destinations, virtualized card list (16k+ rows, ~35 DOM nodes)
-- **📶 Offline-capable** — service worker caches the shell and snapshot; the last verified data survives a dead connection
-- **🎨 Dark terminal aesthetic** — OKLCH color system, severity-calibrated palette, reduced-motion aware
+- **Briefing** — what got published in the last 30 days, a patch queue sorted by real-world risk, and a live feed that refreshes by itself when a new snapshot lands
+- **Research** — search with a small query language: `kev:yes`, `poc:yes`, `epss>50`, `cvss>=9`, `sev:critical`, `vendor:fortinet`, `after:2026-10-01`, `is:watched`, `-wordpress`, `"exact phrase"`. Export what you see as CSV or JSON, or copy a link to the exact view
+- **My stack & watchlist** — tell it what you run and it pins those CVEs for you. Star CVEs to watch them. Both stay in your browser, nothing is sent anywhere
+- **Dossier per CVE** — description, CVSS vector, CWE, EPSS with its trend over time (live from FIRST), KEV due date, affected products, references. Every CVE has its own link: `/SubZer0/cve/CVE-2026-12345`
+- **Terminal** — a real-feeling shell: `cve <id>`, `search kev:yes`, `watch`, `stack add nginx`, `export`, tab completion, history
+- **Feeds** — RSS of "patch now" CVEs at [`/feed.xml`](https://iliya-bashrc.github.io/SubZer0/feed.xml) and a small JSON summary at [`/api/latest.json`](https://iliya-bashrc.github.io/SubZer0/api/latest.json)
+- **Telegram alerts** — after each refresh, CVEs that just became "patch now" can be posted to a channel (set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` repo secrets; without them the step does nothing)
+- **Works offline** — a service worker keeps the app shell and the last verified snapshot
 
 ## 🔐 Integrity model (the core idea)
 
@@ -100,18 +101,18 @@ atomically; a failed run never corrupts the live site.
 
 ## 🧱 Stack
 
-- **Next.js 15** (App Router, static export) · **React 19**
-- **Tailwind CSS v4** · **Swiper 11** · **TanStack Virtual** · **Framer Motion**
+- Plain HTML, CSS and JavaScript. No framework, no build step, no npm. Fonts are self-hosted
+- Strict Content-Security-Policy: scripts only from the site itself, the only outside call is the FIRST EPSS API
 - Python 3 pipeline (stdlib-only networking, hash-pinned CI dependencies)
+- GitHub Actions for the schedule, GitHub Pages for hosting
 
 ## 🚀 Run locally
 
 ```bash
 git clone https://github.com/iliya-bashrc/SubZer0.git
 cd SubZer0
-npm install
-npm run dev        # http://localhost:3000
-npm run build      # static export → ./out (basePath /SubZer0)
+python scripts/build_site.py --out _site/SubZer0     # shell + snapshot + feeds
+python -m http.server -d _site 8000                  # http://localhost:8000/SubZer0/
 ```
 
 Regenerate the data snapshot (optional, ~10 min):
@@ -119,27 +120,21 @@ Regenerate the data snapshot (optional, ~10 min):
 ```bash
 python scripts/update_data.py --output-dir snapshot          # full refresh
 python scripts/verify_data_snapshot.py --root snapshot       # validate
-python -m unittest discover -s tests                         # 39 tests
+python -m unittest discover -s tests                         # tests
 ```
 
 ## 📁 Repository map
 
 ```
-├── app/                    # routes (/, /cve/[id], 404)
-├── components/
-│   ├── shell/              # AppShell, footer, service-worker registrar
-│   ├── tabs/               # Briefing · Research · Dossier · Terminal
-│   ├── research/           # SearchBar, FilterRail, ResultsTable, DossierPanel
-│   ├── briefing/           # hero strip, activity chart, stats
-│   ├── dossier/            # shared dossier content + related CVEs
-│   └── terminal/           # terminal emulator
-├── lib/                    # snapshot loader (SHA-256 verify), search, hotkeys
+├── site/                   # the app: index.html, app.js, app.css, sw.js, fonts/
+├── public/snapshot/        # published data (manifest + day shards + index artifacts)
 ├── scripts/
 │   ├── update_data.py          # 5-source ingestion + validation pipeline
 │   ├── verify_data_snapshot.py # offline integrity validator
-│   └── migrate_legacy_snapshot.py
-├── public/snapshot/        # published data (manifest + shards + index artifacts)
-├── tests/                  # 39 pipeline/integrity/workflow-security tests
+│   ├── build_site.py           # assembles _site/ for Pages, writes feed.xml + api/latest.json
+│   ├── notify_telegram.py      # posts newly urgent CVEs after a refresh
+│   └── verify_pages.py         # checks the live site serves the exact files
+├── tests/                  # pipeline, integrity, site and workflow-security tests
 └── .github/workflows/      # checks.yml · update-snapshot.yml · deploy.yml
 ```
 

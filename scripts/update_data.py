@@ -721,6 +721,35 @@ def _cvss(cve: dict[str, Any]) -> float | None:
     return None
 
 
+CVSS_VECTOR_RE = re.compile(r"^(?:CVSS:[234]\.[01]/)?[A-Za-z]{1,3}:[A-Za-z0-9]{1,3}(?:/[A-Za-z]{1,3}:[A-Za-z0-9]{1,3}){2,40}$")
+CWE_RE = re.compile(r"^CWE-\d{1,5}$")
+
+
+def _cvss_vector(cve: dict[str, Any]) -> str | None:
+    """Return the vector string that belongs to the score chosen by _cvss, if it is well formed."""
+    metrics = cve.get("metrics") or {}
+    for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        values = metrics.get(key) or []
+        if values:
+            vector = (values[0].get("cvssData") or {}).get("vectorString")
+            if isinstance(vector, str) and len(vector) <= 200 and CVSS_VECTOR_RE.fullmatch(vector.strip()):
+                return vector.strip()
+            return None
+    return None
+
+
+def _cwes(cve: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    for weakness in cve.get("weaknesses") or []:
+        if not isinstance(weakness, dict):
+            continue
+        for item in weakness.get("description") or []:
+            value = str((item or {}).get("value", "")).strip() if isinstance(item, dict) else ""
+            if CWE_RE.fullmatch(value) and value not in found:
+                found.append(value)
+    return found[:5]
+
+
 def _version_range(match: dict[str, Any], version: str) -> str:
     parts: list[str] = []
     if version and version not in {"*", "-", "\u002d"}:
@@ -856,6 +885,12 @@ def build_records(
             "date_basis": "CVE publication",
             "primary_url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
         })
+        vector = _cvss_vector(cve)
+        if vector:
+            record["cvss_vector"] = vector
+        cwes = _cwes(cve)
+        if cwes:
+            record["cwe"] = cwes
         _add_source(record, "NVD")
         add_ref(record, "NVD record", f"https://nvd.nist.gov/vuln/detail/{cve_id}", "NVD")
         add_ref(record, "CVE Program record", f"https://www.cve.org/CVERecord?id={cve_id}", "CVE Program")

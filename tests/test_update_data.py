@@ -128,6 +128,18 @@ class NormalizationTests(unittest.TestCase):
         with self.assertRaises(feed.FeedError):
             feed.build_records([], [bad], [], datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 30, tzinfo=timezone.utc))
 
+    def test_cvss_vector_and_cwe_are_validated_before_publishing(self):
+        good = {"metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}}]}}
+        self.assertEqual(feed._cvss_vector(good), "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+        hostile = {"metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "vectorString": "<script>alert(1)</script>"}}]}}
+        self.assertIsNone(feed._cvss_vector(hostile))
+        self.assertIsNone(feed._cvss_vector({"metrics": {}}))
+        weak = {"weaknesses": [
+            {"description": [{"lang": "en", "value": "CWE-79"}, {"lang": "en", "value": "NVD-CWE-Other"}]},
+            {"description": [{"lang": "en", "value": "CWE-79"}, {"lang": "en", "value": "CWE-22<b>"}, "junk"]},
+        ]}
+        self.assertEqual(feed._cwes(weak), ["CWE-79"])
+
     def test_sources_merge_once_and_preserve_cvss_kev_and_attribution(self):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         end = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)

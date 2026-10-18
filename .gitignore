@@ -1,7 +1,5 @@
-node_modules/
-.next/
-out/
 *.log
 .env*
 __pycache__/
 *.pyc
+_site/
