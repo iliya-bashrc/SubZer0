@@ -153,8 +153,8 @@ export function Research() {
   if (error) {
     return (
       <div className="flex h-full items-center justify-center p-6" style={{ touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
-        <div className="card max-w-md p-6 text-center" role="alert">
-          <div className="font-mono text-[13px] text-critical">snapshot integrity failure</div>
+        <div className="max-w-md text-center" role="alert">
+          <div className="cine-chip" style={{ background: 'var(--color-critical)', color: '#0B0B0E' }}>INTEGRITY FAILURE</div>
           <p className="mt-2 text-[12px] leading-relaxed text-ink-2">{error}</p>
         </div>
       </div>
@@ -164,8 +164,8 @@ export function Research() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center p-6" style={{ touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
-        <div className="card px-8 py-6 text-center" role="status" aria-live="polite">
-          <div className="font-mono text-[13px] text-accent">verifying snapshot…</div>
+        <div className="px-8 py-6 text-center" role="status" aria-live="polite">
+          <div className="cine-label">VERIFYING SNAPSHOT…</div>
           <div className="mt-1 text-[12px] text-ink-3">
             SHA-256 checking manifest, index and shards before display.
           </div>

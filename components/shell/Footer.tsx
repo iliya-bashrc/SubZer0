@@ -34,7 +34,7 @@ export function Footer({ lastSync }: FooterProps) {
   const fresh = lastSync ? isFresh(lastSync) : false;
 
   return (
-    <footer className="border-t border-line-soft bg-transparent px-4 py-6 md:px-8">
+    <footer className="cine-rule bg-transparent px-4 py-6 md:px-8">
       <div className="mx-auto max-w-6xl">
         {/* Desktop: 3-column grid · Mobile: stacked, centered */}
         <div className="hidden gap-6 md:grid md:grid-cols-3 md:items-start">

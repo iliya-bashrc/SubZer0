@@ -56,8 +56,8 @@ export function Briefing() {
   if (failed) {
     return (
       <div className="flex h-full items-center justify-center p-6">
-        <div className="card max-w-md p-6 text-center" role="alert">
-          <div className="text-[13px] font-medium text-ink">Briefing data unavailable</div>
+        <div className="max-w-md text-center" role="alert">
+          <div className="cine-chip" style={{ background: 'var(--color-critical)', color: '#0B0B0E' }}>DATA UNAVAILABLE</div>
           <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
             The derived briefing file could not be loaded. It is regenerated from the verified
             snapshot on every build.
@@ -87,8 +87,8 @@ export function Briefing() {
   return (
     <div className="mx-auto h-full max-w-[1200px] space-y-4 overflow-y-auto overscroll-contain px-4 py-6 pb-[calc(1.5rem+2.5rem)] sm:px-6" style={{ touchAction: 'pan-y' }}>
       {stale && (
-        <div className="card flex items-start gap-3 border-amber-500/30 bg-amber-500/5 p-3.5" role="status">
-          <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+        <div className="flex items-start gap-3 border-y border-line-soft py-3" role="status">
+          <span className="cine-chip shrink-0 px-2 py-0.5 text-[9px]" style={{ background: 'var(--color-high)', color: '#0B0B0E' }}>STALE</span>
           <p className="text-[12.5px] leading-relaxed text-ink-2">{staleBannerCopy(data.generated_at)}</p>
         </div>
       )}
