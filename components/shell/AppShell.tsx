@@ -56,7 +56,7 @@ export function AppShell() {
       <nav
         aria-label="Destinations"
         className="relative z-20 hidden h-14 items-center gap-1 border-b border-line
-                   bg-[oklch(0.14_0.005_240/0.8)] px-4 backdrop-blur-[20px] sm:flex"
+                   bg-[#05070Ccc] px-4 backdrop-blur-[20px] sm:flex"
       >
         <span className="mr-3 flex items-center gap-2">
           <SubZeroMark size={20} />

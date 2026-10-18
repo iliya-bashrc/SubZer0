@@ -14,19 +14,21 @@
   --font-display: var(--font-inter-tight), var(--font-inter), "Inter", sans-serif;
   --font-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
 
-  /* surfaces — true dark, near-neutral, single hue family 240 */
-  --color-bg:          oklch(0.14 0.005 240);
-  --color-bg-raised:   oklch(0.17 0.006 240);
-  --color-bg-hover:    oklch(0.20 0.008 240);
-  --color-bg-elevated: oklch(0.17 0.006 240);
-  --color-surface:     oklch(0.20 0.008 240);
-  --color-line:        oklch(0.26 0.008 240);
-  --color-line-hi:     oklch(0.32 0.010 240);
-  --color-line-soft:   oklch(0.26 0.008 240 / 0.5);
+  /* surfaces — cinematic blue-black family (matched to #05070C title-card
+     ground): every surface sits in the same cold hue with a whisper of
+     saturation so light layers composite naturally. */
+  --color-bg:          #05070C;
+  --color-bg-raised:   #0A0D14;
+  --color-bg-hover:    #10141D;
+  --color-bg-elevated: #0A0D14;
+  --color-surface:     #10141D;
+  --color-line:        #1C2330;
+  --color-line-hi:     #262E3E;
+  --color-line-soft:   #1C233080;
 
-  --color-ink:         oklch(0.96 0.003 240);
-  --color-ink-2:       oklch(0.68 0.008 240);
-  --color-ink-3:       oklch(0.46 0.008 240);
+  --color-ink:         #F4F6F7;
+  --color-ink-2:       #9AA5AE;
+  --color-ink-3:       #5C6873;
 
   --color-accent:      oklch(0.78 0.13 230);
   --color-accent-soft: oklch(0.78 0.13 230 / 0.12);
@@ -232,7 +234,7 @@ h1, h2, h3, .font-display {
 /* ---------- mobile bottom tab bar (kept, restyled) ---------- */
 .bottom-tabbar {
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  background: oklch(0.14 0.005 240 / 0.72);
+  background: #05070Cb8;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid var(--color-line-soft);
