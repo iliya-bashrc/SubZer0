@@ -62,7 +62,7 @@ export function AppShell() {
           <SubZeroMark size={20} />
           <span className="font-display text-[15px] font-semibold tracking-[-0.02em] text-ink">SubZer0</span>
           <span className="cine-chip ml-1 hidden px-1.5 py-0.5 text-[9px] md:inline-block" style={{ background: 'var(--color-cine-teal-deep)', color: 'var(--color-ink)' }}>
-            CVE INTELLIGENCE
+            CVE RADAR
           </span>
         </span>
         {TABS.map((t, i) => (
