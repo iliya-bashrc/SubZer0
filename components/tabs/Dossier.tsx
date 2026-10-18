@@ -179,56 +179,62 @@ export function Dossier() {
 
   if (!cveId) {
     return (
-      <div className="h-full overflow-y-auto overscroll-contain" style={{ touchAction: 'pan-y' }}>
-        <div className="mx-auto max-w-md space-y-5 px-4 py-10">
-          <div className="card p-6">
-            <div className="font-mono text-[13px]" style={{ color: 'var(--color-accent)' }}>Dossier lookup</div>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const data = new FormData(event.currentTarget);
-                const value = String(data.get('cve') || '').trim().toUpperCase();
-                if (CVE_ID_RE.test(value)) openCve(value);
-              }}
-              className="mt-4"
+      <div className="h-full overflow-y-auto overscroll-contain bg-[#05070C]" style={{ touchAction: 'pan-y' }}>
+        {/* Cinematic title-card staging for the Dossier lobby — same language
+            as the approved CVE hero: tracked label → oversized statement →
+            hairline → data. No cards; the void is deliberate negative space. */}
+        <div className="mx-auto max-w-3xl px-6 pb-16 pt-20 sm:px-10 lg:pt-28">
+          <p className="cine-label">DOSSIER — VERIFIED LOOKUP</p>
+          <h2 className="mt-4 font-display text-[clamp(2.2rem,6vw,4rem)] font-semibold leading-[1.02] tracking-[-0.04em] text-ink">
+            Open a dossier.
+          </h2>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const data = new FormData(event.currentTarget);
+              const value = String(data.get('cve') || '').trim().toUpperCase();
+              if (CVE_ID_RE.test(value)) openCve(value);
+            }}
+            className="mt-8 flex flex-col gap-3 sm:flex-row"
+          >
+            <input
+              name="cve"
+              required
+              title="CVE-YYYY-NNNN+ (digits only after the year)"
+              placeholder="CVE-2026-97471"
+              aria-label="CVE ID"
+              spellCheck={false}
+              autoCapitalize="characters"
+              className="w-full flex-1 border-0 border-b border-ink/25 bg-transparent px-0 py-3 font-mono text-[16px] tracking-[0.04em] text-ink
+                         placeholder:text-ink-3 focus:border-accent focus:outline-none sm:text-[18px]"
+            />
+            <button
+              type="submit"
+              className="cine-chip shrink-0 self-start px-6 py-3 transition-opacity hover:opacity-90 sm:self-end"
+              style={{ backgroundColor: 'var(--color-cine-teal-deep)', color: 'var(--color-ink)' }}
             >
-              <input
-                name="cve"
-                required
-                title="CVE-YYYY-NNNN+ (digits only after the year)"
-                placeholder="CVE-2026-97471"
-                aria-label="CVE ID"
-                spellCheck={false}
-                autoCapitalize="characters"
-                className="w-full rounded-lg border border-line bg-bg-raised px-4 py-3 font-mono text-[14px] text-ink
-                           placeholder:text-ink-3 focus:border-accent focus:outline-none"
-              />
-              <button
-                type="submit"
-                className="mt-3 w-full rounded-lg px-4 py-2.5 text-[13px] font-medium text-bg
-                           transition-opacity hover:opacity-90"
-                style={{ backgroundColor: 'var(--color-accent)' }}
-              >
-                Open dossier
-              </button>
-            </form>
-            <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
-              Every record is SHA-256 verified before display.
-            </p>
-          </div>
+              OPEN DOSSIER
+            </button>
+          </form>
+          <p className="mt-4 font-mono text-[11px] tracking-[0.08em] text-ink-3">
+            Every record is SHA-256 verified before display.
+          </p>
 
           {recent.length > 0 && (
-            <div className="card p-6">
-              <div className="font-mono text-[11px] uppercase tracking-wide text-ink-3">Newest in window</div>
-              <ul className="mt-3 space-y-1">
+            <div className="mt-14">
+              <div className="cine-rule flex items-baseline justify-between gap-4 pb-3 pt-6">
+                <h3 className="cine-label">NEWEST IN WINDOW</h3>
+                <span className="font-mono text-[11px] text-ink-3">{recent.length}</span>
+              </div>
+              <ul>
                 {recent.map((item) => (
                   <li key={item.id}>
                     <button
                       onClick={() => openCve(item.id)}
-                      className="flex w-full items-baseline justify-between gap-3 rounded-md px-2 py-2 text-left
-                                 transition-colors hover:bg-bg-hover"
+                      className="flex w-full items-baseline justify-between gap-3 border-b border-line-soft px-0 py-3 text-left
+                                 transition-colors hover:bg-bg-hover/60"
                     >
-                      <span className="truncate font-mono text-[12px] text-accent">{item.id}</span>
+                      <span className="truncate font-mono text-[13px] text-accent">{item.id}</span>
                       <span className="shrink-0 font-mono text-[11px] text-ink-3">{item.publishedDate}</span>
                     </button>
                   </li>
