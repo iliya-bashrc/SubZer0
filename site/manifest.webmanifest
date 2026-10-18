@@ -1,0 +1,11 @@
+{
+  "name": "SubZer0 · CVE briefing",
+  "short_name": "SubZer0",
+  "description": "Every CVE from the last 30 days, ranked by what to patch first.",
+  "start_url": "/SubZer0/",
+  "scope": "/SubZer0/",
+  "display": "standalone",
+  "background_color": "#0D1114",
+  "theme_color": "#0D1114",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

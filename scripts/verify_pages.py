@@ -21,15 +21,12 @@ FETCH_TIMEOUT_SECONDS = 30
 MAX_SITE_ASSET_BYTES = 4 * 1024 * 1024
 SITE_ASSETS = (
     "index.html",
+    "404.html",
     "app.js",
-    "engine.js",
+    "app.css",
     "sw.js",
-    "community.js",
-    "rebuild.css",
-    "community.css",
-    "assets/telegram-mark.svg",
-    "assets/telegram-bugcod3.svg",
-    "assets/telegram-rootaccessclub.svg",
+    "manifest.webmanifest",
+    "icon.svg",
 )
 
 

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<base href="/SubZer0/">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://api.first.org; base-uri 'self'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<title>SubZer0 · CVE briefing</title>
+<meta name="description" content="SubZer0 tracks every CVE from the last 30 days, with CISA KEV, EPSS and public exploits, and tells you what to patch first. Updated every 6 hours.">
+<meta name="theme-color" content="#0D1114">
+<meta property="og:type" content="website">
+<meta property="og:title" content="SubZer0 · CVE briefing">
+<meta property="og:description" content="Every CVE from the last 30 days, ranked by what you should patch first.">
+<meta property="og:url" content="https://iliya-bashrc.github.io/SubZer0/">
+<meta property="og:image" content="https://iliya-bashrc.github.io/SubZer0/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="alternate" type="application/rss+xml" title="SubZer0 · Patch now" href="feed.xml">
+<link rel="preload" href="fonts/ChakraPetch-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="grain"></div>
+<div class="app">
+  <header class="top">
+    <div class="brand"><span class="bar"></span>SUBZER<b>0</b></div>
+    <nav class="tabs" id="tabs" aria-label="Destinations"></nav>
+    <button class="search-trigger" id="searchBtn" aria-label="Search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <span>Search CVE, vendor, product…</span><kbd>Ctrl K</kbd>
+    </button>
+    <div class="live"><span class="dot"></span>LIVE <small id="nextSync"></small></div>
+  </header>
+  <div class="viewport" id="vp"><div class="track" id="track">
+    <section class="panel" id="p0" aria-label="Briefing"></section>
+    <section class="panel" id="p1" aria-label="Research"></section>
+    <section class="panel" id="p2" aria-label="Dossier"></section>
+    <section class="panel" id="p3" aria-label="Terminal"></section>
+  </div></div>
+  <nav class="bottom-nav" id="bnav" aria-label="Destinations"></nav>
+</div>
+<div class="sheet-back" id="back"></div>
+<aside class="sheet" id="sheet" role="dialog" aria-label="Dossier"></aside>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<noscript><div style="padding:40px;font-family:sans-serif;color:#ddd">SubZer0 needs JavaScript to verify and show the data. The raw snapshot is at <a href="snapshot/manifest.json" style="color:#9cf">snapshot/manifest.json</a>.</div></noscript>
+</body>
+</html>
