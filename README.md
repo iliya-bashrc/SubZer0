@@ -6,10 +6,10 @@
 
 <br>
 
-[![Live](https://img.shields.io/badge/live-iliya--bashrc.github.io%2FSubZer0-7dd3fc?style=for-the-badge&labelColor=0b0f14)](https://iliya-bashrc.github.io/SubZer0/)
+[![Live](https://img.shields.io/badge/%E2%97%8F-live-7dd3fc?style=for-the-badge&labelColor=0b0f14)](https://iliya-bashrc.github.io/SubZer0/)
 [![Checks](https://img.shields.io/github/actions/workflow/status/iliya-bashrc/SubZer0/checks.yml?branch=main&label=checks&style=for-the-badge&labelColor=0b0f14)](https://github.com/iliya-bashrc/SubZer0/actions/workflows/checks.yml)
 [![Refresh](https://img.shields.io/badge/refresh-every%206h-f59e0b?style=for-the-badge&labelColor=0b0f14)](https://github.com/iliya-bashrc/SubZer0/actions/workflows/update-snapshot.yml)
-[![Integrity](https://img.shields.io/badge/sha--256-fail%20closed-22c55e?style=for-the-badge&labelColor=0b0f14)](#-trust-nothing-verify-every-byte)
+[![Integrity](https://img.shields.io/badge/sha--256-verified-22c55e?style=for-the-badge&labelColor=0b0f14)](#-trust-nothing-verify-every-byte)
 [![License](https://img.shields.io/badge/license-proprietary-ef4444?style=for-the-badge&labelColor=0b0f14)](LICENSE)
 
 **[Open the radar](https://iliya-bashrc.github.io/SubZer0/)** ·
@@ -230,7 +230,13 @@ python -m unittest discover -s tests                         # tests
 
 <div dir="rtl">
 
-**SubZer0** یک رادار CVE است که هر ۶ ساعت خودش آپدیت می‌شود. همه‌ی آسیب‌پذیری‌های ۳۰ روز اخیر (حدود ۱۷ هزار مورد) را از NVD، GitHub Advisory، CISA KEV، EPSS و Exploit-DB جمع می‌کند، اطلاعات اکسپلویت (PoC در گیت‌هاب، ماژول Metasploit، قالب Nuclei، SSVC و بحث‌های شبکه‌های اجتماعی) را رویش می‌گذارد و در نهایت یک لیست کوتاه و قابل‌توضیح می‌دهد: **اول چه چیزی را پچ کنی**.
+**SubZer0** یک رادار CVE است که هر ۶ ساعت خودش آپدیت می‌شود.
+
+همه‌ی آسیب‌پذیری‌های ۳۰ روز اخیر (حدود ۱۷ هزار مورد) را از پنج منبع اصلی جمع می‌کند: NVD، GitHub Advisory، CISA KEV، EPSS و Exploit-DB.
+
+بعد اطلاعات اکسپلویت را رویش می‌گذارد: PoC در گیت‌هاب، ماژول Metasploit، قالب Nuclei، تصمیم SSVC و میزان بحث در شبکه‌های اجتماعی.
+
+خروجی: یک لیست کوتاه و قابل‌توضیح — **اول چه چیزی را پچ کنی**.
 
 - **بدون سرور** — فقط GitHub Pages و GitHub Actions
 - **اولویت‌بندی شفاف** — P1 تا P4 با قوانین ساده و قابل خواندن
