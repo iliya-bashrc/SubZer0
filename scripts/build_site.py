@@ -18,6 +18,7 @@ from email.utils import format_datetime
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import seo_pages as seo
 import verify_data_snapshot as verifier
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,14 +151,65 @@ def build(site: Path, snapshot: Path, out: Path) -> None:
         shutil.rmtree(out)
     shutil.copytree(site, out)
     shutil.copytree(snapshot, out / "snapshot")
-    shutil.copyfile(out / "index.html", out / "404.html")
+    shell = (out / "index.html").read_text(encoding="utf-8")
+    (out / "404.html").write_text(seo.render(shell, site_url=SITE_URL, path="", title="Not found · SubZer0",
+                                             desc="This page is not in the SubZer0 snapshot.", robots="noindex"), encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")
     manifest, rows, ctx = load_index(snapshot)
     summary = summarize(manifest, rows, ctx)
     (out / "api").mkdir(exist_ok=True)
     (out / "api" / "latest.json").write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (out / "feed.xml").write_text(rss(summary), encoding="utf-8")
-    print(f"Built {out}: {len(rows)} CVEs, {len(summary['patch_now'])} in the patch-now feed")
+    pages = write_seo(out, shell, snapshot, manifest, rows, ctx, summary)
+    print(f"Built {out}: {len(rows)} CVEs, {len(summary['patch_now'])} in the patch-now feed, {pages} static CVE pages")
+
+
+def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[list], ctx: dict, summary: dict) -> int:
+    """Crawlable pages: home/tab routes with real titles, one HTML page per CVE, and sitemap.xml."""
+    by_id = {r[0]: r for r in rows}
+    known = set(by_id)
+    totals = manifest.get("totals") or {}
+    n = totals.get("cves") or len(rows)
+    patch = [(i["id"], f"P1 · {i['why']}", i["title"]) for i in summary["patch_now"]]
+    latest = sorted(rows, key=lambda r: str(r[6] or ""), reverse=True)[: seo.LATEST_LINKS]
+    latest_items = [(r[0], seo.SEV_LABEL.get(r[2] or "unknown", ""), r[1]) for r in latest]
+    home_desc = (f"Free CVE tracker: {n:,} CVEs from the last 30 days, {totals.get('known_exploited', 0)} on CISA KEV, "
+                 "ranked by what to patch first with EPSS and public exploits. Updated every 6 hours.")
+    intro = (f'<article class="seo wrap"><h1 class="credit-name">SubZer0 · CVE briefing</h1><p class="seo-lede">{seo.esc(home_desc)}</p>'
+             + seo.link_list("Patch now", patch) + "</article>")
+    (out / "index.html").write_text(seo.render(shell, site_url=SITE_URL, path="", title="SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)",
+                                               desc=home_desc, ld=seo.home_ld(SITE_URL, manifest), panel=("p0", intro)), encoding="utf-8")
+    tabs = {
+        "research": ("Research every CVE from the last 30 days · SubZer0", f"Search and filter {n:,} recent CVEs by severity, CVSS, EPSS, CISA KEV, public exploit and vendor.",
+                     ("p0", '<article class="seo wrap"><h1 class="credit-name">Latest CVEs</h1>' + seo.link_list("Newest", latest_items) + "</article>")),
+        "dossier": ("CVE dossier · SubZer0", "Full dossier for a CVE: CVSS, EPSS trend, CISA KEV status, public exploits, affected products and references.", None),
+        "terminal": ("CVE terminal · SubZer0", "Query recent CVEs from a terminal: kev:yes, epss>50, sev:critical and more.", None),
+        "about": ("About SubZer0", "How SubZer0 collects, verifies and ranks CVEs from NVD, GitHub, CISA KEV, FIRST EPSS, Exploit-DB, Metasploit and Nuclei.", None),
+    }
+    for slug, (title, desc, panel) in tabs.items():
+        (out / f"{slug}.html").write_text(seo.render(shell, site_url=SITE_URL, path=slug, title=title, desc=desc, panel=panel), encoding="utf-8")
+    cve_dir = out / "cve"
+    cve_dir.mkdir(exist_ok=True)
+    entries: list[tuple[str, str | None]] = [("", manifest.get("generated_at")), ("research", manifest.get("generated_at")), ("about", None)]
+    count = 0
+    for day in manifest.get("days") or []:
+        records = _read_verified(snapshot, day)
+        for rec in records if isinstance(records, list) else []:
+            cid = rec.get("id") if isinstance(rec, dict) else None
+            if not cid or not seo.CVE_RE.match(cid) or (cve_dir / f"{cid}.html").exists():
+                continue
+            row = by_id.get(cid)
+            fx = facts(row, ctx) if row else None
+            prio = priority_reason(row, ctx) if row else None
+            title, desc = seo.cve_meta(rec, row, prio, fx)
+            doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
+                             ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known)))
+            (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
+            entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
+            count += 1
+    (out / "sitemap.xml").write_text(seo.sitemap(SITE_URL, entries), encoding="utf-8")
+    (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}sitemap.xml\n", encoding="utf-8")
+    return count
 
 
 def main() -> None:
