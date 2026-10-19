@@ -99,7 +99,7 @@ function renderNav(){
   if(a&&ind){ind.style.width=a.offsetWidth-28+'px';ind.style.transform=`translateX(${a.offsetLeft+14}px)`}
 }
 function routeURL(){let p=SLUG[cur];if(cur===1){const u=new URLSearchParams();if(F.q)u.set('q',F.q);if(F.view!=='all')u.set('view',F.view);const q=u.toString();if(q)p+='?'+q}return new URL(p,BASE).href}
-function go(i){cur=Math.max(0,Math.min(3,i));track.style.transform=`translateX(${-cur*25}%)`;renderNav();if(typeof sheetOpen!=='undefined'&&!sheetOpen&&rows.length)history.replaceState(null,'',routeURL());document.title=(cur?TABS[cur]+' · ':'')+'SubZer0'}
+function go(i){cur=Math.max(0,Math.min(3,i));track.style.transform=`translateX(${-cur*25}%)`;renderNav();if(typeof sheetOpen!=='undefined'&&!sheetOpen&&rows.length)history.replaceState(null,'',routeURL());document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)'}
 /* Swipe between tabs: touch, pen and mouse drag; trackpad horizontal scroll; arrow keys. */
 const NO_DRAG='input,textarea,select,[contenteditable],.term-wrap,pre,p,.desc,.lead,.code,dd,.t-title,.why,.kw,.r-search,.views,.filters,.stackbar';
 const scrollsX=el=>{for(;el&&el!==track;el=el.parentElement){const cs=getComputedStyle(el);if(/(auto|scroll)/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+1)return true}return false};
@@ -412,7 +412,7 @@ function dossierTab(id){id=id||LS.get('last',null);if(!id||!BYID.has(id)){const 
 /* sheet with swipe-back + history */
 const sheet=document.getElementById('sheet'),back=document.getElementById('back');let sheetOpen=false,lastFocus=null;
 function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
-  LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);document.title=id+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
+  LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);{const t=(BYID.get(id)||{}).t||'';document.title=id+(t?': '+(t.length>70?t.slice(0,69)+'…':t):' · SubZer0')};setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};
 function pageHTML(kind){const close='<button class="d-close" id="closeSheet">← Back · Esc</button>';
   if(kind==='keys')return `<div class="d-hero pg">${close}<span class="chip ice">Shortcuts</span><div class="credit-name" data-fx="id">Keyboard</div></div><div class="d-body"><dl class="keys">
@@ -440,7 +440,7 @@ function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.datas
   if(u){replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u)}else if(!was)history.pushState({sheet:1},'',location.href);
   document.title=PAGES[kind]+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;sheet.classList.remove('on');back.classList.remove('on');sheet.style.transform='';
-  if(fromPop!==true)history.back();setTimeout(()=>{if(!sheetOpen)history.replaceState(null,'',routeURL())},0);document.title=(cur?TABS[cur]+' · ':'')+'SubZer0';if(lastFocus&&lastFocus.focus)lastFocus.focus({preventScroll:true})}
+  if(fromPop!==true)history.back();setTimeout(()=>{if(!sheetOpen)history.replaceState(null,'',routeURL())},0);document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)';if(lastFocus&&lastFocus.focus)lastFocus.focus({preventScroll:true})}
 back.onclick=closeSheet;addEventListener('popstate',e=>{if(sheetOpen)closeSheet(true);else{const R=route();if(R.cve)openSheet(R.cve,true);else if(R.page){if(R.page==='404')NF_PATH=location.pathname.slice(BASE.pathname.length);openPage(R.page,true)}}});
 addEventListener('keydown',e=>{if(e.key==='Escape'&&sheetOpen)closeSheet()});
 (function(){let x0,dx=0,lock=null,y0;sheet.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;x0=e.clientX;y0=e.clientY;dx=0;lock=null});
@@ -591,8 +591,8 @@ function live(){tick();setInterval(tick,1000);document.addEventListener('visibil
 
 /* ---------- boot ---------- */
 function bootError(e){document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:120px"><span class="chip crit">Integrity</span><div class="credit-name" style="font-size:36px;margin:16px 0 10px">Couldn't verify the data</div>SubZer0 won't show anything it can't check. ${esc(e.message)}<br><br><button class="btn primary" id="retry">Try again</button></div></div>`;document.getElementById('retry').onclick=()=>location.reload()}
-function route(){const rel=location.pathname.startsWith(BASE.pathname)?location.pathname.slice(BASE.pathname.length):'';const m=rel.match(/^cve\/(CVE-\d{4}-\d{4,})\/?$/i);
-  const clean=rel.replace(/\/$/,'').replace(/^index\.html$/,''),tab=SLUG.indexOf(clean);
+function route(){const rel=(location.pathname.startsWith(BASE.pathname)?location.pathname.slice(BASE.pathname.length):'').replace(/\.html$/,'');const m=rel.match(/^cve\/(CVE-\d{4}-\d{4,})\/?$/i);
+  const clean=rel.replace(/\/$/,'').replace(/^index$/,''),tab=SLUG.indexOf(clean);
   return {tab:Math.max(0,tab),cve:m?m[1].toUpperCase():null,page:clean==='about'?'about':!m&&tab<0?'404':null}}
 (async()=>{renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
   document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;

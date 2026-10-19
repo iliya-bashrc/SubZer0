@@ -48,12 +48,35 @@ class ShellPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "_site"
             build_site.build(ROOT / "site", ROOT / "public" / "snapshot", out)
-            self.assertEqual((out / "404.html").read_bytes(), (out / "index.html").read_bytes())
+            not_found = (out / "404.html").read_text(encoding="utf-8")
+            self.assertIn('<meta name="robots" content="noindex">', not_found)
+            self.assertIn('src="app.js"', not_found)
             self.assertTrue((out / ".nojekyll").exists())
             self.assertTrue((out / "snapshot" / "manifest.json").is_file())
             latest = json.loads((out / "api" / "latest.json").read_text(encoding="utf-8"))
             self.assertIn("patch_now", latest)
             self.assertTrue((out / "feed.xml").read_text(encoding="utf-8").startswith("<?xml"))
+
+    def test_build_writes_crawlable_pages_and_sitemap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "_site"
+            build_site.build(ROOT / "site", ROOT / "public" / "snapshot", out)
+            home = (out / "index.html").read_text(encoding="utf-8")
+            self.assertIn(f'<link rel="canonical" href="{build_site.SITE_URL}">', home)
+            self.assertIn('"@type":"WebSite"', home)
+            pages = sorted((out / "cve").glob("CVE-*.html"))
+            self.assertTrue(pages)
+            cid = pages[0].stem
+            doc = pages[0].read_text(encoding="utf-8")
+            self.assertIn(f'<link rel="canonical" href="{build_site.SITE_URL}cve/{cid}">', doc)
+            self.assertIn(f"<h1 class=\"credit-name\">{cid}</h1>", doc)
+            self.assertIn('src="app.js"', doc)
+            self.assertNotRegex(doc, r"<script(?![^>]*\b(src=|type=\"application/ld\+json\"))[^>]*>")
+            for slug in ("research", "terminal", "dossier", "about"):
+                self.assertTrue((out / f"{slug}.html").is_file(), slug)
+            sitemap = (out / "sitemap.xml").read_text(encoding="utf-8")
+            self.assertIn(f"<loc>{build_site.SITE_URL}cve/{cid}</loc>", sitemap)
+            self.assertEqual(sitemap.count("<url>"), len(pages) + 3)
 
 
 if __name__ == "__main__":
