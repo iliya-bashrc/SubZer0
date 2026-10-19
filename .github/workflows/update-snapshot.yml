@@ -17,7 +17,7 @@ jobs:
   prepare:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -52,6 +52,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/update_data.py --output-dir snapshot
+
+      - name: Add exploit intel (GitHub PoCs, Metasploit, Nuclei, CISA SSVC, chatter)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/enrich_intel.py --snapshot snapshot --previous public/snapshot --budget-seconds 900
 
       - name: Validate complete, fresh snapshot before publication
         run: python scripts/verify_data_snapshot.py --root snapshot --max-age-hours 36

@@ -14,7 +14,7 @@ import build_site  # noqa: E402
 
 class PriorityMirrorTests(unittest.TestCase):
     def test_python_priority_matches_the_rules_in_app_js(self):
-        poc = {"CVE-2026-0002"}
+        poc = {"poc": {"CVE-2026-0002"}, "intel": {}}
         row = lambda i, score, kev, epss: [i, "t", "high", score, kev, epss, "2026-10-01", "2026-10-01", ""]
         self.assertEqual(build_site.priority(row("CVE-2026-0001", 0, 1, None), poc), 1)
         self.assertEqual(build_site.priority(row("CVE-2026-0002", 5.0, 0, 0.2), poc), 1)
