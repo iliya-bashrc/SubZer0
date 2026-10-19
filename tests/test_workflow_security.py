@@ -103,8 +103,10 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertIn("name: validated-snapshot-${{ github.run_id }}-${{ github.run_attempt }}", self.update)
         self.assertIn("if-no-files-found: error", self.update)
         self.assertIn("retention-days: 1", self.update)
-        self.assertIn("git add -- public/snapshot/", self.update)
-        self.assertIn("Only public/snapshot/ files may be published.", self.update)
+        self.assertIn("git add -- public/snapshot/ public/archive/", self.update)
+        self.assertIn("grep -qvE '^public/(snapshot|archive)/'", self.update)
+        self.assertIn("Only public/snapshot/ and public/archive/ files may be published.", self.update)
+        self.assertIn('python scripts/archive.py --verify "$RUNNER_TEMP/validated-candidate/archive"', self.update)
         self.assertEqual(self.update.count("contents: write"), 1)
 
 

@@ -145,7 +145,7 @@ def rss(summary: dict) -> str:
     )
 
 
-def build(site: Path, snapshot: Path, out: Path) -> None:
+def build(site: Path, snapshot: Path, out: Path, archive: Path | None = None) -> None:
     verifier.validate_snapshot(snapshot)
     if out.exists():
         shutil.rmtree(out)
@@ -160,11 +160,11 @@ def build(site: Path, snapshot: Path, out: Path) -> None:
     (out / "api").mkdir(exist_ok=True)
     (out / "api" / "latest.json").write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (out / "feed.xml").write_text(rss(summary), encoding="utf-8")
-    pages = write_seo(out, shell, snapshot, manifest, rows, ctx, summary)
+    pages = write_seo(out, shell, snapshot, manifest, rows, ctx, summary, archive if archive is not None else ROOT / "public" / "archive")
     print(f"Built {out}: {len(rows)} CVEs, {len(summary['patch_now'])} in the patch-now feed, {pages} static CVE pages")
 
 
-def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[list], ctx: dict, summary: dict) -> int:
+def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[list], ctx: dict, summary: dict, archive: Path) -> int:
     """Crawlable pages: home/tab routes with real titles, one HTML page per CVE, and sitemap.xml."""
     by_id = {r[0]: r for r in rows}
     known = set(by_id)
@@ -207,6 +207,22 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
             (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
             entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
             count += 1
+    import archive as arch  # local module; imported lazily because it imports this file
+    archived = arch.load(archive) if archive.exists() else {}
+    known |= set(archived)
+    for cid, rec in sorted(archived.items()):
+        if (cve_dir / f"{cid}.html").exists() or not seo.CVE_RE.match(cid):
+            continue
+        sig = rec.get("signals") or {}
+        row = [cid, rec.get("title"), rec.get("sev"), rec.get("score"), 1 if rec.get("kev") else 0, sig.get("epss"), None, None, ""]
+        fx = {"c": rec.get("score") or 0, "poc": bool(sig.get("poc")), "weap": bool(sig.get("weap"))}
+        prio = (int(sig["p"]), str(sig.get("why") or "")) if sig.get("p") in (1, 2, 3, 4) else None
+        title, desc = seo.cve_meta(rec, row, prio, fx)
+        doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
+                         ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known, archived_at=rec.get("last_seen"))))
+        (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
+        entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
+        count += 1
     (out / "sitemap.xml").write_text(seo.sitemap(SITE_URL, entries), encoding="utf-8")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}sitemap.xml\n", encoding="utf-8")
     return count

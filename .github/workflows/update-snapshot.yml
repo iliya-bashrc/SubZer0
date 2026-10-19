@@ -64,8 +64,13 @@ jobs:
       - name: Re-run deterministic tests against the newly generated snapshot
         run: python -m unittest discover -s tests -v
 
-      - name: Package the validated candidate snapshot
-        run: cp -a snapshot bundle/snapshot
+      - name: Fold notable CVEs into the permanent archive (pages keep working after the 30-day window)
+        run: python scripts/archive.py --snapshot snapshot --previous public/archive --out archive
+
+      - name: Package the validated candidate snapshot and archive
+        run: |
+          cp -a snapshot bundle/snapshot
+          cp -a archive bundle/archive
 
       - name: Upload the validated candidate for the isolated publication job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -108,17 +113,20 @@ jobs:
           fi
 
       - name: Revalidate the downloaded artifact before promotion
-        run: python scripts/verify_data_snapshot.py --root "$RUNNER_TEMP/validated-candidate/snapshot" --max-age-hours 36
+        run: |
+          python scripts/verify_data_snapshot.py --root "$RUNNER_TEMP/validated-candidate/snapshot" --max-age-hours 36
+          python scripts/archive.py --verify "$RUNNER_TEMP/validated-candidate/archive"
 
       - name: Stage only the independently revalidated snapshot
         id: commit
         run: |
           set -euo pipefail
-          rm -rf -- public/snapshot
+          rm -rf -- public/snapshot public/archive
           cp -a "$RUNNER_TEMP/validated-candidate/snapshot" public/snapshot
-          git add -- public/snapshot/
-          if ! git diff --cached --name-only | grep -qv '^public/snapshot/'; then
-            echo "Only public/snapshot/ files may be published."
+          cp -a "$RUNNER_TEMP/validated-candidate/archive" public/archive
+          git add -- public/snapshot/ public/archive/
+          if ! git diff --cached --name-only | grep -qvE '^public/(snapshot|archive)/'; then
+            echo "Only public/snapshot/ and public/archive/ files may be published."
           else
             echo "Refusing to publish paths outside public/snapshot/."
             exit 1
