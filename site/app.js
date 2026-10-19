@@ -8,12 +8,18 @@ const safeUrl=u=>{try{const x=new URL(u);return x.protocol==='https:'||x.protoco
 const CVE_RE=/^CVE-\d{4}-\d{4,}$/;
 const SEV={critical:['crit','Critical'],high:['high','High'],medium:['med','Medium'],low:['low','Low'],none:['none','Unscored'],unknown:['none','Unscored']};
 const chip=s=>`<span class="chip ${SEV[s][0]}">${SEV[s][1]}</span>`;
-function prio(r){ if(r.k) return [1,'Patch now','On CISA KEV. Attackers are already using it.'];
-  if(r.x&&(r.e||0)>=.1) return [1,'Patch now','Exploit code is public and EPSS is high'];
-  if(r.c>=9||(r.c>=7&&(r.x||(r.e||0)>=.05))) return [2,'This week',r.x?'Exploit code is public':r.c>=9?'Critical score':'EPSS keeps going up'];
+/* Priority rules. Mirrored in scripts/build_site.py (priority_reason) — keep them in sync. */
+function prio(r){const e=r.e||0;
+  if(r.k) return [1,'Patch now','On CISA KEV. Attackers are already using it.'];
+  if(r.v==='active') return [1,'Patch now','CISA has seen it exploited (SSVC: active)'];
+  if(r.w&&(r.c>=7||e>=.1)) return [1,'Patch now',(r.m?'There is a Metasploit module':'There is a Nuclei template')+' for it, so anyone can point and shoot'];
+  if(r.x&&e>=.1) return [1,'Patch now','Exploit code is public and EPSS is high'];
+  if(r.c>=9||(r.c>=7&&(r.x||e>=.05))||r.w||r.au) return [2,'This week',r.w?'Weaponized in '+(r.m?'Metasploit':'Nuclei'):r.x&&r.c>=7?'Exploit code is public':r.c>=9?'Critical score':r.au&&r.c<7?'CISA: automatable with total impact':'EPSS keeps going up'];
   if(r.c>=7) return [3,'Planned','High, but nobody is exploiting it yet'];
   return [4,'Track','Quiet for now'];}
-let D=null,rows=[],BYID=new Map();
+let D=null,rows=[],BYID=new Map(),FRESH=new Set();
+const LADDER=['No exploit seen','Public PoC','Weaponized','Exploited in the wild'];
+const FLAG={fork:'fork of another repo',nodesc:'no description',fresh:'created in the last 7 days',bait:'looks like bait or a scam',known:'owner has posted fake PoCs before',newacct:'brand-new GitHub account'};
 const REC=new Map();let EPSS=null;
 
 /* ---------- verified data layer ---------- */
@@ -24,14 +30,26 @@ async function fetchVerified(path,sha,max=8e6){if(!/^data\/[a-z0-9_.-]+\.json$/i
   return JSON.parse(new TextDecoder().decode(b))}
 async function loadManifest(){const r=await fetch(SNAP+'manifest.json',{cache:'no-store',credentials:'omit'});if(!r.ok)throw new Error('manifest '+r.status);const t=await r.text();if(t.length>2e6)throw new Error('manifest too large');
   const m=JSON.parse(t);if(!m||!Array.isArray(m.days)||!m.search_index||!m.generated_at)throw new Error('manifest has an unexpected shape');return m}
-async function loadAll(m){const [idx,poc]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[]]);return build(m,idx,poc)}
-function build(m,idx,poc){const P=new Set(Array.isArray(poc)?poc:[]);
+async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[],
+    m.intel&&m.intel.path?fetchVerified(m.intel.path,m.intel.sha256,1.5e7).catch(e=>{console.warn('intel skipped:',e.message);return null}):null]);return build(m,idx,poc,intel)}
+const arr=v=>Array.isArray(v)?v:[];
+function intelOf(I){I=I&&typeof I==='object'?I:{};const s=arr(I.s),b=arr(I.b),g=arr(I.g).filter(x=>Array.isArray(x)&&typeof x[0]==='string'),t=I.t&&typeof I.t==='object'?I.t:{};
+  return {g,m:arr(I.m).filter(Array.isArray),n:arr(I.n).filter(Array.isArray),s,b,t,f:I.f===1}}
+function build(m,idx,poc,intel){const P=new Set(Array.isArray(poc)?poc:[]);const IC=intel&&intel.cves&&typeof intel.cves==='object'?intel.cves:{};
   const R=[];for(const t of idx){if(!Array.isArray(t)||!CVE_RE.test(t[0]))continue;const s=SEV[t[2]]?t[2]:'unknown';
     const r={id:t[0],t:String(t[1]||''),s,c:+t[3]||0,k:t[4]?1:0,e:typeof t[5]==='number'?t[5]:null,a:String(t[6]||''),d:String(t[7]||t[6]||''),p:String(t[8]||''),x:P.has(t[0])?1:0};
+    const I=IC[r.id]?intelOf(IC[r.id]):null;r.I=I;
+    if(I){const good=I.g.filter(g=>!arr(g[5]).includes('bait'));r.g=good.length;r.gb=I.g.length-good.length;r.m=I.m.length;r.n=I.n.length;r.w=r.m||r.n?1:0;
+      r.v=I.s[0]||'';r.au=I.s[1]==='yes'&&I.s[2]==='total'?1:0;r.b=+I.b[0]||0;r.f=I.f?1:0;
+      if(!r.c&&typeof I.s[3]==='number'&&I.s[3]>0){r.c=I.s[3];r.ca=1;if(s==='none'||s==='unknown')r.s=r.c>=9?'critical':r.c>=7?'high':r.c>=4?'medium':'low'}
+      if(r.g||r.v==='poc')r.x=1}
+    else{r.g=r.gb=r.m=r.n=r.w=r.au=r.b=r.f=0;r.v=''}
+    r.L=r.k||r.v==='active'?3:r.w?2:r.x?1:0;
     r.T=esc(r.t);r.Pr=esc([...new Set(r.p.toLowerCase().split(/\s+/).filter(Boolean))].join(' '));r._t=(r.id+' '+r.t+' '+r.p).toLowerCase();r.P=prio(r);R.push(r)}
   R.sort((a,b)=>b.d.localeCompare(a.d)||b.id.localeCompare(a.id,undefined,{numeric:true}));
   const src=(m.source_status||[]).map(s=>({n:String(s.name),ok:!!s.ok,v:s.records??s.advisories??s.catalog_records??s.exploit_cves??s.scores??null,at:String(s.checked_at||'')}));
-  return {D:{m,gen:m.generated_at,totals:m.totals,days:m.days.map(d=>({d:d.date,n:d.count,c:d.critical,h:d.high,m:d.medium,l:d.low,x:d.exploited})),sources:src,poc:P.size},rows:R}}
+  const isrc=intel&&Array.isArray(intel.sources)?intel.sources.filter(x=>x&&typeof x.name==='string').map(x=>({n:x.name,ok:!!x.ok,v:+x.count||0,note:String(x.note||'')})):[];
+  return {D:{m,gen:m.generated_at,totals:m.totals,days:m.days.map(d=>({d:d.date,n:d.count,c:d.critical,h:d.high,m:d.medium,l:d.low,x:d.exploited})),sources:src,isrc,intel:!!intel,poc:R.filter(r=>r.x).length},rows:R}}
 function adopt(x){D=x.D;rows=x.rows;BYID=new Map(rows.map(r=>[r.id,r]))}
 async function getRecord(id){if(REC.has(id))return REC.get(id);const r=BYID.get(id);if(!r)throw new Error(id+' is not in this snapshot');
   const day=D.m.days.find(d=>d.date===r.a);if(!day)throw new Error('no shard for '+r.a);const sh=await fetchVerified(day.path,day.sha256,2e7);
@@ -71,24 +89,77 @@ function renderNav(){
 }
 function routeURL(){let p=SLUG[cur];if(cur===1){const u=new URLSearchParams();if(F.q)u.set('q',F.q);if(F.view!=='all')u.set('view',F.view);const q=u.toString();if(q)p+='?'+q}return new URL(p,BASE).href}
 function go(i){cur=Math.max(0,Math.min(3,i));track.style.transform=`translateX(${-cur*25}%)`;renderNav();if(typeof sheetOpen!=='undefined'&&!sheetOpen&&rows.length)history.replaceState(null,'',routeURL());document.title=(cur?TABS[cur]+' · ':'')+'SubZer0'}
-(function swipe(){let x0,y0,dx=0,lock=null;const vp=document.getElementById('vp');
-  vp.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;x0=e.clientX;y0=e.clientY;dx=0;lock=null});
-  vp.addEventListener('pointermove',e=>{if(x0==null)return;const mx=e.clientX-x0,my=e.clientY-y0;
-    if(lock==null&&Math.hypot(mx,my)>8)lock=Math.abs(mx)>Math.abs(my)?'x':'y';
-    if(lock==='x'){dx=mx;track.classList.add('dragging');track.style.transform=`translateX(calc(${-cur*25}% + ${dx/ (cur===0&&dx>0||cur===3&&dx<0?3:1)}px))`}});
-  const end=()=>{if(x0==null)return;track.classList.remove('dragging');if(lock==='x'&&Math.abs(dx)>60)go(cur+(dx<0?1:-1));else go(cur);x0=null};
-  vp.addEventListener('pointerup',end);vp.addEventListener('pointercancel',end);})();
+/* Swipe between tabs: touch, pen and mouse drag; trackpad horizontal scroll; arrow keys. */
+const NO_DRAG='input,textarea,select,[contenteditable],.term-wrap,pre,p,.desc,.lead,.code,dd,.t-title,.why,.kw,.r-search,.views,.filters,.stackbar';
+const scrollsX=el=>{for(;el&&el!==track;el=el.parentElement){const cs=getComputedStyle(el);if(/(auto|scroll)/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+1)return true}return false};
+/* a mouse press right on a word (outside buttons and links) means the user wants to select text, not drag */
+function onText(e){if(e.target.closest('button,a,[data-cve],label'))return false;const r=document.caretRangeFromPoint?document.caretRangeFromPoint(e.clientX,e.clientY):null;
+  const n=r&&r.startContainer;if(!n||n.nodeType!==3||!n.textContent.trim())return false;const g=document.createRange();g.selectNodeContents(n);
+  return [...g.getClientRects()].some(b=>e.clientX>=b.left-2&&e.clientX<=b.right+2&&e.clientY>=b.top-2&&e.clientY<=b.bottom+2)}
+(function swipe(){let x0=null,y0,dx=0,lock=null,mouse=false,moved=false;const vp=document.getElementById('vp');
+  const pull=dx=>`translateX(calc(${-cur*25}% + ${dx/(cur===0&&dx>0||cur===3&&dx<0?3:1)}px))`;
+  vp.addEventListener('pointerdown',e=>{if(sheetOpen||e.button>0)return;mouse=e.pointerType==='mouse';
+    if(mouse&&(e.target.closest(NO_DRAG)||scrollsX(e.target)||onText(e)))return;
+    if(!mouse&&(e.target.closest('input,textarea,select')||scrollsX(e.target)))return;
+    x0=e.clientX;y0=e.clientY;dx=0;lock=null;moved=false});
+  addEventListener('pointermove',e=>{if(x0==null)return;const mx=e.clientX-x0,my=e.clientY-y0;
+    if(lock==null&&Math.hypot(mx,my)>(mouse?12:8)){lock=Math.abs(mx)>Math.abs(my)*1.2?'x':'y';if(lock==='x'&&mouse){document.body.classList.add('grabbing');getSelection().removeAllRanges()}}
+    if(lock==='x'){moved=true;dx=mx;track.classList.add('dragging');track.style.transform=pull(dx)}});
+  const end=()=>{if(x0==null)return;x0=null;document.body.classList.remove('grabbing');track.classList.remove('dragging');
+    if(lock==='x'&&Math.abs(dx)>Math.min(110,innerWidth*.18))go(cur+(dx<0?1:-1));else if(lock==='x')go(cur);
+    if(moved){const kill=ev=>{ev.stopPropagation();ev.preventDefault()};addEventListener('click',kill,{capture:true,once:true});setTimeout(()=>removeEventListener('click',kill,{capture:true}),60)}};
+  addEventListener('pointerup',end);addEventListener('pointercancel',end);
+  let acc=0,quiet=0,cool=0;
+  vp.addEventListener('wheel',e=>{if(sheetOpen||Math.abs(e.deltaX)<=Math.abs(e.deltaY)*1.5||scrollsX(e.target)||e.target.closest('.term-out'))return;
+    e.preventDefault();const now=Date.now();if(now<cool)return;if(now-quiet>250)acc=0;quiet=now;acc+=e.deltaX;
+    if(Math.abs(acc)>140){go(cur+(acc>0?1:-1));acc=0;cool=now+650}},{passive:false});})();
+const typing=t=>t&&t.closest&&t.closest('input,textarea,select,[contenteditable]');
 addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key>='1'&&e.key<='4'){e.preventDefault();go(+e.key-1)}
-  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();go(1);setTimeout(()=>document.getElementById('q').focus(),300)}
-  if(e.key==='Escape')closeSheet()});
-document.getElementById('searchBtn').onclick=()=>{go(1);setTimeout(()=>document.getElementById('q').focus(),300)};
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();focusSearch()}
+  if(e.key==='Escape')closeSheet();
+  if(e.ctrlKey||e.metaKey||e.altKey||typing(e.target))return;
+  if(e.key==='ArrowRight'&&!sheetOpen){e.preventDefault();go(cur+1)}
+  else if(e.key==='ArrowLeft'&&!sheetOpen){e.preventDefault();go(cur-1)}
+  else if(e.key==='?'){e.preventDefault();openPage('keys')}
+  else if(e.key==='/'&&!sheetOpen){e.preventDefault();focusSearch()}
+  else if(!sheetOpen&&e.key>='1'&&e.key<='4'&&!e.repeat)go(+e.key-1)});
+function focusSearch(){if(sheetOpen)closeSheet();go(1);setTimeout(()=>document.getElementById('q')?.focus(),300)}
+document.getElementById('searchBtn').onclick=focusSearch;
+
+/* ---------- text effects: short decode/typing, once per session, off for reduced motion ---------- */
+const FX={reduce:matchMedia('(prefers-reduced-motion: reduce)').matches,
+  once(k){try{const v=JSON.parse(sessionStorage.getItem('sz.fx')||'[]');if(v.includes(k))return false;v.push(k);sessionStorage.setItem('sz.fx',JSON.stringify(v.slice(-400)));return true}catch{return true}}};
+const GLYPH='ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#%$*+=/<>';
+/* decode: characters settle left to right. `start` lets a re-rendered node pick up where the old one was. */
+function decode(el,ms=650,start=performance.now()){if(!el||FX.reduce)return;const fin=el.textContent;if(!fin.trim())return;el.setAttribute('aria-label',fin);
+  const step=t=>{if(!el.isConnected)return;const p=Math.min(1,(t-start)/ms);const n=Math.floor(p*fin.length);
+    el.textContent=fin.slice(0,n)+[...fin.slice(n)].map(c=>c===' '?' ':GLYPH[Math.random()*GLYPH.length|0]).join('');
+    if(p<1)requestAnimationFrame(step);else{el.textContent=fin;el.removeAttribute('aria-label')}};requestAnimationFrame(step)}
+function typeIn(el,ms=700,start=performance.now()){if(!el||FX.reduce)return;const html=el.innerHTML,fin=el.textContent;if(!fin.trim())return;
+  el.classList.add('typing');const step=t=>{if(!el.isConnected)return;const p=Math.min(1,(t-start)/ms);el.textContent=fin.slice(0,Math.ceil(p*fin.length));
+    if(p<1)requestAnimationFrame(step);else{el.innerHTML=html;el.classList.remove('typing')}};requestAnimationFrame(step)}
+const headIO='IntersectionObserver' in window?new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){headIO.unobserve(e.target);if(FX.once('h:'+e.target.textContent))decode(e.target,420)}}),{threshold:.6}):null;
+function watchHeads(root){if(!headIO||FX.reduce)return;root.querySelectorAll('.sec-h h2').forEach(h=>headIO.observe(h))}
 
 /* ---------- briefing ---------- */
 function sinceLast(){let prev=LS.get('seen',null);const ids=rows.map(r=>r.id),kev=rows.filter(r=>r.k).map(r=>r.id);
   if(!prev||prev.gen!==D.gen){if(prev&&typeof prev.ids==='string'){const pi=new Set(prev.ids.split(',')),pk=new Set((prev.kev||'').split(','));LS.set('seen',{gen:D.gen,ids:ids.join(','),kev:kev.join(','),last:{n:ids.filter(i=>!pi.has(i)).length,k:kev.filter(i=>!pk.has(i)).length}})}else LS.set('seen',{gen:D.gen,ids:ids.join(','),kev:kev.join(',')})}
   const cur=LS.get('seen',null);if(!cur||!cur.last)return'';const n=cur.last.n,k=cur.last.k;
   return `<br><span style="color:var(--strip)">since your last visit: ${n} new, ${k} added to KEV</span>`}
+function miniList(list,meta){return list.length?list.map(r=>`<button class="mini" data-cve="${r.id}"><span class="id">${r.id}</span>${chip(r.s)}<span class="t">${r.T}</span><span class="m">${meta(r)}</span></button>`).join(''):'<div class="ms-empty" style="border:0;padding:18px 0">Nothing here right now.</div>'}
+const firstSeen=r=>{const t=r.I&&r.I.t||{};return [t.msf,t.nuclei].filter(x=>typeof x==='string').sort()[0]||''};
+function credits(){const y=Math.max(2026,new Date().getUTCFullYear());
+  return `<footer class="credits" aria-label="Credits">
+    <div class="cr-roll"><div class="cr-h">SubZer0</div><div class="cr-sub">a CVE briefing that tells you what to patch first</div>
+      <dl><dt>Made by</dt><dd><a href="https://t.me/BugCod3" target="_blank" rel="noopener noreferrer">@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" target="_blank" rel="noopener noreferrer">@RootAccessClub</a></dd>
+      <dt>Data</dt><dd>NVD · GitHub Advisories · CISA KEV · FIRST EPSS · Exploit-DB${D.intel?' · CISA Vulnrichment · PoC-in-GitHub · Metasploit · Nuclei · Bluesky · Mastodon · Reddit · Hacker News':''}</dd>
+      <dt>Feeds</dt><dd><a href="feed.xml">RSS</a> · <a href="api/latest.json">JSON API</a> · <a href="snapshot/manifest.json">signed manifest</a></dd>
+      <dt>Code</dt><dd><a href="https://github.com/iliya-bashrc/SubZer0" target="_blank" rel="noopener noreferrer">github.com/iliya-bashrc/SubZer0</a></dd>
+      <dt>More</dt><dd><a href="about" data-page="about">About &amp; how priority works</a> · <a href="#" data-page="keys">Keyboard shortcuts <kbd>?</kbd></a></dd></dl>
+      <p class="cr-note">For learning and defense only. Exploit links are listed so you can judge risk, not so you can break into things you don't own. GitHub PoCs are untrusted code; some are fake and carry malware.</p>
+      <div class="cr-c">© ${y} SubZer0 · no tracking, no cookies, every file SHA-256 checked</div></div></footer>`}
 function briefing(){
+  const W=rows.filter(r=>r.w);
   const T=D.totals,q=rows.filter(r=>r.P[0]<=2).sort((a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0)).slice(0,7);
   const feed=rows.filter(r=>r.c>0).slice(0,7),days=D.days,max=Math.max(...days.map(d=>d.n));
   const bw=100/days.length;let bars='';
@@ -98,9 +169,9 @@ function briefing(){
   document.getElementById('p0').innerHTML=`<div class="wrap">
   <div class="hero"><canvas id="hc"></canvas><div class="strip"></div>
     <div class="hero-copy"><span class="chip crit">Last 30 days</span>
-      <div class="credit-name">${fmt(T.cves)} <span>CVEs</span></div>
-      <div class="sub">${fmt(T.critical)} critical, ${T.known_exploited} already being exploited, ${fmt(D.poc)} with exploit code out in public.</div>
-      <div class="code">search index sha256 ✓ · ${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
+      <div class="credit-name"><span id="heroN">${fmt(T.cves)}</span> <span>CVEs</span></div>
+      <div class="sub">${fmt(T.critical)} critical, ${T.known_exploited} already being exploited, ${fmt(D.poc)} with exploit code out in public${W.length?`, ${W.length} weaponized in Metasploit or Nuclei`:''}.</div>
+      <div class="code" id="heroSha">search index sha256 ✓ · ${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
     <div class="hero-meta"><span class="chip ice">Live</span><div class="code">next refresh in <span id="cd"></span></div></div>
   </div>
   <div class="stats">
@@ -109,27 +180,38 @@ function briefing(){
     <div class="stat"><span class="chip med">High</span><div class="v">${fmt(T.high)}</div><div class="s">CVSS 7.0 to 8.9</div></div>
     <div class="stat"><span class="chip info">Exploited</span><div class="v">${T.known_exploited}</div><div class="s">added to CISA KEV</div></div>
     <div class="stat"><span class="chip low">Public PoC</span><div class="v">${fmt(D.poc)}</div><div class="s">exploit code is out</div></div>
+    <div class="stat"><span class="chip ice">Weaponized</span><div class="v">${D.intel?fmt(W.length):'—'}</div><div class="s">Metasploit or Nuclei</div></div>
   </div>
   <div class="cols">
     <section><div class="sec-h"><h2>Patch queue</h2><span class="meta">exploited stuff goes on top</span></div>
       ${q.map(r=>`<button class="queue-item" data-cve="${r.id}">
         <div class="prio">P${r.P[0]}<small style="color:${r.P[0]===1?'var(--crit)':'var(--high)'}">${r.P[1]}</small></div>
-        <div style="min-width:0"><div style="display:flex;align-items:center;gap:10px">${chip(r.s)}<span class="id">${r.id}</span>${r.k?'<span class="kev">KEV</span>':''}${r.x?'<span class="poc">POC</span>':''}</div>
+        <div style="min-width:0"><div style="display:flex;align-items:center;gap:10px">${chip(r.s)}<span class="id">${r.id}</span>${r.k?'<span class="kev">KEV</span>':''}${r.L===2?xcell(r):r.x?'<span class="poc">POC</span>':''}</div>
           <div class="why">${r.T}</div><div class="code">› ${r.P[2]}${r.p?' · '+r.Pr:''}</div></div>
         <div class="epss">${r.e!=null?(r.e*100).toFixed(1)+'% EPSS':'— EPSS'}<span class="bar"><i style="width:${(r.e||0)*100}%"></i></span></div>
         <div class="cvss">${r.c>0?r.c.toFixed(1):'—'}</div></button>`).join('')}
     </section>
     <section class="feed"><div class="sec-h"><h2>Live feed</h2><span class="meta" id="feedMeta">updates by itself</span></div><div id="feed">
-      ${feed.map(r=>feedItem(r)).join('')}</div></section>
+      ${feed.map(r=>feedItem(r,FRESH.has(r.id))).join('')}</div></section>
   </div>
+  ${D.intel?`<div class="intel3">
+    <section><div class="sec-h"><h2>Trending</h2><span class="meta">people are talking</span></div>${miniList(rows.filter(r=>r.b>0).sort((a,b)=>b.b-a.b||a.P[0]-b.P[0]).slice(0,5),r=>'buzz '+r.b)}<a class="more-l" href="research?view=trend" data-view="trend">all trending →</a></section>
+    <section><div class="sec-h"><h2>Just weaponized</h2><span class="meta">Metasploit · Nuclei</span></div>${miniList(W.slice().sort((a,b)=>firstSeen(b).localeCompare(firstSeen(a))||a.P[0]-b.P[0]).slice(0,5),r=>[r.m?'MSF':'',r.n?'NUCLEI':''].filter(Boolean).join(' · '))}<a class="more-l" href="research?view=weap" data-view="weap">all weaponized →</a></section>
+    <section><div class="sec-h"><h2>No patch yet</h2><span class="meta">urgent, no fix in the refs</span></div>${miniList(rows.filter(r=>r.P[0]<=2&&!r.f&&r.L>=1).sort((a,b)=>a.P[0]-b.P[0]||b.L-a.L||(b.e||0)-(a.e||0)).slice(0,5),r=>'P'+r.P[0]+' · '+LADDER[r.L].toLowerCase())}<a class="more-l" href="research?view=nopatch" data-view="nopatch">all unpatched →</a></section>
+  </div>`:''}
   <section class="mystack" id="mystack"></section>
   <section class="chart"><div class="sec-h"><h2>What got published</h2><span class="meta">last 30 days by severity. ▬ means exploited</span></div>
     <svg viewBox="0 0 1000 200" preserveAspectRatio="none">${bars}</svg>
     <div class="legend"><span><i style="background:var(--crit)"></i>Critical</span><span><i style="background:var(--high)"></i>High</span><span><i style="background:var(--med)"></i>Medium</span><span><i style="background:var(--low)"></i>Low</span><span><i style="background:#3A3F46"></i>Unscored</span></div></section>
   <section style="margin-top:48px"><div class="sec-h"><h2>Where the data comes from</h2><span class="meta">your browser checks the SHA-256 of every file</span></div>
-    <div class="sources">${D.sources.map(s=>`<div class="src"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${s.v==null?"—":fmt(s.v)}</div><div class="s">${s.ok?'checked '+esc((s.at||'').replace('T',' ').slice(5,16)):'<span style="color:var(--crit)">failed last run</span>'}</div></div>`).join('')}</div></section>
+    <div class="sources">${D.sources.map(s=>`<div class="src"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${s.v==null?"—":fmt(s.v)}</div><div class="s">${s.ok?'checked '+esc((s.at||'').replace('T',' ').slice(5,16)):'<span style="color:var(--crit)">failed last run</span>'}</div></div>`).join('')}
+      ${D.isrc.map(s=>`<div class="src${s.ok?'':' bad'}"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${fmt(s.v)}</div><div class="s">${s.ok?'exploit intel':'<span style="color:var(--high)" title="'+esc(s.note)+'">kept last good data</span>'}</div></div>`).join('')}</div></section>
+  ${credits()}
   </div>`;
   requestAnimationFrame(()=>glitch(document.getElementById('hc'),7));renderMyStack();
+  const p0=document.getElementById('p0');watchHeads(p0);
+  p0.querySelectorAll('#feed .feed-item.new .t').forEach(t=>typeIn(t,900));
+  if(FX.once('hero')){decode(document.getElementById('heroN'),900);typeIn(document.getElementById('heroSha'),1100)}
 }
 function renderMyStack(){const el=document.getElementById('mystack');if(!el)return;
   if(!ST.stack.length){el.innerHTML=`<div class="sec-h"><h2>Your stack</h2><span class="meta">stays in this browser</span></div><div class="ms-empty" style="margin-top:16px"><span>Tell SubZer0 what you run and it'll keep those CVEs right here.</span><input id="msIn" placeholder="wordpress, fortinet, nginx… then enter" maxlength="120"></div>`;
@@ -139,6 +221,8 @@ function renderMyStack(){const el=document.getElementById('mystack');if(!el)retu
     <div class="sb" style="margin-top:16px">${m.length?m.slice(0,6).map(r=>`<button class="ms-item" data-cve="${r.id}"><div style="display:flex;gap:6px">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></div><div class="id">${r.id}</div><div class="t">${esc(r.t)}</div></button>`).join(''):`<div class="ms-empty" style="border:0">Nothing in the last 30 days matches your stack. Enjoy it while it lasts.</div>`}</div>`;
   el.querySelector('[data-mystack]').onclick=e=>{e.preventDefault();F.view='stack';go(1);draw()}}
 const feedItem=(r,n)=>`<button class="feed-item${n?' new':''}" data-cve="${r.id}"><time>${n?'now':r.d.slice(5)}</time><div>${chip(r.s)}<div class="id">${r.id}</div><div class="t">${r.T}</div></div></button>`;
+document.addEventListener('click',e=>{const p=e.target.closest('[data-page]');if(p){e.preventDefault();openPage(p.dataset.page);return}
+  const v=e.target.closest('[data-view]');if(v){e.preventDefault();F.view=v.dataset.view;F.q='';const qi=document.getElementById('q');if(qi)qi.value='';SHOWN=200;go(1);draw()}});
 
 /* ---------- local state: watchlist + stack (never leaves the browser) ---------- */
 const LS={get(k,d){try{return JSON.parse(localStorage.getItem('sz.'+k))??d}catch{return d}},set(k,v){try{localStorage.setItem('sz.'+k,JSON.stringify(v))}catch{}}};
@@ -158,13 +242,18 @@ const SITE='https://iliya-bashrc.github.io/SubZer0';
 const yes=v=>['yes','y','true','1','on'].includes(v);
 function pred(k,op,v){const n=parseFloat(v),cmp=a=>op==='>'?a>n:op==='>='?a>=n:op==='<'?a<n:op==='<='?a<=n:a>=n;
   switch(k){case 'kev':return r=>!!r.k===yes(v);case 'poc':case 'exploit':return r=>!!r.x===yes(v);
+    case 'msf':case 'metasploit':return r=>!!r.m===yes(v);case 'nuclei':return r=>!!r.n===yes(v);
+    case 'gh':case 'github':return r=>!!r.g===yes(v);case 'weaponized':case 'weap':return r=>!!r.w===yes(v);
+    case 'patch':case 'fix':return r=>!!r.f===yes(v);case 'auto':case 'automatable':return r=>!!r.au===yes(v);
+    case 'ssvc':return r=>r.v===v;case 'buzz':return r=>op===':'?(r.b>0)===yes(v):cmp(r.b);
+    case 'maturity':case 'level':case 'lvl':return op===':'?r=>r.L===n:r=>cmp(r.L);
     case 'epss':{const m=n>1?n/100:n;return r=>{const a=r.e||0;return op==='>'?a>m:op==='<'?a<m:op==='<='?a<=m:a>=m}}
     case 'cvss':case 'score':return r=>cmp(r.c||0);
     case 'sev':case 'severity':return r=>r.s.startsWith(v);
     case 'p':case 'prio':case 'priority':return op===':'?r=>r.P[0]===n:r=>cmp(r.P[0]);
     case 'vendor':case 'product':case 'in':return r=>txt(r).includes(v);
     case 'after':case 'since':return r=>r.d>=v;case 'before':return r=>r.d<=v;
-    case 'is':return v==='watched'?r=>ST.watch.has(r.id):v==='mine'||v==='stack'?inStack:v==='kev'?r=>!!r.k:null;
+    case 'is':return v==='watched'?r=>ST.watch.has(r.id):v==='mine'||v==='stack'?inStack:v==='kev'?r=>!!r.k:v==='trending'?r=>r.b>0:v==='weaponized'?r=>!!r.w:v==='unpatched'?r=>!r.f:null;
     default:return r=>txt(r).includes(k+op+v)}}
 function parseQ(q){const ps=[];const re=/(-?)(?:([a-z]+)(:|>=|<=|>|<)("[^"]*"|\S+)|"([^"]+)"|(\S+))/gi;let m;
   while((m=re.exec(q||''))){let p;if(m[2]){p=pred(m[2].toLowerCase(),m[3],m[4].replace(/"/g,'').toLowerCase())}else{const w=(m[5]??m[6]).toLowerCase();p=r=>txt(r).includes(w)}
@@ -174,15 +263,17 @@ function parseQ(q){const ps=[];const re=/(-?)(?:([a-z]+)(:|>=|<=|>|<)("[^"]*"|\S
 /* ---------- export (CSV is formula-injection safe) ---------- */
 function download(name,data,type){const u=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 const csvCell=v=>{let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
-function exportRows(list,kind){const recs=list.map(r=>({id:r.id,priority:'P'+r.P[0],severity:r.s,cvss:r.c||null,epss:r.e??null,kev:!!r.k,poc:!!r.x,published:r.d,title:r.t,url:'https://nvd.nist.gov/vuln/detail/'+r.id}));
+function exportRows(list,kind){const recs=list.map(r=>({id:r.id,priority:'P'+r.P[0],severity:r.s,cvss:r.c||null,cvss_source:r.c?(r.ca?'CISA ADP':'NVD'):null,epss:r.e??null,kev:!!r.k,poc:!!r.x,
+    exploit_maturity:LADDER[r.L],metasploit:r.m||0,nuclei:r.n||0,github_pocs:r.g||0,ssvc_exploitation:r.v||null,automatable:!!r.au,buzz:r.b||0,patch_linked:!!r.f,published:r.d,title:r.t,url:'https://nvd.nist.gov/vuln/detail/'+r.id}));
   const stamp=D.gen.slice(0,10);
   if(kind==='json')download(`subzer0-${stamp}.json`,JSON.stringify(recs,null,2),'application/json');
   else download(`subzer0-${stamp}.csv`,[Object.keys(recs[0]||{id:''}).join(','),...recs.map(o=>Object.values(o).map(csvCell).join(','))].join('\n'),'text/csv');
   snack(`exported ${recs.length} rows`)}
 
 /* ---------- research ---------- */
+const VIEWS=['all','p1','trend','weap','nopatch','stack','watch'];
 let F={sev:new Set(),kev:false,poc:false,epss:false,q:'',sort:'P',view:'all'};
-{const u=new URLSearchParams(location.search);if(u.has('q')||u.has('view')){F.q=(u.get('q')||'').slice(0,200);F.view=['all','p1','stack','watch'].includes(u.get('view'))?u.get('view'):'all'}}
+{const u=new URLSearchParams(location.search);if(u.has('q')||u.has('view')){F.q=(u.get('q')||'').slice(0,200);F.view=VIEWS.includes(u.get('view'))?u.get('view'):'all'}}
 let LIST=[];
 let SHOWN=200;
 function research(){
@@ -191,11 +282,11 @@ function research(){
       <div class="views" id="views" role="toolbar" aria-label="Views"></div></div>
     <label class="r-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input id="q" placeholder="CVE ID, vendor, keyword… or kev:yes epss>0.5 vendor:apache" autocomplete="off" spellcheck="false"></label>
-    <div class="qhint">try ${['kev:yes','epss>50','cvss>=9','sev:critical -wordpress','poc:yes after:2026-10-15','is:watched'].map(x=>`<code data-q="${x}">${x}</code>`).join('')}</div>
+    <div class="qhint">try ${['kev:yes','msf:yes','buzz>20','epss>50','cvss>=9','ssvc:active','patch:no p:1','sev:critical -wordpress','gh:yes after:2026-10-15','is:watched'].map(x=>`<code data-q="${x}">${x}</code>`).join('')}</div>
     <div id="stackbar"></div>
     <div class="filters" id="filters"></div>
-    <table><colgroup><col style="width:78px"><col style="width:156px"><col><col style="width:110px"><col style="width:70px"><col style="width:120px"><col style="width:56px"><col style="width:56px"><col style="width:104px"></colgroup>
-      <thead><tr><th data-s="P">Priority</th><th data-s="id">CVE</th><th>Title · product</th><th data-s="s">Severity</th><th data-s="c">CVSS</th><th data-s="e">EPSS</th><th>KEV</th><th>PoC</th><th data-s="d">Published</th></tr></thead>
+    <table><colgroup><col style="width:78px"><col style="width:156px"><col><col style="width:110px"><col style="width:70px"><col style="width:120px"><col style="width:56px"><col style="width:76px"><col style="width:104px"></colgroup>
+      <thead><tr><th data-s="P">Priority</th><th data-s="id">CVE</th><th>Title · product</th><th data-s="s">Severity</th><th data-s="c">CVSS</th><th data-s="e">EPSS</th><th>KEV</th><th data-s="x">Exploit</th><th data-s="d">Published</th></tr></thead>
       <tbody id="tb"></tbody></table>
     <div class="cards" id="cards"></div>
     <button class="btn more" id="more" hidden>Show more</button>
@@ -209,8 +300,11 @@ function research(){
   document.querySelectorAll('th[data-s]').forEach(th=>th.onclick=()=>{F.sort=th.dataset.s;draw()});
   draw();
 }
+const VPRED={all:()=>true,p1:r=>r.P[0]===1,trend:r=>r.b>0,weap:r=>!!r.w,nopatch:r=>r.P[0]<=2&&!r.f&&r.L>=1,stack:r=>inStack(r),watch:r=>ST.watch.has(r.id)};
+const xcell=r=>r.L===3?'<span class="lv l3" title="exploited in the wild">ITW</span>':r.L===2?`<span class="lv l2" title="${r.m?'Metasploit module':''}${r.m&&r.n?' + ':''}${r.n?'Nuclei template':''}">${r.m?'MSF':'NUC'}</span>`:r.L===1?'<span class="poc">POC</span>':'<span class="muted">—</span>';
+const buzzTag=r=>r.b>0?`<span class="buzz" title="chatter score ${r.b}/100">▲ ${r.b}</span>`:'';
 function draw(){
-  const VW=[['all','All',rows.length],['p1','Patch now',rows.filter(r=>r.P[0]===1).length],['stack','My stack',rows.filter(inStack).length],['watch','Watchlist',rows.filter(r=>ST.watch.has(r.id)).length]];
+  const VW=[['all','All',rows.length],['p1','Patch now',rows.filter(r=>r.P[0]===1).length],...(D.intel?[['trend','Trending',rows.filter(VPRED.trend).length],['weap','Weaponized',rows.filter(VPRED.weap).length],['nopatch','No patch yet',rows.filter(VPRED.nopatch).length]]:[]),['stack','My stack',rows.filter(inStack).length],['watch','Watchlist',rows.filter(r=>ST.watch.has(r.id)).length]];
   document.getElementById('views').innerHTML=VW.map(([k,l,n])=>`<button data-v="${k}" aria-pressed="${F.view===k}">${l}<small>${n}</small></button>`).join('');
   document.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>{F.view=b.dataset.v;SHOWN=200;draw()});
   const sb=document.getElementById('stackbar');
@@ -222,22 +316,22 @@ function draw(){
    `<span class="f-sep"></span><button class="f" data-t="kev" aria-pressed="${F.kev}">CISA KEV</button><button class="f" data-t="poc" aria-pressed="${F.poc}">Public PoC</button><button class="f" data-t="epss" aria-pressed="${F.epss}">EPSS ≥ 10%</button>`;
   document.querySelectorAll('[data-sev]').forEach(b=>b.onclick=()=>{const s=b.dataset.sev;F.sev.has(s)?F.sev.delete(s):F.sev.add(s);SHOWN=200;draw()});
   document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{F[b.dataset.t]=!F[b.dataset.t];SHOWN=200;draw()});
-  const so={P:(a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0),id:(a,b)=>b.id.localeCompare(a.id),s:(a,b)=>b.c-a.c,c:(a,b)=>b.c-a.c,e:(a,b)=>(b.e||0)-(a.e||0),d:(a,b)=>b.d.localeCompare(a.d)};
-  const qp=parseQ(F.q),vp={all:()=>true,p1:r=>r.P[0]===1,stack:inStack,watch:r=>ST.watch.has(r.id)}[F.view];
-  const list=LIST=rows.filter(r=>vp(r)&&(!F.sev.size||F.sev.has(r.s))&&(!F.kev||r.k)&&(!F.poc||r.x)&&(!F.epss||(r.e||0)>=.1)&&qp(r)).sort(so[F.sort]);
+  const so={x:(a,b)=>b.L-a.L||b.b-a.b||a.P[0]-b.P[0],b:(a,b)=>b.b-a.b||a.P[0]-b.P[0],P:(a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0),id:(a,b)=>b.id.localeCompare(a.id),s:(a,b)=>b.c-a.c,c:(a,b)=>b.c-a.c,e:(a,b)=>(b.e||0)-(a.e||0),d:(a,b)=>b.d.localeCompare(a.d)};
+  const qp=parseQ(F.q),vp=VPRED[F.view]||VPRED.all;
+  const list=LIST=rows.filter(r=>vp(r)&&(!F.sev.size||F.sev.has(r.s))&&(!F.kev||r.k)&&(!F.poc||r.x)&&(!F.epss||(r.e||0)>=.1)&&qp(r)).sort(F.view==='trend'&&F.sort==='P'?so.b:so[F.sort]||so.P);
   document.querySelectorAll('th[data-s]').forEach(th=>th.classList.toggle('sorted',th.dataset.s===F.sort));
   const shown=list.slice(0,SHOWN);
   document.getElementById('tb').innerHTML=shown.map(r=>`<tr data-cve="${r.id}"><td><span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></td><td class="t-id">${r.id}${ST.watch.has(r.id)?'<span class="star" title="watching">★</span>':''}</td>
-    <td><div class="t-title">${r.T}</div><div class="code t-prod">${r.p?r.Pr:'—'}${inStack(r)?'<span class="mine">your stack</span>':''}</div></td><td>${chip(r.s)}</td>
-    <td class="num" style="font-size:16px;font-weight:600">${r.c>0?r.c.toFixed(1):'<span class="muted">—</span>'}</td>
+    <td><div class="t-title">${r.T}</div><div class="code t-prod">${r.p?r.Pr:'—'}${inStack(r)?'<span class="mine">your stack</span>':''}${buzzTag(r)}</div></td><td>${chip(r.s)}</td>
+    <td class="num" style="font-size:16px;font-weight:600">${r.c>0?r.c.toFixed(1)+(r.ca?'<sup title="NVD has not scored it; CISA ADP score">*</sup>':''):'<span class="muted">—</span>'}</td>
     <td><div class="epss">${r.e!=null?(r.e*100).toFixed(2)+'%':'<span class="muted">—</span>'}<span class="bar"><i style="width:${(r.e||0)*100}%"></i></span></div></td>
-    <td>${r.k?'<span class="kev">KEV</span>':'<span class="muted">—</span>'}</td><td>${r.x?'<span class="poc">POC</span>':'<span class="muted">—</span>'}</td><td class="mono muted">${r.d}</td></tr>`).join('');
-  document.getElementById('cards').innerHTML=shown.map(r=>`<button class="card" data-cve="${r.id}"><div class="row">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span>${r.k?'<span class="kev">KEV</span>':''}${r.x?'<span class="poc">POC</span>':''}<span class="mono muted" style="margin-left:auto;font-size:12px">${r.d.slice(5)}</span></div>
-    <div class="t-id" style="margin-top:10px">${r.id}${ST.watch.has(r.id)?'<span class="star">★</span>':''}${inStack(r)?'<span class="mine">your stack</span>':''}</div><div class="t-title">${r.T}</div><div class="m"><span>CVSS ${r.c>0?r.c.toFixed(1):'—'}</span><span>EPSS ${r.e!=null?(r.e*100).toFixed(1)+'%':'—'}</span></div></button>`).join('');
+    <td>${r.k?'<span class="kev">KEV</span>':'<span class="muted">—</span>'}</td><td>${xcell(r)}</td><td class="mono muted">${r.d}</td></tr>`).join('');
+  document.getElementById('cards').innerHTML=shown.map(r=>`<button class="card" data-cve="${r.id}"><div class="row">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span>${r.k?'<span class="kev">KEV</span>':''}${r.L===2?xcell(r):r.x?'<span class="poc">POC</span>':''}${buzzTag(r)}<span class="mono muted" style="margin-left:auto;font-size:12px">${r.d.slice(5)}</span></div>
+    <div class="t-id" style="margin-top:10px">${r.id}${ST.watch.has(r.id)?'<span class="star">★</span>':''}${inStack(r)?'<span class="mine">your stack</span>':''}</div><div class="t-title">${r.T}</div><div class="m"><span>CVSS ${r.c>0?r.c.toFixed(1)+(r.ca?'*':''):'—'}</span><span>EPSS ${r.e!=null?(r.e*100).toFixed(1)+'%':'—'}</span></div></button>`).join('');
   document.getElementById('cnt').textContent=`showing ${fmt(shown.length)} of ${fmt(list.length)} matches · ${fmt(rows.length)} CVEs in the window`;
   const mb=document.getElementById('more');mb.hidden=list.length<=SHOWN;mb.textContent=`Show ${fmt(Math.min(200,list.length-SHOWN))} more`;
   if(cur===1&&!sheetOpen)history.replaceState(null,'',routeURL());
-  if(!list.length){const e={watch:'Nothing on your watchlist yet. Open any CVE and hit <b>Watch</b>, or type <b>watch CVE-…</b> in the terminal.',stack:ST.stack.length?'None of the CVEs in this window match your stack. Good news, honestly.':'Add the vendors and products you actually run. SubZer0 will pin their CVEs for you. It stays in this browser only.'}[F.view]||'No match. Try a looser query.';
+  if(!list.length){const e={trend:'Nobody is talking about anything in this window yet.',weap:'Nothing here has a Metasploit module or Nuclei template yet.',nopatch:'Every urgent CVE has a fix linked. Rare. Enjoy it.',watch:'Nothing on your watchlist yet. Open any CVE and hit <b>Watch</b>, or type <b>watch CVE-…</b> in the terminal.',stack:ST.stack.length?'None of the CVEs in this window match your stack. Good news, honestly.':'Add the vendors and products you actually run. SubZer0 will pin their CVEs for you. It stays in this browser only.'}[F.view]||'No match. Try a looser query.';
     document.getElementById('tb').innerHTML=`<tr><td colspan="9"><div class="empty">${e}</div></td></tr>`;document.getElementById('cards').innerHTML=`<div class="empty">${e}</div>`}
 }
 
@@ -248,27 +342,29 @@ function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec
   const aff=rec&&Array.isArray(rec.affected)?rec.affected.slice(0,60):[];const refs=rec&&Array.isArray(rec.refs)?rec.refs.map(f=>({...f,u:safeUrl(f.url)})).filter(f=>f.u).slice(0,80):[];
   const a0=aff[0];const sub=vec||(a0?`${a0.vendor||''} ${a0.product||''}`.trim():'')||(r.p||'');
   const pct=ep&&typeof ep.percentile==='number'?ep.percentile:null;
-  const dates=rec?[[rec.published,'Published'],kev&&[kev.date_added,'Added to CISA KEV',1],kev&&kev.due_date&&[kev.due_date,'CISA deadline for US agencies',1],[rec.modified,'Last modified']].filter(x=>x&&x[0]):[];
+  const I=r.I,tt=I&&I.t||{};
+  const dates=rec?[[rec.published,'Published'],tt.poc&&[tt.poc,'First public PoC on GitHub'],tt.msf&&[tt.msf,'Metasploit module spotted',1],tt.nuclei&&[tt.nuclei,'Nuclei template spotted',1],tt.buzz&&[tt.buzz,'People started talking about it'],tt.active&&[tt.active,'CISA SSVC: exploitation active',1],kev&&[kev.date_added,'Added to CISA KEV',1],kev&&kev.due_date&&[kev.due_date,'CISA deadline for US agencies',1],[rec.modified,'Last modified']].filter(x=>x&&x[0]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))):[];
   const overdue=kev&&kev.due_date&&kev.due_date<new Date().toISOString().slice(0,10);
   return `<div class="d-hero"><canvas class="dc"></canvas>
     ${inSheet?'<button class="d-close" id="closeSheet">← Back · Esc</button>':''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">${chip(sev)}${r.k?'<span class="chip crit outline">Exploited in the wild</span>':''}<span class="chip ${P[0]===1?'crit':P[0]===2?'high':'none'}">P${P[0]} · ${P[1]}</span></div>
-    <div class="credit-name">${id}</div>
+    <div class="credit-name" data-fx="id">${id}</div>
     <div class="code" style="margin-top:8px">${esc(sub)||'&nbsp;'}</div>
     <p class="lead">${esc(rec?rec.title:r.t)}</p>
     <div class="d-actions"><button class="btn primary" data-act="copy" data-id="${id}">Copy ID</button><button class="btn" data-act="share" data-id="${id}">Share link</button><button class="btn${ST.watch.has(id)?' on':''}" data-act="watch" data-id="${id}">${ST.watch.has(id)?'★ Watching':'☆ Watch'}</button><button class="btn" data-act="json" data-id="${id}">Export JSON</button><a class="btn" href="https://nvd.nist.gov/vuln/detail/${id}" target="_blank" rel="noopener noreferrer">NVD ↗</a></div></div>
   <div class="d-metrics">
-    <div class="d-metric"><span class="label">CVSS</span><div class="v" style="color:var(--${SEV[sev][0]==='none'?'ink3':SEV[sev][0]})">${score>0?score.toFixed(1):'—'}<small>/10</small></div><div class="s">${vec?esc(vec.split('/')[0]):'base score'}</div></div>
+    <div class="d-metric"><span class="label">CVSS</span><div class="v" style="color:var(--${SEV[sev][0]==='none'?'ink3':SEV[sev][0]})">${score>0?score.toFixed(1):'—'}<small>/10</small></div><div class="s">${r.ca?'CISA ADP score · NVD has not scored it':vec?esc(vec.split('/')[0]):'base score'}</div></div>
     <div class="d-metric"><span class="label">EPSS</span><div class="v">${r.e!=null?(r.e*100).toFixed(1)+'<small>%</small>':'—'}</div><div class="s">${pct!=null?'higher than '+(pct*100).toFixed(1)+'% of CVEs':'not scored yet'}</div><div class="spark-wrap" data-spark="${id}"></div></div>
     <div class="d-metric"><span class="label">CISA KEV</span><div class="v" style="font-size:22px;margin-top:18px">${kev?esc(kev.date_added):r.k?'Listed':'Not listed'}</div><div class="s">${kev&&kev.due_date?`<span class="chip ${overdue?'crit':'high'}" style="height:18px;font-size:10px">Due ${esc(kev.due_date)}${overdue?' · overdue':''}</span>`:'—'}</div></div>
-    <div class="d-metric"><span class="label">Exploit code</span><div class="v" style="font-size:22px;margin-top:18px">${r.x?'Public':'None seen'}</div><div class="s">${r.x?'Exploit-DB or tagged refs':'not in Exploit-DB'}</div></div>
+    <div class="d-metric"><span class="label">Exploit maturity</span><div class="ladder" role="img" aria-label="Exploit maturity ${r.L} of 3: ${LADDER[r.L]}">${[1,2,3].map(i=>`<i class="${i<=r.L?'on l'+r.L:''}"></i>`).join('')}</div><div class="v" style="font-size:20px;margin-top:10px">${LADDER[r.L]}</div><div class="s">${r.L===3?(r.k?'on CISA KEV':'CISA SSVC: active'):r.L===2?[r.m?r.m+' Metasploit':'',r.n?r.n+' Nuclei':''].filter(Boolean).join(' · '):r.L===1?(r.g?r.g+' GitHub repo'+(r.g>1?'s':''):r.v==='poc'?'CISA SSVC: PoC':'Exploit-DB or tagged refs'):'nothing public yet'}</div></div>
   </div>
   <div class="d-body">
-    <div class="why-box"><span class="chip ${P[0]===1?'crit':P[0]===2?'high':'none'}">Why P${P[0]}</span><p><b>${P[2].replace(/\.$/,'')}.</b>${pct!=null?` EPSS puts it above ${(pct*100).toFixed(1)}% of all CVEs.`:''}${kev&&kev.required_action?' CISA: '+esc(String(kev.required_action).slice(0,300)):''}</p></div>
+    <div class="why-box"><span class="chip ${P[0]===1?'crit':P[0]===2?'high':'none'}">Why P${P[0]}</span><p data-fx="why"><b>${P[2].replace(/\.$/,'')}.</b>${r.f?' A fix or vendor advisory is linked below.':r.L>=1&&P[0]<=2?' No patch linked yet, so look for a workaround.':''}${pct!=null?` EPSS puts it above ${(pct*100).toFixed(1)}% of all CVEs.`:''}${kev&&kev.required_action?' CISA: '+esc(String(kev.required_action).slice(0,300)):''}</p></div>
     ${!full?`<p class="muted" id="dload">Loading the full record and checking its hash…</p>`:`
     ${rec.desc&&rec.desc.trim()!==String(rec.title).trim()?`<section><div class="sec-h"><h2>Description</h2><span class="meta">${esc((rec.date_basis||'').toLowerCase())}</span></div><p class="desc">${esc(rec.desc)}</p></section>`:''}
     ${kev?`<section><div class="sec-h"><h2>Exploitation</h2><span class="meta">CISA KEV</span></div>
       <dl class="kv"><dt>Vendor</dt><dd>${esc(kev.vendor)} · ${esc(kev.product)}</dd>${kev.ransomware?`<dt>Ransomware</dt><dd>${esc(kev.ransomware)}</dd>`:''}<dt>Added</dt><dd class="mono">${esc(kev.date_added)}</dd>${kev.due_date?`<dt>Due</dt><dd class="mono">${esc(kev.due_date)}</dd>`:''}</dl></section>`:''}
+    ${intelHTML(r)}
     ${cwe.length?`<section><div class="sec-h"><h2>Weakness</h2><span class="meta">MITRE CWE</span></div><div class="tags" style="margin-top:14px">${cwe.map(c=>`<a class="tag" href="https://cwe.mitre.org/data/definitions/${c.slice(4)}.html" target="_blank" rel="noopener noreferrer">${c}</a>`).join('')}</div></section>`:''}
     ${aff.length?`<section><div class="sec-h"><h2>Affected · ${rec.affected.length}</h2><span class="meta">vendor / product</span></div>
       ${aff.map(a=>`<div class="ref"><div style="min-width:0"><div class="l">${esc(a.vendor||'—')} · ${esc(a.product||'—')}</div><div class="code" style="margin-top:4px">${esc(a.versions||a.cpe||'versions not listed')}</div></div></div>`).join('')}</section>`:''}
@@ -277,9 +373,29 @@ function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec
       ${refs.map(f=>`<a class="ref" href="${esc(f.u)}" target="_blank" rel="noopener noreferrer nofollow"><div style="min-width:0"><div class="d">${esc(new URL(f.u).host)}</div><div class="l">${esc(f.label||'Reference')}</div>${Array.isArray(f.tags)&&f.tags.length?`<div class="tags">${f.tags.slice(0,6).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>`:''}</div></a>`).join('')}</section>`:''}
     <p class="proto-note">record checked against shard sha256 ${full.sha.slice(0,16)}…</p>`}
   </div>`}
+const msfUrl=n=>{const [t,...rest]=String(n).split('/');const dir={exploit:'exploits',auxiliary:'auxiliary',post:'post',payload:'payloads',encoder:'encoders',nop:'nops',evasion:'evasion'}[t];return dir&&rest.length?`https://github.com/rapid7/metasploit-framework/blob/master/modules/${dir}/${rest.map(encodeURIComponent).join('/')}.rb`:null};
+const ghUrl=f=>/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(f)?'https://github.com/'+f:null;
+const SSVC_T={none:'No exploitation seen',poc:'Public proof of concept',active:'Exploited (active)',yes:'Yes',no:'No',partial:'Partial',total:'Total'};
+function intelHTML(r){const I=r.I;if(!I)return '';const out=[];
+  if(I.m.length||I.n.length)out.push(`<section><div class="sec-h"><h2>Weaponized</h2><span class="meta">ready-made attack tooling</span></div>
+    ${I.m.map(m=>{const u=msfUrl(m[0]);return `<a class="ref" ${u?`href="${esc(u)}" target="_blank" rel="noopener noreferrer"`:''}><div style="min-width:0"><div class="d">metasploit · ${esc(m[1])}${m[2]!=null?' · rank '+esc(m[2]):''}${m[6]?' · has check':''}</div><div class="l">${esc(m[5]||m[0])}</div><div class="code">${esc(m[0])}</div></div></a>`}).join('')}
+    ${I.n.map(n=>`<a class="ref" href="https://github.com/projectdiscovery/nuclei-templates/blob/main/${esc(String(n[0]).split('/').map(encodeURIComponent).join('/'))}" target="_blank" rel="noopener noreferrer"><div style="min-width:0"><div class="d">nuclei · ${esc(n[1])}</div><div class="l">${esc(n[2]||n[0])}</div><div class="code">${esc(n[0])}</div></div></a>`).join('')}</section>`);
+  if(I.g.length)out.push(`<section><div class="sec-h"><h2>GitHub PoCs · ${I.g.length}</h2><span class="meta">via PoC-in-GitHub</span></div>
+    <div class="warn"><b>Untrusted code.</b> Fake PoCs that drop malware are common. Read it first, run it only in a throwaway lab, never on your own machine.</div>
+    ${I.g.slice(0,12).map(g=>{const u=ghUrl(g[0]),fl=arr(g[5]).filter(f=>FLAG[f]);return `<a class="ref${fl.includes('bait')||fl.includes('known')?' sus':''}" ${u?`href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow"`:''}><div style="min-width:0"><div class="d">★ ${fmt(g[1])} · forks ${fmt(g[2])}${g[3]?' · '+esc(g[3]):''}</div><div class="l">${esc(g[0])}</div>${g[4]?`<div class="code" style="white-space:normal">${esc(g[4])}</div>`:''}${fl.length?`<div class="tags">${fl.map(f=>`<span class="tag ${f==='bait'||f==='known'?'bad':''}" title="${esc(FLAG[f])}">⚠ ${esc(FLAG[f])}</span>`).join('')}</div>`:''}</div></a>`}).join('')}
+    ${I.g.length>12?`<div class="code" style="margin-top:10px">+${I.g.length-12} more on GitHub</div>`:''}</section>`);
+  if(I.s.length)out.push(`<section><div class="sec-h"><h2>CISA SSVC</h2><span class="meta">CISA Vulnrichment</span></div><dl class="kv">
+    <dt>Exploitation</dt><dd>${esc(SSVC_T[I.s[0]]||'—')}</dd><dt>Automatable</dt><dd>${esc(SSVC_T[I.s[1]]||'—')}</dd><dt>Technical impact</dt><dd>${esc(SSVC_T[I.s[2]]||'—')}</dd>
+    ${typeof I.s[3]==='number'?`<dt>CISA ADP CVSS</dt><dd class="mono">${I.s[3].toFixed(1)}${I.s[4]?' · '+esc(I.s[4]):''}</dd>`:''}
+    <dt>Patch linked</dt><dd>${r.f?'yes, see references':'none found yet'}</dd></dl></section>`);
+  if(I.b.length){const [sc,bs,ms,rd,hn,d1,links]=I.b;out.push(`<section><div class="sec-h"><h2>Chatter</h2><span class="meta">buzz ${esc(sc)}/100${d1?' · '+esc(d1)+' in the last day':''}</span></div>
+    <div class="buzzbar"><i style="width:${Math.min(100,+sc||0)}%"></i></div>
+    <div class="tags" style="margin-top:12px">${[['Bluesky',bs],['Mastodon',ms],['Reddit',rd],['Hacker News',hn]].map(([n,v])=>`<span class="tag">${n} ${fmt(v)}</span>`).join('')}</div>
+    ${arr(links).map(l=>{const u=safeUrl(l[1]);return u?`<a class="ref" href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow"><div style="min-width:0"><div class="d">${esc(new URL(u).host)} · ${esc(l[2]||'')}</div><div class="l">${{bsky:'Bluesky post',masto:'Mastodon post',reddit:'Reddit thread',hn:'Hacker News thread'}[l[0]]||'Post'}</div></div></a>`:''}).join('')}</section>`)}
+  return out.join('')}
 async function fillDossier(el,id,inSheet){const r=BYID.get(id);if(!r){el.innerHTML=`<div class="empty"><b>${esc(id)}</b> isn't in the current 30-day snapshot.</div>`;return}
-  el.innerHTML=dossierHTML(r,null,null,inSheet);paintDossier(el,inSheet);
-  try{const [full,ep]=await Promise.all([getRecord(id),getEpss().then(s=>s[id]||null)]);if(el.dataset.id!==id)return;el.innerHTML=dossierHTML(r,full,ep,inSheet);paintDossier(el,inSheet);
+  el.innerHTML=dossierHTML(r,null,null,inSheet);paintDossier(el,inSheet);const t0=performance.now();const fx=()=>{if((inSheet||cur===2)&&performance.now()-t0<1200){decode(el.querySelector('[data-fx="id"]'),520,t0);typeIn(el.querySelector('[data-fx="why"]'),900,t0+150)}};fx();
+  try{const [full,ep]=await Promise.all([getRecord(id),getEpss().then(s=>s[id]||null)]);if(el.dataset.id!==id)return;el.innerHTML=dossierHTML(r,full,ep,inSheet);paintDossier(el,inSheet);fx();watchHeads(el);
     if(r.e!=null)epssSeries(id).then(pts=>{const w=el.querySelector(`[data-spark="${id}"]`);if(!w||!pts)return;const mx=Math.max(...pts.map(p=>p[1]),.01);
       w.innerHTML=`<svg class="spark" viewBox="0 0 100 36" preserveAspectRatio="none" role="img" aria-label="EPSS over the last ${pts.length} days"><polyline points="${pts.map((p,i)=>`${(i/(pts.length-1)*100).toFixed(2)},${(34-p[1]/mx*32).toFixed(2)}`).join(' ')}" fill="none" stroke="var(--ice)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="code" style="margin-top:4px">${pts.length} days · live from FIRST</div>`})}
   catch(e){const l=el.querySelector('#dload');if(l)l.innerHTML=`<span style="color:var(--crit)">Couldn't verify this record (${esc(e.message)}). Nothing unverified is shown.</span>`}}
@@ -289,11 +405,37 @@ function dossierTab(id){id=id||LS.get('last',null);if(!id||!BYID.has(id)){const 
 
 /* sheet with swipe-back + history */
 const sheet=document.getElementById('sheet'),back=document.getElementById('back');let sheetOpen=false,lastFocus=null;
-function openSheet(id,replace){if(!CVE_RE.test(id))return;lastFocus=document.activeElement;sheet.dataset.id=id;sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
-  LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);document.title=id+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
+function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
+  LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);document.title=id+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
+let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};
+function pageHTML(kind){const close='<button class="d-close" id="closeSheet">← Back · Esc</button>';
+  if(kind==='keys')return `<div class="d-hero pg">${close}<span class="chip ice">Shortcuts</span><div class="credit-name" data-fx="id">Keyboard</div></div><div class="d-body"><dl class="keys">
+    ${[['?','this list'],['← →','previous / next tab'],['1 – 4','jump to a tab'],['/  or  Ctrl K','search'],['Esc','close the panel'],['Drag sideways','switch tabs with the mouse, a finger, or a trackpad'],['↑ ↓ · Tab','terminal history and completion'],['Ctrl L','clear the terminal']].map(([k,d])=>`<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(d)}</dd>`).join('')}</dl></div>`;
+  if(kind==='404'){let bad=NF_PATH;try{bad=decodeURIComponent(bad)}catch{}bad=bad.slice(0,80)||'?';
+    return `<div class="d-hero pg">${close}<span class="chip crit">404</span><div class="credit-name" data-fx="id">Not found</div></div><div class="d-body">
+    <div class="term nf"><div class="term-out"><div class="ln">${P_} cd /${esc(bad)}</div><div class="ln t-err">sz-sh: cd: /${esc(bad)}: No such file or directory</div><div class="ln">${P_} ls</div><div class="ln"><span class="t-ice">briefing/</span>  <span class="t-ice">research/</span>  <span class="t-ice">dossier/</span>  <span class="t-ice">terminal/</span>  about</div><div class="ln">${P_} <span class="cursor"></span></div></div></div>
+    <p class="desc" style="margin-top:20px">That page isn't here. If you were looking for a CVE, it may have aged out of the 30-day window.</p>
+    <div class="d-actions"><a class="btn primary" href="./">Go to the briefing</a><a class="btn" href="research">Search CVEs</a></div></div>`}
+  const pr=[[1,'Patch now','On CISA KEV, or CISA SSVC says it is exploited, or it is weaponized in Metasploit/Nuclei with CVSS ≥ 7 or EPSS ≥ 10%, or a public PoC with EPSS ≥ 10%.'],[2,'This week','CVSS ≥ 9, or CVSS ≥ 7 with a PoC or EPSS ≥ 5%, or weaponized at any score, or CISA says it is automatable with total impact.'],[3,'Planned','CVSS ≥ 7 and nobody is exploiting it yet.'],[4,'Track','Everything else. Quiet for now.']];
+  return `<div class="d-hero pg">${close}<span class="chip ice">About</span><div class="credit-name" data-fx="id">SubZer0</div><p class="lead">Every CVE published in the last 30 days, ranked by what you should patch first. A static site with no backend, no account and no tracking.</p></div>
+  <div class="d-body">
+    <section><div class="sec-h"><h2>How priority works</h2><span class="meta">same rules in the RSS feed and Telegram</span></div>
+      ${pr.map(([n,l,d])=>`<div class="ref"><span class="chip ${n===1?'crit':n===2?'high':'none'}" style="flex:none">P${n}</span><div><div class="l">${l}</div><div class="code" style="white-space:normal;margin-top:4px">${d}</div></div></div>`).join('')}</section>
+    <section><div class="sec-h"><h2>Exploit maturity</h2></div><div class="ref"><div class="ladder" style="margin:0;flex:none"><i class="on l1"></i><i></i><i></i></div><div class="l">Public PoC: Exploit-DB, a GitHub repo, or CISA SSVC "poc"</div></div><div class="ref"><div class="ladder" style="margin:0;flex:none"><i class="on l2"></i><i class="on l2"></i><i></i></div><div class="l">Weaponized: a Metasploit module or Nuclei template exists</div></div><div class="ref"><div class="ladder" style="margin:0;flex:none"><i class="on l3"></i><i class="on l3"></i><i class="on l3"></i></div><div class="l">Exploited in the wild: CISA KEV or SSVC "active"</div></div></section>
+    <section><div class="sec-h"><h2>Where the data comes from</h2><span class="meta">refreshed every 6 hours</span></div><dl class="kv">
+      <dt>CVEs</dt><dd>NVD CVE API 2.0 and the GitHub Advisory Database</dd><dt>Exploited</dt><dd>CISA Known Exploited Vulnerabilities, CISA Vulnrichment (SSVC)</dd><dt>Likelihood</dt><dd>FIRST EPSS</dd>
+      <dt>Exploits</dt><dd>Exploit-DB, PoC-in-GitHub, Metasploit modules, Nuclei templates</dd><dt>Chatter</dt><dd>Bluesky, Mastodon, Reddit (r/netsec and friends), Hacker News</dd></dl>
+      <p class="desc" style="margin-top:14px">Your browser downloads a manifest and checks the SHA-256 of every data file before showing it. If a check fails, nothing is shown. Your watchlist and stack stay in this browser.</p></section>
+    ${credits()}</div>`}
+function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.dataset.page===kind)return;const was=sheetOpen;lastFocus=was?lastFocus:document.activeElement;
+  sheet.dataset.id='';sheet.dataset.page=kind;sheet.scrollTop=0;sheet.setAttribute('aria-label',PAGES[kind]);sheet.innerHTML=pageHTML(kind);paintDossier(sheet,true);watchHeads(sheet);
+  decode(sheet.querySelector('[data-fx="id"]'),520);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
+  const u=kind==='about'?new URL('about',BASE).href:kind==='keys'?location.href:null;
+  if(u){replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u)}else if(!was)history.pushState({sheet:1},'',location.href);
+  document.title=PAGES[kind]+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;sheet.classList.remove('on');back.classList.remove('on');sheet.style.transform='';
   if(fromPop!==true)history.back();setTimeout(()=>{if(!sheetOpen)history.replaceState(null,'',routeURL())},0);document.title=(cur?TABS[cur]+' · ':'')+'SubZer0';if(lastFocus&&lastFocus.focus)lastFocus.focus({preventScroll:true})}
-back.onclick=closeSheet;addEventListener('popstate',e=>{if(sheetOpen)closeSheet(true);else{const m=location.pathname.match(/\/cve\/(CVE-\d{4}-\d{4,})$/);if(m)openSheet(m[1],true)}});
+back.onclick=closeSheet;addEventListener('popstate',e=>{if(sheetOpen)closeSheet(true);else{const R=route();if(R.cve)openSheet(R.cve,true);else if(R.page){if(R.page==='404')NF_PATH=location.pathname.slice(BASE.pathname.length);openPage(R.page,true)}}});
 addEventListener('keydown',e=>{if(e.key==='Escape'&&sheetOpen)closeSheet()});
 (function(){let x0,dx=0,lock=null,y0;sheet.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;x0=e.clientX;y0=e.clientY;dx=0;lock=null});
   sheet.addEventListener('pointermove',e=>{if(x0==null)return;const mx=e.clientX-x0,my=e.clientY-y0;if(lock==null&&Math.hypot(mx,my)>8)lock=Math.abs(mx)>Math.abs(my)&&mx>0?'x':'y';
@@ -304,12 +446,13 @@ document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(
     if(a.dataset.act==='copy')copy(id,id+' copied');
     if(a.dataset.act==='share'){const u=SITE+'/cve/'+id;navigator.share&&matchMedia('(pointer:coarse)').matches?navigator.share({title:id,url:u}).catch(()=>{}):copy(u,'link copied')}
     if(a.dataset.act==='watch'){const on=toggleWatch(id);document.querySelectorAll(`[data-act="watch"][data-id="${id}"]`).forEach(b=>{b.classList.toggle('on',on);b.textContent=on?'★ Watching':'☆ Watch'});snack(on?'added to watchlist':'removed from watchlist')}
-    if(a.dataset.act==='json'){const f=REC.get(id);const r=BYID.get(id);download(id+'.json',JSON.stringify(f?{...f.rec,epss:r&&r.e,poc:!!(r&&r.x)}:r?{id:r.id,title:r.t,severity:r.s,cvss:r.c,epss:r.e,kev:!!r.k,poc:!!r.x}:{id},null,2),'application/json')}
+    if(a.dataset.act==='json'){const f=REC.get(id);const r=BYID.get(id);const ix=r&&r.I?{exploit_maturity:LADDER[r.L],github_pocs:r.I.g,metasploit:r.I.m,nuclei:r.I.n,ssvc:r.I.s,chatter:r.I.b,first_seen:r.I.t,patch_linked:r.I.f}:{};
+      download(id+'.json',JSON.stringify(f?{...f.rec,epss:r&&r.e,poc:!!(r&&r.x),...ix}:r?{id:r.id,title:r.t,severity:r.s,cvss:r.c,epss:r.e,kev:!!r.k,poc:!!r.x,...ix}:{id},null,2),'application/json')}
     return}
   const t=e.target.closest('[data-cve]');if(t&&CVE_RE.test(t.dataset.cve))openSheet(t.dataset.cve)});
 
 /* ---------- terminal ---------- */
-const CMDS=[['./info','about this thing'],['./help','what you can type'],['./latest','newest CVEs'],['./kev','being exploited right now'],['./status','are the feeds ok?'],['./bugcod3','BugCod3 on Telegram',1],['./rootaccessclub','RootAccessClub on Telegram',1],['./clear','wipe the screen']];
+const CMDS=[['./info','about this thing'],['./help','what you can type'],['./latest','newest CVEs'],['./kev','being exploited right now'],['./trending','what people are talking about'],['./weaponized','Metasploit / Nuclei ready'],['./about','how priority works'],['./status','are the feeds ok?'],['./bugcod3','BugCod3 on Telegram',1],['./rootaccessclub','RootAccessClub on Telegram',1],['./clear','wipe the screen']];
 const EXTRA=['cve ','search ','watch ','unwatch ','watchlist','stack','stack add ','stack rm ','export csv','export json','whoami','date','ls','uname -a','history','banner','sudo','exit'];
 const P_='<span class="p-user">user@subzer0</span><span class="t-dim">:</span><span class="p-path">~</span><span class="t-dim">$</span>';
 const GL={S:[' ████','█    ',' ███ ','    █','████ '],U:['█   █','█   █','█   █','█   █',' ███ '],B:['████ ','█   █','████ ','█   █','████ '],Z:['█████','   █ ','  █  ',' █   ','█████'],E:['█████','█    ','████ ','█    ','█████'],R:['████ ','█   █','████ ','█  █ ','█   █'],'0':[' ███ ','█  ██','█ █ █','██  █',' ███ ']};
@@ -375,13 +518,17 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
   const kv=(a,b)=>`<span class="t-ice">${a}</span><span>${b}</span>`;
   if(k==='./info'){print(`<div class="neo"><pre class="banner">${ZERO}</pre><div class="tgrid">
     <span class="t-ice" style="grid-column:1/-1">user@subzer0</span><span class="t-dim" style="grid-column:1/-1">────────────</span>
-    ${kv('OS','SubZer0 OS 2.0 LTS')}${kv('Shell','sz-sh 0.1')}${kv('Window','30 days · rolling')}${kv('CVEs',D.totals.cves.toLocaleString())}${kv('Feeds','NVD · GHSA · KEV · EPSS · Exploit-DB')}${kv('Refresh','6h · live diff 60s')}${kv('Creators','@BugCod3 · @RootAccessClub')}${kv('Use','learning only')}
+    ${kv('OS','SubZer0 OS 2.0 LTS')}${kv('Shell','sz-sh 0.1')}${kv('Window','30 days · rolling')}${kv('CVEs',D.totals.cves.toLocaleString())}${kv('Feeds','NVD · GHSA · KEV · EPSS · Exploit-DB')}${D.intel?kv('Intel','SSVC · PoC-in-GitHub · MSF · Nuclei · chatter'):''}${kv('Refresh','6h · live diff 60s')}${kv('Creators','@BugCod3 · @RootAccessClub')}${kv('Use','learning only')}
     <span style="grid-column:1/-1" class="swatch">${['crit','high','med','low','info','ice','strip','ink'].map(v=>`<i style="background:var(--${v})"></i>`).join('')}</span></div></div>`);}
-  else if(k==='./help'||k==='help'){await lines([`<div class="ln t-dim">commands:</div>`,`<div class="tgrid">${CMDS.map(([x,d])=>`<span class="t-ice">${x}</span><span class="t-dim">${d}</span>`).join('')}</div>`,`<div class="tgrid" style="margin-top:8px">${[['cve <id>','details for one CVE'],['search <query>','same syntax as the search box'],['watch <id>','add to your watchlist'],['watchlist','what you are watching'],['stack add <name>','tell it what you run'],['export csv|json','download the current data']].map(([a,b])=>`<span class="t-ice">${esc(a)}</span><span class="t-dim">${b}</span>`).join('')}</div><div class="ln t-dim">also: whoami · ls · date · uname -a · history · banner</div>`])}
+  else if(k==='./help'||k==='help'){await lines([`<div class="ln t-dim">commands:</div>`,`<div class="tgrid">${CMDS.map(([x,d])=>`<span class="t-ice">${x}</span><span class="t-dim">${d}</span>`).join('')}</div>`,`<div class="tgrid" style="margin-top:8px">${[['cve <id>','details for one CVE'],['search <query>','same syntax as the search box'],['watch <id>','add to your watchlist'],['watchlist','what you are watching'],['stack add <name>','tell it what you run'],['export csv|json','download the current data'],['search msf:yes','weaponized in Metasploit'],['search buzz>20 patch:no','loud and unpatched']].map(([a,b])=>`<span class="t-ice">${esc(a)}</span><span class="t-dim">${b}</span>`).join('')}</div><div class="ln t-dim">also: whoami · ls · date · uname -a · history · banner</div>`])}
   else if(k==='./latest'){print(`<div class="ln t-dim">pulling the latest…</div>`);if(!reduce)await wait(260);
     const g=`<div class="tgrid c3" id="lg3"><span class="t-dim">ID</span><span class="t-dim">SEVERITY</span><span class="t-dim">SUMMARY</span></div>`;print(g);const G=[...document.querySelectorAll('#lg3')].pop();G.removeAttribute('id');
     for(const r of rows.slice(0,6)){G.insertAdjacentHTML('beforeend',`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span style="color:var(--${sevc(r.s)})">${SEV[r.s][1].toUpperCase()}</span><span class="t-dim">${esc(r.t)}</span></div>`);document.getElementById('to').scrollTop=1e9;if(!reduce)await wait(45)}
     print(`<div class="ln t-dim">click a row to open it</div>`)}
+  else if(k==='./trending'||k==='./weaponized'){const tr=k==='./trending';const ls=rows.filter(tr?r=>r.b>0:r=>r.w).sort(tr?(a,b)=>b.b-a.b:(a,b)=>a.P[0]-b.P[0]||b.c-a.c).slice(0,8);
+    if(!D.intel)print(`<div class="ln t-warn">exploit intel isn't in this snapshot yet. it shows up after the next refresh.</div>`);
+    else{print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">${tr?'BUZZ':'TOOLING'}</span><span class="t-dim">SUMMARY</span>${ls.map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span class="${tr?'t-warn':'t-err'}">${tr?r.b+'/100':[r.m?'MSF':'',r.n?'NUCLEI':''].filter(Boolean).join('+')}</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${ls.length?'click a row to open it':'nothing yet'} · search ${tr?'buzz&gt;20':'weaponized:yes'} for more</div>`)}}
+  else if(k==='./about'){print(`<div class="ln t-dim">opening about…</div>`);openPage('about')}
   else if(k==='./kev'){const ks=rows.filter(r=>r.k).slice(0,6);print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">STATUS</span><span class="t-dim">SUMMARY</span>${ks.map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span class="t-err">KEV</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${ks.length} of ${D.totals.known_exploited} known-exploited shown</div>`)}
   else if(k==='./status'){await lines([...D.sources.map(s=>`<div class="ln"><span class="${s.ok?'t-ok':'t-err'}">[${s.ok?'  OK  ':' FAIL '}]</span> ${esc(s.n)} <span class="t-dim">· ${(+s.v||0).toLocaleString()} records</span></div>`),`<div class="ln t-dim">generated ${D.gen.replace('T',' ').replace('Z',' UTC')} · sha256(manifest) verified</div>`],90)}
   else if(k==='./bugcod3'||k==='./rootaccessclub'){const n=k==='./bugcod3'?'BugCod3':'RootAccessClub';
@@ -392,7 +539,7 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
   else if(/^cve(\s|$)/.test(lc)){const id=(c.split(' ')[1]||'').toUpperCase();const r=BYID.get(id)||null;
     if(!id)print(`<div class="ln">usage: cve <span class="t-dim">CVE-YYYY-NNNN</span></div>`);
     else if(!r)print(`<div class="ln t-err">${esc(id)}: not in this snapshot</div>`);
-    else print(`<div class="tgrid">${kv('id',`<span data-cve="${r.id}" style="cursor:pointer;text-decoration:underline">${r.id}</span>`)}${kv('severity',`<span style="color:var(--${sevc(r.s)})">${SEV[r.s][1]}</span>${r.c>0?' '+(+r.c).toFixed(1):''}`)}${kv('priority','P'+r.P[0]+' '+esc(r.P[1]))}${kv('epss',r.e!=null?(r.e*100).toFixed(2)+'%':'n/a')}${kv('kev',r.k?'<span class="t-err">yes</span>':'no')}${kv('poc',r.x?'<span class="t-warn">public</span>':'none')}${kv('published',r.d)}${kv('summary',`<span class="t-dim" style="white-space:normal">${esc(r.t)}</span>`)}${kv('watching',ST.watch.has(r.id)?'★ yes':'no <span class="t-dim">(watch '+r.id+')</span>')}</div>`)}
+    else print(`<div class="tgrid">${kv('id',`<span data-cve="${r.id}" style="cursor:pointer;text-decoration:underline">${r.id}</span>`)}${kv('severity',`<span style="color:var(--${sevc(r.s)})">${SEV[r.s][1]}</span>${r.c>0?' '+(+r.c).toFixed(1):''}`)}${kv('priority','P'+r.P[0]+' '+esc(r.P[1]))}${kv('epss',r.e!=null?(r.e*100).toFixed(2)+'%':'n/a')}${kv('kev',r.k?'<span class="t-err">yes</span>':'no')}${kv('poc',r.x?'<span class="t-warn">public</span>':'none')}${kv('maturity',`<span class="${r.L>=2?'t-err':r.L?'t-warn':''}">${LADDER[r.L].toLowerCase()}</span>${r.m?' · msf '+r.m:''}${r.n?' · nuclei '+r.n:''}${r.g?' · github '+r.g:''}`)}${r.b?kv('buzz',r.b+'/100'):''}${kv('patch',r.f?'linked':'<span class="t-warn">none linked</span>')}${kv('published',r.d)}${kv('summary',`<span class="t-dim" style="white-space:normal">${esc(r.t)}</span>`)}${kv('watching',ST.watch.has(r.id)?'★ yes':'no <span class="t-dim">(watch '+r.id+')</span>')}</div>`)}
   else if(/^(search|grep)(\s|$)/.test(lc)){const q=c.replace(/^\S+\s*/,'');if(!q){print(`<div class="ln">usage: search <span class="t-dim">kev:yes epss>0.5 vendor:apache</span></div>`)}else{const m=rows.filter(parseQ(q)).sort((a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0));
     print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">PRIO</span><span class="t-dim">SUMMARY</span>${m.slice(0,10).map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span style="color:var(--${r.P[0]===1?'crit':r.P[0]===2?'high':'ink3'})">P${r.P[0]}</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${m.length} match${m.length===1?'':'es'}${m.length>10?', showing 10':''}</div>`)}}
   else if(/^(un)?watch(\s|$)/.test(lc)){const id=(c.split(' ')[1]||'').toUpperCase();const un=lc.startsWith('un');
@@ -406,7 +553,7 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
   else if(/^export(\s|$)/.test(lc)){const kind=lc.includes('json')?'json':'csv';const m=rows.filter(parseQ(c.split(' ').slice(2).join(' ')));exportRows(m,kind);print(`<div class="ln">wrote subzer0-${D.gen.slice(0,10)}.${kind} <span class="t-dim">(${m.length} rows)</span></div>`)}
   else if(lc==='whoami')print(`<div class="ln">user</div>`);
   else if(lc==='date')print(`<div class="ln">${new Date().toUTCString()}</div>`);
-  else if(lc==='ls')print(`<div class="ln"><span class="t-ice">snapshot/</span>   <span class="t-ice">shards/</span>   manifest.json   epss.json   kev.json   <span class="t-ok">${CMDS.map(x=>x[0].slice(2)).filter(x=>x!=='clear').join('   ')}</span></div>`);
+  else if(lc==='ls')print(`<div class="ln"><span class="t-ice">snapshot/</span>   <span class="t-ice">shards/</span>   manifest.json   epss.json   kev.json${D.intel?'   intel.json':''}   <span class="t-ok">${CMDS.map(x=>x[0].slice(2)).filter(x=>x!=='clear').join('   ')}</span></div>`);
   else if(lc==='uname -a'||lc==='uname')print(`<div class="ln">SubZer0 tty1 2.0.0-zero #1 SMP ${D.gen.slice(0,10)} static-export web/wasm GNU/Browser</div>`);
   else if(lc==='history')print(hist.map((h,i)=>`<div class="ln"><span class="t-dim">${String(i+1).padStart(4,' ')}</span>  ${esc(h)}</div>`).join(''));
   else if(lc==='banner')print(`<pre class="banner">${BANNER}</pre>`),sizeBanner();
@@ -424,7 +571,7 @@ function tick(){const s=dur(nextRun()-Date.now());const n=document.getElementByI
 async function poll(){if(polling)return;polling=true;lastPoll=Date.now();
   try{const m=await loadManifest();if(m.generated_at===D.gen)return;const old=new Set(rows.map(r=>r.id)),oldK=new Set(rows.filter(r=>r.k).map(r=>r.id));
     const x=await loadAll(m);adopt(x);REC.clear();EPSS=null;
-    const fresh=rows.filter(r=>!old.has(r.id)),newK=rows.filter(r=>r.k&&!oldK.has(r.id));
+    const fresh=rows.filter(r=>!old.has(r.id)),newK=rows.filter(r=>r.k&&!oldK.has(r.id));FRESH=new Set(fresh.map(r=>r.id));
     rerender();announce(fresh,newK);setHealth(true)}
   catch(e){setHealth(false,e.message)}finally{polling=false}}
 function setHealth(ok,msg){const l=document.querySelector('.live');if(!l)return;l.classList.toggle('bad',!ok);l.title=ok?'data verified':'last check failed: '+msg}
@@ -439,13 +586,16 @@ function live(){tick();setInterval(tick,1000);document.addEventListener('visibil
 /* ---------- boot ---------- */
 function bootError(e){document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:120px"><span class="chip crit">Integrity</span><div class="credit-name" style="font-size:36px;margin:16px 0 10px">Couldn't verify the data</div>SubZer0 won't show anything it can't check. ${esc(e.message)}<br><br><button class="btn primary" id="retry">Try again</button></div></div>`;document.getElementById('retry').onclick=()=>location.reload()}
 function route(){const rel=location.pathname.startsWith(BASE.pathname)?location.pathname.slice(BASE.pathname.length):'';const m=rel.match(/^cve\/(CVE-\d{4}-\d{4,})\/?$/i);
-  return {tab:Math.max(0,SLUG.indexOf(rel.replace(/\/$/,''))),cve:m?m[1].toUpperCase():null}}
+  const clean=rel.replace(/\/$/,'').replace(/^index\.html$/,''),tab=SLUG.indexOf(clean);
+  return {tab:Math.max(0,tab),cve:m?m[1].toUpperCase():null,page:clean==='about'?'about':!m&&tab<0?'404':null}}
 (async()=>{renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
   document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;
   try{const m=await loadManifest();adopt(await loadAll(m))}catch(e){bootError(e);return}
   briefing();research();dossierTab();terminal();live();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
   if(R.cve){history.replaceState(null,'',routeURL());openSheet(R.cve)}
+  else if(R.page==='about'){history.replaceState(null,'',routeURL());openPage('about')}
+  else if(R.page==='404'){const bad=location.href;NF_PATH=location.pathname.slice(BASE.pathname.length);history.replaceState(null,'',routeURL());openPage('404');history.replaceState({sheet:1},'',bad)}
   addEventListener('resize',renderNav);document.fonts&&document.fonts.ready.then(renderNav);
   if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register(new URL('sw.js',BASE).href,{scope:BASE.pathname}).catch(()=>{});
 })();

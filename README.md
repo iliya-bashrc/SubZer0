@@ -59,10 +59,13 @@ of CVEs that genuinely deserve your attention today.
 ## ⚡ Features
 
 - **Briefing** — what got published in the last 30 days, a patch queue sorted by real-world risk, and a live feed that refreshes by itself when a new snapshot lands
-- **Research** — search with a small query language: `kev:yes`, `poc:yes`, `epss>50`, `cvss>=9`, `sev:critical`, `vendor:fortinet`, `after:2026-10-01`, `is:watched`, `-wordpress`, `"exact phrase"`. Export what you see as CSV or JSON, or copy a link to the exact view
+- **Exploit intel** — for every CVE in the window: GitHub PoCs (with warnings for forks, bait and brand-new repos), Metasploit modules, Nuclei templates, CISA SSVC from Vulnrichment (plus CISA's CVSS when NVD hasn't scored it yet), a chatter score from Bluesky, Mastodon, Reddit and Hacker News, and whether a fix is linked. All of it rolls up into an **exploit maturity ladder**: none → public PoC → weaponized → exploited in the wild
+- **Priority you can explain** — P1 *patch now*: on KEV, SSVC "active", weaponized with CVSS ≥ 7 or EPSS ≥ 10%, or a public PoC with EPSS ≥ 10%. P2 *this week*: CVSS ≥ 9, CVSS ≥ 7 with a PoC or EPSS ≥ 5%, anything weaponized, or automatable with total impact. P3: CVSS ≥ 7. P4: the rest. The same rules drive the site, the RSS feed and Telegram
+- **Research** — search with a small query language: `kev:yes`, `poc:yes`, `msf:yes`, `nuclei:yes`, `gh:yes`, `buzz>20`, `patch:no`, `ssvc:active`, `auto:yes`, `maturity>=2`, `epss>50`, `cvss>=9`, `sev:critical`, `vendor:fortinet`, `after:2026-10-01`, `is:watched`, `-wordpress`, `"exact phrase"`. Views for Patch now, Trending, Weaponized and No patch yet. Export what you see as CSV or JSON (intel fields included), or copy a link to the exact view
 - **My stack & watchlist** — tell it what you run and it pins those CVEs for you. Star CVEs to watch them. Both stay in your browser, nothing is sent anywhere
 - **Dossier per CVE** — description, CVSS vector, CWE, EPSS with its trend over time (live from FIRST), KEV due date, affected products, references. Every CVE has its own link: `/SubZer0/cve/CVE-2026-12345`
-- **Terminal** — a real-feeling shell: `cve <id>`, `search kev:yes`, `watch`, `stack add nginx`, `export`, tab completion, history
+- **Terminal** — a real-feeling shell: `cve <id>`, `search kev:yes`, `trending`, `weaponized`, `watch`, `stack add nginx`, `export`, tab completion, history
+- **Moves the way you do** — swipe between tabs with a finger, drag with the mouse, scroll sideways on a trackpad, or use ← → and 1–4. Press `?` for every shortcut. Short decode/typing effects run once per visit and switch off with *reduce motion*
 - **Feeds** — RSS of "patch now" CVEs at [`/feed.xml`](https://iliya-bashrc.github.io/SubZer0/feed.xml) and a small JSON summary at [`/api/latest.json`](https://iliya-bashrc.github.io/SubZer0/api/latest.json)
 - **Telegram alerts** — after each refresh, CVEs that just became "patch now" can be posted to a channel (set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` repo secrets; without them the step does nothing)
 - **Works offline** — a service worker keeps the app shell and the last verified snapshot
@@ -91,6 +94,8 @@ A cache-buster retry absorbs CDN/browser cache skew between deploys.
 ```
 every 6h ──► fetch NVD + GHSA + CISA KEV + EPSS + Exploit-DB
          ──► validate, normalize, merge (fail-closed: any core feed down = keep last good)
+         ──► add exploit intel: PoC-in-GitHub, Metasploit, Nuclei, CISA Vulnrichment,
+             Bluesky / Mastodon / Reddit / HN (a failed source keeps its last good data)
          ──► stage → revalidate → atomic publish
          ──► commit ──► auto-deploy ──► live site
 ```
@@ -119,6 +124,7 @@ Regenerate the data snapshot (optional, ~10 min):
 
 ```bash
 python scripts/update_data.py --output-dir snapshot          # full refresh
+python scripts/enrich_intel.py --snapshot snapshot           # exploit intel (~3 min)
 python scripts/verify_data_snapshot.py --root snapshot       # validate
 python -m unittest discover -s tests                         # tests
 ```
@@ -130,6 +136,7 @@ python -m unittest discover -s tests                         # tests
 ├── public/snapshot/        # published data (manifest + day shards + index artifacts)
 ├── scripts/
 │   ├── update_data.py          # 5-source ingestion + validation pipeline
+│   ├── enrich_intel.py         # exploit intel + chatter → data/intel.json
 │   ├── verify_data_snapshot.py # offline integrity validator
 │   ├── build_site.py           # assembles _site/ for Pages, writes feed.xml + api/latest.json
 │   ├── notify_telegram.py      # posts newly urgent CVEs after a refresh

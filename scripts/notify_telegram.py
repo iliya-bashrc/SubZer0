@@ -2,7 +2,8 @@
 """Post newly urgent CVEs to Telegram after a snapshot refresh.
 
 Compares the previous search index (from git) with the new one and announces CVEs that
-just became "patch now": newly added to CISA KEV, or public exploit code with a high EPSS.
+just became "patch now": CISA KEV or SSVC "active", weaponized in Metasploit/Nuclei, or a
+public exploit with a high EPSS.
 Does nothing when TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured.
 """
 from __future__ import annotations
@@ -12,32 +13,49 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 from html import escape
 from pathlib import Path
 
-from build_site import SITE_URL, load_index, priority
+from build_site import SITE_URL, load_index, priority, priority_reason
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_ITEMS = 10
 
 
-def previous_rows(rev: str, index_path: str) -> tuple[dict[str, list], set[str]]:
-    def show(path: str) -> str:
-        return subprocess.run(["git", "show", f"{rev}:{path}"], cwd=ROOT, check=True, capture_output=True, text=True).stdout
-    try:
-        manifest = json.loads(show("public/snapshot/manifest.json"))
-        rows = json.loads(show("public/snapshot/" + manifest["search_index"]["path"]))
-    except (subprocess.CalledProcessError, KeyError, json.JSONDecodeError):
-        return {}, set()
-    return {r[0]: r for r in rows if isinstance(r, list) and r}, set(manifest.get("poc_ids") or [])
+def previous_rows(rev: str) -> tuple[dict[str, list], dict]:
+    """Rows and priority context of the snapshot committed at ``rev`` (empty when unavailable)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        def show(path: str) -> bytes:
+            return subprocess.run(["git", "show", f"{rev}:public/snapshot/{path}"], cwd=ROOT, check=True, capture_output=True).stdout
+
+        try:
+            manifest = json.loads(show("manifest.json"))
+            for meta in (manifest.get("search_index"), manifest.get("poc_ids"), manifest.get("intel")):
+                if isinstance(meta, dict) and meta.get("path"):
+                    target = root / str(meta["path"])
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        target.write_bytes(show(str(meta["path"])))
+                    except subprocess.CalledProcessError:
+                        pass
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            _, rows, ctx = load_index(root)
+        except (subprocess.CalledProcessError, KeyError, ValueError, OSError):
+            return {}, {}
+    return {r[0]: r for r in rows if isinstance(r, list) and r}, ctx
 
 
-def message(new: list[list], poc: set[str]) -> str:
+def message(new: list[list], ctx: dict) -> str:
     lines = [f"<b>SubZer0 · {len(new)} new to patch now</b>"]
     for r in new[:MAX_ITEMS]:
-        why = "on CISA KEV" if r[4] else "public exploit, EPSS " + f"{(r[5] or 0) * 100:.0f}%"
+        why = priority_reason(r, ctx)[1]
+        if why == "public exploit, high EPSS":
+            why = f"public exploit, EPSS {(r[5] or 0) * 100:.0f}%"
         score = f" · CVSS {r[3]:.1f}" if r[3] else ""
         lines.append(f'\n<a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> — {escape(str(r[1])[:120])}\n<i>{why}{score}</i>')
     if len(new) > MAX_ITEMS:
@@ -56,17 +74,17 @@ def main() -> int:
         print("Telegram is not configured; skipping.")
         return 0
 
-    manifest, rows, poc = load_index(ROOT / "public" / "snapshot")
-    old, old_poc = previous_rows(args.previous, manifest["search_index"]["path"])
+    _, rows, ctx = load_index(ROOT / "public" / "snapshot")
+    old, old_ctx = previous_rows(args.previous)
     if not old:
         print("No previous snapshot to compare with; skipping so the channel is not flooded.")
         return 0
-    new = [r for r in rows if priority(r, poc) == 1 and (r[0] not in old or priority(old[r[0]], old_poc) != 1)]
+    new = [r for r in rows if priority(r, ctx) == 1 and (r[0] not in old or priority(old[r[0]], old_ctx) != 1)]
     new.sort(key=lambda r: (bool(r[4]), r[5] or 0), reverse=True)
     if not new:
         print("Nothing newly urgent.")
         return 0
-    text = message(new, poc)
+    text = message(new, ctx)
     if args.dry_run:
         print(text)
         return 0

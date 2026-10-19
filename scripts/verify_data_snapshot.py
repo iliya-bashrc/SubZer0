@@ -36,6 +36,7 @@ MAX_SHARD_BYTES = 16 * 1024 * 1024
 MAX_OVERVIEW_BYTES = 64 * 1024
 MAX_OVERVIEW_RECORDS = 50
 MAX_EPSS_BYTES = 4 * 1024 * 1024
+MAX_INTEL_BYTES = 12 * 1024 * 1024
 MAX_SHARDS = 31
 MAX_RECORDS = 50_000
 MAX_TITLE_CHARS = 512
@@ -319,6 +320,85 @@ def _validate_record(record: Any, expected_day: str, label: str) -> dict[str, An
         _text(kev.get("required_action"), f"{label}.kev.required_action", MAX_TEXT_CHARS, allow_empty=True, multiline=True)
         _text(kev.get("ransomware"), f"{label}.kev.ransomware", 64, allow_empty=True)
     return record
+
+
+INTEL_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+INTEL_MSF_RE = re.compile(r"^(?:exploit|auxiliary|post|payload|evasion|encoder|nop)/[a-z0-9_/.-]{1,200}$")
+INTEL_NUCLEI_RE = re.compile(r"^[A-Za-z0-9_/.-]{1,200}\.yaml$")
+INTEL_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+INTEL_VECTOR_RE = re.compile(r"^CVSS:[34]\.[01](?:/[A-Za-z]{1,3}:[A-Za-z0-9]{1,3}){3,40}$")
+INTEL_FLAGS = {"fork", "nodesc", "fresh", "bait", "known", "newacct"}
+INTEL_LINK_HOSTS = {"bsky": "bsky.app", "masto": "mastodon.social", "reddit": "www.reddit.com", "hn": "news.ycombinator.com"}
+
+
+def _intel_fail(cve: str, what: str) -> None:
+    raise SnapshotValidationError(f"intel.json entry {cve} has an invalid {what}")
+
+
+def _opt_date(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and bool(INTEL_DATE_RE.fullmatch(value)))
+
+
+def _small_int(value: Any, maximum: int = 10_000_000) -> bool:
+    return type(value) is int and 0 <= value <= maximum
+
+
+def _validate_intel(intel: Any, all_ids: set[str]) -> None:
+    """Strict shape check: every string that the browser may render is bounded and pattern-checked."""
+    if not isinstance(intel, dict) or intel.get("schema_version") != 1 or not isinstance(intel.get("cves"), dict):
+        raise SnapshotValidationError("intel.json must be a schema-v1 object with a cves map")
+    sources = intel.get("sources")
+    if not isinstance(sources, list) or len(sources) > 16:
+        raise SnapshotValidationError("intel.json sources must be a short list")
+    for item in sources:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or type(item.get("ok")) is not bool:
+            raise SnapshotValidationError("intel.json has a malformed source entry")
+        _text(item["name"], "intel source name", 64)
+        if "note" in item:
+            _text(item["note"], "intel source note", 400, allow_empty=True)
+    for cve, entry in intel["cves"].items():
+        if cve not in all_ids or not isinstance(entry, dict) or not entry:
+            raise SnapshotValidationError(f"intel.json has an unknown or empty CVE entry: {cve!r}")
+        if set(entry) - {"g", "m", "n", "s", "b", "f", "t"}:
+            _intel_fail(cve, "key set")
+        for row in entry.get("g", []) if isinstance(entry.get("g", []), list) else _intel_fail(cve, "PoC list"):
+            if (not isinstance(row, list) or len(row) != 6 or not isinstance(row[0], str) or not INTEL_REPO_RE.fullmatch(row[0])
+                    or not _small_int(row[1]) or not _small_int(row[2]) or not _opt_date(row[3])
+                    or not isinstance(row[4], str) or len(row[4]) > 140 or not isinstance(row[5], list) or set(row[5]) - INTEL_FLAGS):
+                _intel_fail(cve, "PoC row")
+        for row in entry.get("m", []) if isinstance(entry.get("m", []), list) else _intel_fail(cve, "Metasploit list"):
+            if (not isinstance(row, list) or len(row) != 7 or not isinstance(row[0], str) or not INTEL_MSF_RE.fullmatch(row[0])
+                    or not isinstance(row[1], str) or len(row[1]) > 20 or not (row[2] is None or _small_int(row[2], 1000))
+                    or not _opt_date(row[3]) or not _opt_date(row[4]) or not isinstance(row[5], str) or len(row[5]) > 140
+                    or type(row[6]) is not bool):
+                _intel_fail(cve, "Metasploit row")
+        for row in entry.get("n", []) if isinstance(entry.get("n", []), list) else _intel_fail(cve, "Nuclei list"):
+            if (not isinstance(row, list) or len(row) != 3 or not isinstance(row[0], str) or not INTEL_NUCLEI_RE.fullmatch(row[0])
+                    or not isinstance(row[1], str) or len(row[1]) > 12 or not isinstance(row[2], str) or len(row[2]) > 140):
+                _intel_fail(cve, "Nuclei row")
+        if "s" in entry:
+            row = entry["s"]
+            if (not isinstance(row, list) or len(row) != 5 or row[0] not in (None, "none", "poc", "active") or row[1] not in (None, "yes", "no")
+                    or row[2] not in (None, "partial", "total")
+                    or not (row[3] is None or (isinstance(row[3], (int, float)) and math.isfinite(row[3]) and 0 < row[3] <= 10))
+                    or not (row[4] is None or (isinstance(row[4], str) and INTEL_VECTOR_RE.fullmatch(row[4])))):
+                _intel_fail(cve, "SSVC row")
+        if "b" in entry:
+            row = entry["b"]
+            if not isinstance(row, list) or len(row) != 7 or not all(_small_int(v, 1_000_000) for v in row[:6]) or row[0] > 100 or not isinstance(row[6], list) or len(row[6]) > 3:
+                _intel_fail(cve, "chatter row")
+            for link in row[6]:
+                if not isinstance(link, list) or len(link) != 3 or link[0] not in INTEL_LINK_HOSTS or not _opt_date(link[2]):
+                    _intel_fail(cve, "chatter link")
+                url = _safe_url(link[1], f"intel {cve} link")
+                if urlsplit(url).hostname != INTEL_LINK_HOSTS[link[0]]:
+                    _intel_fail(cve, "chatter link host")
+        if "f" in entry and entry["f"] != 1:
+            _intel_fail(cve, "patch flag")
+        if "t" in entry:
+            t = entry["t"]
+            if not isinstance(t, dict) or set(t) - {"poc", "msf", "nuclei", "buzz", "active"} or not all(isinstance(v, str) and INTEL_DATE_RE.fullmatch(v) for v in t.values()):
+                _intel_fail(cve, "timeline")
 
 
 def _manifest_count(mapping: Any, key: str, maximum: int = MAX_RECORDS) -> int:
@@ -617,6 +697,20 @@ def validate_snapshot(root: Path = DEFAULT_ROOT, *, max_age_hours: float | None 
             raise SnapshotValidationError(f"manifest.{artifact_key}.sha256 mismatch")
         declared_files.add(artifact_path)
         snapshot_bytes += len(artifact_raw)
+
+    intel_meta = manifest.get("intel")
+    if intel_meta is not None:
+        if not isinstance(intel_meta, dict) or intel_meta.get("path") != "data/intel.json":
+            raise SnapshotValidationError("manifest.intel.path is not the allowed intel artifact")
+        intel_raw = _contained_bytes(root, "data/intel.json", MAX_INTEL_BYTES)
+        if intel_meta.get("bytes") != len(intel_raw) or intel_meta.get("sha256") != hashlib.sha256(intel_raw).hexdigest():
+            raise SnapshotValidationError("manifest.intel bytes/sha256 mismatch")
+        intel = _loads(intel_raw, "data/intel.json")
+        _validate_intel(intel, all_ids)
+        if intel_meta.get("count") != len(intel["cves"]):
+            raise SnapshotValidationError("manifest.intel.count does not match intel.json")
+        declared_files.add("data/intel.json")
+        snapshot_bytes += len(intel_raw)
 
     if snapshot_bytes > MAX_SNAPSHOT_BYTES:
         raise SnapshotValidationError(f"Static snapshot exceeds its {MAX_SNAPSHOT_BYTES}-byte total limit")

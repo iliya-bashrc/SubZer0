@@ -118,6 +118,9 @@ def _resources(root: Path, manifest: dict[str, Any]) -> list[tuple[str, Path, in
     for key, limit in (("overview", verifier.MAX_OVERVIEW_BYTES), ("epss", verifier.MAX_EPSS_BYTES)):
         item = manifest[key]
         resources.append(("snapshot/" + item["path"], root / item["path"], limit, item["sha256"]))
+    intel = manifest.get("intel")
+    if isinstance(intel, dict) and intel.get("path"):
+        resources.append(("snapshot/" + intel["path"], root / intel["path"], verifier.MAX_INTEL_BYTES, intel["sha256"]))
     repo_root = root.parent
     for name in SITE_ASSETS:
         path = repo_root / name
