@@ -17,7 +17,6 @@
 **[Priority rules](#-priority-you-can-explain)** ·
 **[Query language](#-query-language)** ·
 **[Pipeline](#-the-machine)** ·
-**[فارسی](#-فارسی)** ·
 **[Telegram](#-community)**
 
 </div>
@@ -223,30 +222,6 @@ python -m unittest discover -s tests                         # tests
 └── .github/workflows/        checks.yml · update-snapshot.yml · deploy.yml
 ```
 </details>
-
----
-
-## 🌐 فارسی
-
-<div dir="rtl">
-
-**SubZer0** یک رادار CVE است که هر ۶ ساعت خودش آپدیت می‌شود.
-
-همه‌ی آسیب‌پذیری‌های ۳۰ روز اخیر (حدود ۱۷ هزار مورد) را از پنج منبع اصلی جمع می‌کند: NVD، GitHub Advisory، CISA KEV، EPSS و Exploit-DB.
-
-بعد اطلاعات اکسپلویت را رویش می‌گذارد: PoC در گیت‌هاب، ماژول Metasploit، قالب Nuclei، تصمیم SSVC و میزان بحث در شبکه‌های اجتماعی.
-
-خروجی: یک لیست کوتاه و قابل‌توضیح — **اول چه چیزی را پچ کنی**.
-
-- **بدون سرور** — فقط GitHub Pages و GitHub Actions
-- **اولویت‌بندی شفاف** — P1 تا P4 با قوانین ساده و قابل خواندن
-- **امنیت داده** — هش SHA-256 هر فایل داخل مرورگر چک می‌شود؛ اگر یک بایت هم فرق کند، چیزی نمایش داده نمی‌شود
-- **حریم خصوصی** — لیست تکنولوژی‌ها و واچ‌لیست شما فقط روی دستگاه خودتان می‌ماند
-- **ترمینال، جست‌وجوی پیشرفته، صفحه‌ی اختصاصی هر CVE، خروجی CSV/JSON، RSS و هشدار تلگرام**
-
-👈 [همین حالا باز کنید](https://iliya-bashrc.github.io/SubZer0/)
-
-</div>
 
 ---
 

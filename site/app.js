@@ -148,16 +148,11 @@ function sinceLast(){let prev=LS.get('seen',null);const ids=rows.map(r=>r.id),ke
   return `<br><span style="color:var(--strip)">since your last visit: ${n} new, ${k} added to KEV</span>`}
 function miniList(list,meta){return list.length?list.map(r=>`<button class="mini" data-cve="${r.id}"><span class="id">${r.id}</span>${chip(r.s)}<span class="t">${r.T}</span><span class="m">${meta(r)}</span></button>`).join(''):'<div class="ms-empty" style="border:0;padding:18px 0">Nothing here right now.</div>'}
 const firstSeen=r=>{const t=r.I&&r.I.t||{};return [t.msf,t.nuclei].filter(x=>typeof x==='string').sort()[0]||''};
-function credits(){const y=Math.max(2026,new Date().getUTCFullYear());
+function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
-    <div class="cr-roll"><div class="cr-h">SubZer0</div><div class="cr-sub">a CVE briefing that tells you what to patch first</div>
-      <dl><dt>Made by</dt><dd><a href="https://t.me/BugCod3" target="_blank" rel="noopener noreferrer">@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" target="_blank" rel="noopener noreferrer">@RootAccessClub</a></dd>
-      <dt>Data</dt><dd>NVD · GitHub Advisories · CISA KEV · FIRST EPSS · Exploit-DB${D.intel?' · CISA Vulnrichment · PoC-in-GitHub · Metasploit · Nuclei · Bluesky · Mastodon · Reddit · Hacker News':''}</dd>
-      <dt>Feeds</dt><dd><a href="feed.xml">RSS</a> · <a href="api/latest.json">JSON API</a> · <a href="snapshot/manifest.json">signed manifest</a></dd>
-      <dt>Code</dt><dd><a href="https://github.com/iliya-bashrc/SubZer0" target="_blank" rel="noopener noreferrer">github.com/iliya-bashrc/SubZer0</a></dd>
-      <dt>More</dt><dd><a href="about" data-page="about">About &amp; how priority works</a> · <a href="#" data-page="keys">Keyboard shortcuts <kbd>?</kbd></a></dd></dl>
-      <p class="cr-note">For learning and defense only. Exploit links are listed so you can judge risk, not so you can break into things you don't own. GitHub PoCs are untrusted code; some are fake and carry malware.</p>
-      <div class="cr-c">© ${y} SubZer0 · no tracking, no cookies, every file SHA-256 checked</div></div></footer>`}
+    <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
+      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="feed.xml">RSS</a><a href="api/latest.json">API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
+    <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
 function briefing(){
   const W=rows.filter(r=>r.w);
   const T=D.totals,q=rows.filter(r=>r.P[0]<=2).sort((a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0)).slice(0,7);
