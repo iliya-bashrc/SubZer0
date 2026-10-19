@@ -61,6 +61,17 @@ async function epssSeries(id){try{const r=await fetch(`https://api.first.org/dat
   return pts.length>1?pts:null}catch{return null}}
 
 /* ---------- glitch canvas (pixel-sort, VisionQuest credits palette) ---------- */
+/* ---------- frost: procedural ice cracks creeping in from the edges, drawn once ---------- */
+function frost(svg,seed){if(!svg)return;const w=svg.clientWidth,h=svg.clientHeight;if(!w||!h)return;
+  let s=seed;const R=()=>(s=(s*16807)%2147483647)/2147483647;let out='';
+  const grow=(x,y,a,L,d,t)=>{const x2=x+Math.cos(a)*L,y2=y+Math.sin(a)*L;
+    out+=`<line x1="${x|0}" y1="${y|0}" x2="${x2|0}" y2="${y2|0}" pathLength="1" stroke-width="${Math.max(.5,1.8-d*.45).toFixed(1)}" style="animation-delay:${(.5+t*1.6).toFixed(2)}s"/>`;
+    if(d>=3)return;for(let k=0;k<2;k++){const f=.45+R()*.5;grow(x+(x2-x)*f,y+(y2-y)*f,a+(R()<.5?-1:1)*(.5+R()*.6),L*(.45+R()*.25),d+1,t+f*.25)}};
+  const per=2*(w+h),n=Math.round(Math.min(26,per/120));
+  for(let i=0;i<n;i++){let p=(i+R())/n*per,x,y,a;
+    if(p<w){x=p;y=0;a=Math.PI/2}else if(p<w+h){x=w;y=p-w;a=Math.PI}else if(p<2*w+h){x=w-(p-w-h);y=h;a=-Math.PI/2}else{x=0;y=h-(p-2*w-h);a=0}
+    grow(x,y,a+(R()-.5)*1.1,Math.min(w,h)*(.12+R()*.15),0,R()*.2)}
+  svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.innerHTML=out;if(FX.reduce)svg.classList.add('still')}
 function glitch(cv,seed,tint){
   const dpr=Math.min(2,devicePixelRatio||1),w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;
   const g=cv.getContext('2d');g.scale(dpr,dpr);let s=seed;const R=()=>(s=(s*16807)%2147483647)/2147483647;
@@ -162,7 +173,7 @@ function briefing(){
     const rest=(d.n-d.c-d.h-d.m-d.l)/max*190;if(rest>0){y-=rest;bars+=`<rect x="${i*bw+bw*.18}%" y="${y}" width="${bw*.64}%" height="${rest}" fill="#3A3F46"/>`}
     if(d.x)bars+=`<rect x="${i*bw+bw*.18}%" y="${y-8}" width="${bw*.64}%" height="3" fill="var(--ink)"/>`});
   document.getElementById('p0').innerHTML=`<div class="wrap">
-  <div class="hero"><canvas id="hc"></canvas><div class="strip"></div>
+  <div class="hero"><canvas id="hc"></canvas><div class="ice"></div><svg class="frost" id="hfrost" aria-hidden="true"></svg><div class="strip"></div>
     <div class="hero-copy"><span class="chip crit">Last 30 days</span>
       <div class="credit-name"><span id="heroN">${fmt(T.cves)}</span> <span>CVEs</span></div>
       <div class="sub">${fmt(T.critical)} critical, ${T.known_exploited} already being exploited, ${fmt(D.poc)} with exploit code out in public${W.length?`, ${W.length} weaponized in Metasploit or Nuclei`:''}.</div>
@@ -203,7 +214,7 @@ function briefing(){
       ${D.isrc.map(s=>`<div class="src${s.ok?'':' bad'}"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${fmt(s.v)}</div><div class="s">${s.ok?'exploit intel':'<span style="color:var(--high)" title="'+esc(s.note)+'">kept last good data</span>'}</div></div>`).join('')}</div></section>
   ${credits()}
   </div>`;
-  requestAnimationFrame(()=>glitch(document.getElementById('hc'),7));renderMyStack();
+  requestAnimationFrame(()=>{glitch(document.getElementById('hc'),7);frost(document.getElementById('hfrost'),11)});renderMyStack();
   const p0=document.getElementById('p0');watchHeads(p0);
   p0.querySelectorAll('#feed .feed-item.new .t').forEach(t=>typeIn(t,900));
   if(FX.once('hero')){decode(document.getElementById('heroN'),900);typeIn(document.getElementById('heroSha'),1100)}
