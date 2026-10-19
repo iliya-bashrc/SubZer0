@@ -347,7 +347,7 @@ sup{font-size:.6em;color:var(--ink3);margin-left:1px}
   .hero{height:300px;margin:0 -16px}
   .hero canvas{-webkit-mask-image:linear-gradient(180deg,#000 10%,transparent 75%);mask-image:linear-gradient(180deg,#000 10%,transparent 75%);opacity:.75}
   .hero::after{background:linear-gradient(0deg,var(--void) 25%,transparent 80%)}
-  .hero .strip{right:24px;width:10px}
+  .hero .strip{display:none}
   .hero-copy{left:16px;right:16px;bottom:24px}
   .hero-copy .credit-name{font-size:40px}
   .hero-copy .sub{font-size:14px}
