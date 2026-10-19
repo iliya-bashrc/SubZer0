@@ -432,7 +432,9 @@ def patch_flags(snapshot: Path, manifest: dict) -> dict[str, int]:
     for d in manifest["days"]:
         for rec in json.loads((snapshot / d["path"]).read_text(encoding="utf-8")):
             tags = {str(t).lower() for ref in rec.get("refs") or [] for t in ref.get("tags") or []}
-            if "patch" in tags or "vendor advisory" in tags or "release notes" in tags or rec.get("advisories"):
+            urls = [str(ref.get("url") or "") for ref in rec.get("refs") or []]
+            fix_url = any(re.search(r"github\.com/[^/]+/[^/]+/(?:commit/[0-9a-f]{7,}|releases/tag/)", u, re.I) for u in urls)
+            if "patch" in tags or "vendor advisory" in tags or "release notes" in tags or rec.get("advisories") or fix_url:
                 out[rec["id"]] = 1
     return out
 

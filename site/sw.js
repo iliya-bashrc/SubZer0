@@ -1,6 +1,6 @@
-/* SubZer0 service worker: shell cache-first, snapshot network-first. */
-const SHELL = 'subzer0-shell-v1';
-const DATA = 'subzer0-data-v1';
+/* SubZer0 service worker: network first for everything, cache as the offline fallback. */
+const SHELL = 'subzer0-shell-v2';
+const DATA = 'subzer0-data-v2';
 const ASSETS = ['./', 'index.html', 'app.css', 'app.js', 'icon.svg', 'manifest.webmanifest',
   'fonts/ChakraPetch-500.woff2', 'fonts/ChakraPetch-600.woff2', 'fonts/ChakraPetch-700.woff2',
   'fonts/Inter.woff2', 'fonts/JetBrainsMono.woff2'];
@@ -38,8 +38,9 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  e.respondWith(caches.match(req, { ignoreSearch: true }).then(hit => hit || fetch(req).then(res => {
+  // Shell: network first so a new deploy is picked up right away; the cache is the offline fallback.
+  e.respondWith(fetch(req).then(res => {
     if (res.ok && ASSETS.includes(path)) { const copy = res.clone(); caches.open(SHELL).then(c => c.put(req, copy)); }
     return res;
-  })));
+  }).catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || Response.error())));
 });
