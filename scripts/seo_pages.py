@@ -112,15 +112,17 @@ def _facts_line(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: d
     return bits
 
 
-def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: dict | None, known: set) -> str:
+def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: dict | None, known: set, archived_at: str | None = None) -> str:
     cid = rec["id"]
     title = rec.get("title") or cid
     desc = rec.get("desc") or title
     kev = rec.get("kev") if isinstance(rec.get("kev"), dict) else None
-    out = [f'<article class="seo wrap" aria-label="{esc(cid)}">',
+    attr = f' data-archived="{esc(cid)}"' if archived_at else ""
+    out = [f'<article class="seo wrap"{attr} aria-label="{esc(cid)}">',
            f'<nav class="seo-crumbs" aria-label="Breadcrumb"><a href="./">SubZer0</a> › <a href="research">CVEs</a> › <span>{esc(cid)}</span></nav>',
            f'<h1 class="credit-name">{esc(cid)}</h1>',
            f'<p class="seo-lede">{esc(clip(title, 220))}</p>',
+           (f'<p class="seo-arch"><b>Archived.</b> This CVE has left SubZer0\'s live 30-day window. Signals below are as of {esc(str(archived_at)[:10])}; check the references for anything newer.</p>' if archived_at else ""),
            '<ul class="seo-facts">' + "".join(f"<li>{esc(b)}</li>" for b in _facts_line(rec, row, prio, fx)) + "</ul>"]
     if prio:
         out.append(f'<p class="seo-why"><b>Why {P_LABEL[prio[0]].split(" ")[0]}:</b> {esc(prio[1])}.</p>')

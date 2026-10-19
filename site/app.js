@@ -24,10 +24,13 @@ const REC=new Map();let EPSS=null;
 
 /* ---------- verified data layer ---------- */
 async function sha256Hex(buf){const d=await crypto.subtle.digest('SHA-256',buf);return [...new Uint8Array(d)].map(b=>b.toString(16).padStart(2,'0')).join('')}
-async function fetchBuf(url,max){const r=await fetch(url,{cache:'no-cache',credentials:'omit'});if(!r.ok)throw new Error(`${r.status} for ${url}`);const b=await r.arrayBuffer();if(b.byteLength>max)throw new Error('file too large: '+url);return b}
+async function fetchBuf(url,max){const r=await fetch(url,{cache:'no-cache',credentials:'omit'});if(!r.ok)throw new Error(`${r.status} for ${url}`);
+  if(!r.body||typeof BOOT==='undefined'||!BOOT.on()){const b=await r.arrayBuffer();if(b.byteLength>max)throw new Error('file too large: '+url);return b}
+  const rd=r.body.getReader(),parts=[];let n=0;for(;;){const {done,value}=await rd.read();if(done)break;n+=value.byteLength;if(n>max){rd.cancel().catch(()=>{});throw new Error('file too large: '+url)}parts.push(value);BOOT.got(value.byteLength)}
+  const out=new Uint8Array(n);let o=0;for(const v of parts){out.set(v,o);o+=v.byteLength}return out.buffer}
 async function fetchVerified(path,sha,max=8e6){if(!/^data\/[a-z0-9_.-]+\.json$/i.test(path)||!/^[0-9a-f]{64}$/i.test(sha))throw new Error('bad manifest entry: '+path);
   let b=await fetchBuf(SNAP+path,max);if((await sha256Hex(b))!==sha.toLowerCase()){b=await fetchBuf(SNAP+path+'?v='+sha.slice(0,12),max);if((await sha256Hex(b))!==sha.toLowerCase())throw new Error('integrity check failed: '+path)}
-  return JSON.parse(new TextDecoder().decode(b))}
+  if(typeof BOOT!=='undefined')BOOT.ok(path);return JSON.parse(new TextDecoder().decode(b))}
 async function loadManifest(){const r=await fetch(SNAP+'manifest.json',{cache:'no-store',credentials:'omit'});if(!r.ok)throw new Error('manifest '+r.status);const t=await r.text();if(t.length>2e6)throw new Error('manifest too large');
   const m=JSON.parse(t);if(!m||!Array.isArray(m.days)||!m.search_index||!m.generated_at)throw new Error('manifest has an unexpected shape');return m}
 async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[],
@@ -399,7 +402,7 @@ function intelHTML(r){const I=r.I;if(!I)return '';const out=[];
     <div class="tags" style="margin-top:12px">${[['Bluesky',bs],['Mastodon',ms],['Reddit',rd],['Hacker News',hn]].map(([n,v])=>`<span class="tag">${n} ${fmt(v)}</span>`).join('')}</div>
     ${arr(links).map(l=>{const u=safeUrl(l[1]);return u?`<a class="ref" href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow"><div style="min-width:0"><div class="d">${esc(new URL(u).host)} · ${esc(l[2]||'')}</div><div class="l">${{bsky:'Bluesky post',masto:'Mastodon post',reddit:'Reddit thread',hn:'Hacker News thread'}[l[0]]||'Post'}</div></div></a>`:''}).join('')}</section>`)}
   return out.join('')}
-async function fillDossier(el,id,inSheet){const r=BYID.get(id);if(!r){el.innerHTML=`<div class="empty"><b>${esc(id)}</b> isn't in the current 30-day snapshot.</div>`;return}
+async function fillDossier(el,id,inSheet){const r=BYID.get(id);if(!r){if(ARCH&&ARCH.id===id){el.innerHTML=(inSheet?'<button class="d-close" id="closeSheet">← Back · Esc</button>':'')+ARCH.html;const c=el.querySelector('#closeSheet');if(c)c.onclick=closeSheet;return}el.innerHTML=`<div class="empty"><b>${esc(id)}</b> isn't in the current 30-day snapshot.</div>`;return}
   el.innerHTML=dossierHTML(r,null,null,inSheet);paintDossier(el,inSheet);const t0=performance.now();const fx=()=>{if((inSheet||cur===2)&&performance.now()-t0<1200){decode(el.querySelector('[data-fx="id"]'),520,t0);typeIn(el.querySelector('[data-fx="why"]'),900,t0+150)}};fx();
   try{const [full,ep]=await Promise.all([getRecord(id),getEpss().then(s=>s[id]||null)]);if(el.dataset.id!==id)return;el.innerHTML=dossierHTML(r,full,ep,inSheet);paintDossier(el,inSheet);fx();watchHeads(el);
     if(r.e!=null)epssSeries(id).then(pts=>{const w=el.querySelector(`[data-spark="${id}"]`);if(!w||!pts)return;const mx=Math.max(...pts.map(p=>p[1]),.01);
@@ -412,7 +415,7 @@ function dossierTab(id){id=id||LS.get('last',null);if(!id||!BYID.has(id)){const 
 /* sheet with swipe-back + history */
 const sheet=document.getElementById('sheet'),back=document.getElementById('back');let sheetOpen=false,lastFocus=null;
 function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
-  LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);{const t=(BYID.get(id)||{}).t||'';document.title=id+(t?': '+(t.length>70?t.slice(0,69)+'…':t):' · SubZer0')};setTimeout(()=>sheet.focus({preventScroll:true}),50)}
+  LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);{const t=(BYID.get(id)||(ARCH&&ARCH.id===id?ARCH:{})).t||'';document.title=id+(t?': '+(t.length>70?t.slice(0,69)+'…':t):' · SubZer0')};setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};
 function pageHTML(kind){const close='<button class="d-close" id="closeSheet">← Back · Esc</button>';
   if(kind==='keys')return `<div class="d-hero pg">${close}<span class="chip ice">Shortcuts</span><div class="credit-name" data-fx="id">Keyboard</div></div><div class="d-body"><dl class="keys">
@@ -594,10 +597,40 @@ function bootError(e){document.getElementById('p0').innerHTML=`<div class="wrap"
 function route(){const rel=(location.pathname.startsWith(BASE.pathname)?location.pathname.slice(BASE.pathname.length):'').replace(/\.html$/,'');const m=rel.match(/^cve\/(CVE-\d{4}-\d{4,})\/?$/i);
   const clean=rel.replace(/\/$/,'').replace(/^index$/,''),tab=SLUG.indexOf(clean);
   return {tab:Math.max(0,tab),cve:m?m[1].toUpperCase():null,page:clean==='about'?'about':!m&&tab<0?'404':null}}
+/* static archived dossier shipped in the page (CVEs that left the 30-day window) */
+const ARCH=(()=>{const a=document.querySelector('article.seo[data-archived]');return a&&CVE_RE.test(a.dataset.archived)?{id:a.dataset.archived,html:a.outerHTML,t:(a.querySelector('.seo-lede')||{}).textContent||''}:null})();
+/* ---------- boot screen: core temperature falls from +37° to 0° as verified data arrives ---------- */
+const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step(){},need(){},got(){},ok(){},done(){},fail(){}};if(!el)return nop;
+  el.classList.add('live');const T=document.getElementById('bootT'),pc=document.getElementById('bootPct'),lb=document.getElementById('bootLbl'),log=document.getElementById('bootLog');
+  const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,t0=performance.now(),W=[240,160,64],C=[143,211,244];
+  let target=0,shown=0,need=0,have=0,live=true,fin=null,dl=null,slow=setTimeout(()=>line('slow network · still verifying…'),12000);
+  const mb=n=>(n/1048576).toFixed(1);
+  function line(t){const last=log.lastElementChild;if(last&&!last.classList.contains('ok'))last.classList.add('ok');const li=document.createElement('li');li.textContent=t;log.appendChild(li);while(log.children.length>5)log.firstElementChild.remove();return li}
+  function set(p){target=Math.max(target,Math.min(1,p))}
+  let lt=performance.now();function paint(now){now=now||performance.now();const dt=Math.min(250,now-lt);lt=now;shown+=(target-shown)*(RM?1:1-Math.exp(-dt/(fin?70:160)));if(Math.abs(target-shown)<.003)shown=target;
+    el.style.setProperty('--p',shown.toFixed(4));const c=W.map((w,i)=>Math.round(w+(C[i]-w)*Math.min(1,shown*1.15)));el.style.setProperty('--h',`rgb(${c})`);
+    const deg=37*(1-shown);T.textContent=deg<.05?'0.0':'+'+deg.toFixed(1);pc.textContent=Math.round(shown*100)+'%';
+    if(fin&&shown>=.999&&performance.now()-t0>=fin.min)return finish();if(live)requestAnimationFrame(paint)}
+  function finish(){live=false;clearTimeout(slow);el.classList.add('done');lb.textContent='frozen · sub zer0';const li=line('0° — noise frozen. welcome in.');li.classList.add('ok');
+    setTimeout(()=>{el.classList.add('out');document.documentElement.classList.remove('booting');setTimeout(()=>{el.remove();fin.res()},RM?150:820)},RM?60:380)}
+  requestAnimationFrame(paint);document.documentElement.classList.add('booting');
+  return {on:()=>live&&!fin,
+    step(t,p){line(t);set(p)},
+    need(n){need=n||0;have=0;dl=line(`pulling verified data · 0.0 / ${mb(need)} MB`)},
+    got(n){have+=n;if(need){set(.08+.72*Math.min(1,have/need));if(dl)dl.textContent=`pulling verified data · ${mb(Math.min(have,need))} / ${mb(need)} MB`}},
+    ok(path){if(!live||fin)return;line('sha-256 ✓ '+String(path).replace(/^data\//,'').replace(/\.json$/,''))},
+    done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:RM?0:1300};set(1);if(!live)finish();return p},
+    fail(){live=false;clearTimeout(slow);el.classList.add('out');document.documentElement.classList.remove('booting');setTimeout(()=>el.remove(),400)}}})();
+
 (async()=>{renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
   document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;
-  try{const m=await loadManifest();adopt(await loadAll(m))}catch(e){bootError(e);return}
+  BOOT.step('reaching the snapshot',.03);
+  try{const m=await loadManifest();BOOT.step(`manifest ${String(m.generated_at).slice(0,16).replace('T',' ')} utc · ${m.days.length} shards`,.08);
+    BOOT.need((m.search_index.bytes||0)+(m.poc_ids&&m.poc_ids.bytes||0)+(m.intel&&m.intel.bytes||0));
+    adopt(await loadAll(m));BOOT.step(`indexing ${rows.length.toLocaleString('en-US')} CVEs`,.86)}catch(e){BOOT.fail();bootError(e);return}
   briefing();research();dossierTab();terminal();live();
+  BOOT.step(`ranking by exploit risk · ${rows.filter(r=>r.P&&r.P[0]===1).length} patch-now`,.95);
+  await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
   if(R.cve){history.replaceState(null,'',routeURL());openSheet(R.cve)}
   else if(R.page==='about'){history.replaceState(null,'',routeURL());openPage('about')}
