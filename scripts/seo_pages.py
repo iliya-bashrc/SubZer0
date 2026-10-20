@@ -134,7 +134,7 @@ def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: d
     aff = [a for a in rec.get("affected") or [] if isinstance(a, dict)][:20]
     if aff:
         out.append("<h2>Affected products</h2><ul>" + "".join(
-            f"<li>{esc(a.get('vendor'))} {esc(a.get('product'))}{(' ' + esc(a.get('versions'))) if a.get('versions') else ''}</li>" for a in aff) + "</ul>")
+            f"<li>{esc(a.get('vendor'))}{(' ' + esc(a.get('product'))) if str(a.get('product') or '').lower() != str(a.get('vendor') or '').lower() else ''}{(' ' + esc(a.get('versions'))) if a.get('versions') else ''}</li>" for a in aff) + "</ul>")
     cwe = [c for c in rec.get("cwe") or [] if isinstance(c, str) and re.fullmatch(r"CWE-\d{1,5}", c)]
     if cwe:
         out.append("<h2>Weakness</h2><ul>" + "".join(

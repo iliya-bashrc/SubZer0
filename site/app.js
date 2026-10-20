@@ -1,4 +1,5 @@
 'use strict';
+const clipW=(t,n)=>t.length<=n?t:t.slice(0,n).replace(/\s+\S*$/,'').replace(/[\s,;:.(–-]+$/,'')+'…';
 /* SubZer0 — static client. Every data file is SHA-256 checked against the manifest before use (fail closed). */
 const TABS=['Briefing','Research','Dossier','Terminal'],SLUG=['','research','dossier','terminal'];
 const BASE=new URL(document.baseURI),SNAP=new URL('snapshot/',BASE).href;
@@ -165,7 +166,7 @@ const firstSeen=r=>{const t=r.I&&r.I.t||{};return [t.msf,t.nuclei].filter(x=>typ
 function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
     <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
-      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="feed.xml">RSS</a><a href="api/latest.json">API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
+      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
     <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
 function briefing(){
   const W=rows.filter(r=>r.w);
@@ -230,8 +231,8 @@ function renderMyStack(){const el=document.getElementById('mystack');if(!el)retu
     <div class="sb" style="margin-top:16px">${m.length?m.slice(0,6).map(r=>`<button class="ms-item" data-cve="${r.id}"><div style="display:flex;gap:6px">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></div><div class="id">${r.id}</div><div class="t">${esc(r.t)}</div></button>`).join(''):`<div class="ms-empty" style="border:0">Nothing in the last 30 days matches your stack. Enjoy it while it lasts.</div>`}</div>`;
   el.querySelector('[data-mystack]').onclick=e=>{e.preventDefault();F.view='stack';go(1);draw()}}
 const feedItem=(r,n)=>`<button class="feed-item${n?' new':''}" data-cve="${r.id}"><time>${n?'now':r.d.slice(5)}</time><div>${chip(r.s)}<div class="id">${r.id}</div><div class="t">${r.T}</div></div></button>`;
-document.addEventListener('click',e=>{const p=e.target.closest('[data-page]');if(p){e.preventDefault();openPage(p.dataset.page);return}
-  const v=e.target.closest('[data-view]');if(v){e.preventDefault();F.view=v.dataset.view;F.q='';const qi=document.getElementById('q');if(qi)qi.value='';SHOWN=200;go(1);draw()}});
+document.addEventListener('click',e=>{const p=e.target.closest('[data-page]');if(p&&p!==sheet&&PAGES[p.dataset.page]){e.preventDefault();openPage(p.dataset.page);return}
+  const v=e.target.closest('[data-view]');if(v&&v!==sheet&&v.dataset.view){e.preventDefault();F.view=v.dataset.view;F.q='';const qi=document.getElementById('q');if(qi)qi.value='';SHOWN=200;go(1);draw()}});
 
 /* ---------- local state: watchlist + stack (never leaves the browser) ---------- */
 const LS={get(k,d){try{return JSON.parse(localStorage.getItem('sz.'+k))??d}catch{return d}},set(k,v){try{localStorage.setItem('sz.'+k,JSON.stringify(v))}catch{}}};
@@ -297,6 +298,7 @@ function research(){
     <table><colgroup><col style="width:78px"><col style="width:156px"><col><col style="width:110px"><col style="width:70px"><col style="width:120px"><col style="width:56px"><col style="width:76px"><col style="width:104px"></colgroup>
       <thead><tr><th data-s="P">Priority</th><th data-s="id">CVE</th><th>Title · product</th><th data-s="s">Severity</th><th data-s="c">CVSS</th><th data-s="e">EPSS</th><th>KEV</th><th data-s="x">Exploit</th><th data-s="d">Published</th></tr></thead>
       <tbody id="tb"></tbody></table>
+    <label class="msort"><span>Sort by</span><select id="sortSel" aria-label="Sort by">${[['P','Priority'],['e','EPSS'],['c','CVSS'],['s','Severity'],['x','Exploit'],['d','Published'],['id','CVE ID']].map(([k,l])=>`<option value="${k}"${F.sort===k?' selected':''}>${l}</option>`).join('')}</select></label>
     <div class="cards" id="cards"></div>
     <button class="btn more" id="more" hidden>Show more</button>
     <div class="r-foot"><span id="cnt"></span><div class="acts"><button class="btn" id="exCsv">Export CSV</button><button class="btn" id="exJson">Export JSON</button><button class="btn" id="cpLink">Copy link</button></div></div></div>`;
@@ -307,6 +309,7 @@ function research(){
   document.getElementById('exCsv').onclick=()=>exportRows(LIST,'csv');document.getElementById('exJson').onclick=()=>exportRows(LIST,'json');
   document.getElementById('cpLink').onclick=()=>{const u=new URLSearchParams();if(F.q)u.set('q',F.q);if(F.view!=='all')u.set('view',F.view);copy(SITE+'/research'+(u.toString()?'?'+u:''),'link copied')};
   document.querySelectorAll('th[data-s]').forEach(th=>th.onclick=()=>{F.sort=th.dataset.s;draw()});
+  document.getElementById('sortSel').onchange=e=>{F.sort=e.target.value;SHOWN=200;draw()};
   draw();
 }
 const VPRED={all:()=>true,p1:r=>r.P[0]===1,trend:r=>r.b>0,weap:r=>!!r.w,nopatch:r=>r.P[0]<=2&&!r.f&&r.L>=1,stack:r=>inStack(r),watch:r=>ST.watch.has(r.id)};
@@ -328,7 +331,7 @@ function draw(){
   const so={x:(a,b)=>b.L-a.L||b.b-a.b||a.P[0]-b.P[0],b:(a,b)=>b.b-a.b||a.P[0]-b.P[0],P:(a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0),id:(a,b)=>b.id.localeCompare(a.id),s:(a,b)=>b.c-a.c,c:(a,b)=>b.c-a.c,e:(a,b)=>(b.e||0)-(a.e||0),d:(a,b)=>b.d.localeCompare(a.d)};
   const qp=parseQ(F.q),vp=VPRED[F.view]||VPRED.all;
   const list=LIST=rows.filter(r=>vp(r)&&(!F.sev.size||F.sev.has(r.s))&&(!F.kev||r.k)&&(!F.poc||r.x)&&(!F.epss||(r.e||0)>=.1)&&qp(r)).sort(F.view==='trend'&&F.sort==='P'?so.b:so[F.sort]||so.P);
-  document.querySelectorAll('th[data-s]').forEach(th=>th.classList.toggle('sorted',th.dataset.s===F.sort));
+  document.querySelectorAll('th[data-s]').forEach(th=>th.classList.toggle('sorted',th.dataset.s===F.sort));{const ss=document.getElementById('sortSel');if(ss&&ss.value!==F.sort)ss.value=F.sort}
   const shown=list.slice(0,SHOWN);
   document.getElementById('tb').innerHTML=shown.map(r=>`<tr data-cve="${r.id}"><td><span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></td><td class="t-id">${r.id}${ST.watch.has(r.id)?'<span class="star" title="watching">★</span>':''}</td>
     <td><div class="t-title">${r.T}</div><div class="code t-prod">${r.p?r.Pr:'—'}${inStack(r)?'<span class="mine">your stack</span>':''}${buzzTag(r)}</div></td><td>${chip(r.s)}</td>
@@ -349,7 +352,7 @@ const DC_TINT=['#3A0E12','#6E1A20','#E5323F','#0D1114','#0D1114','#1F4F6E','#D8C
 function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec&&rec.kev&&typeof rec.kev==='object'?rec.kev:null,P=r.P,sev=r.s,score=r.c;
   const vec=rec&&typeof rec.cvss_vector==='string'?rec.cvss_vector:'';const cwe=rec&&Array.isArray(rec.cwe)?rec.cwe.filter(x=>/^CWE-\d{1,5}$/.test(x)):[];
   const aff=rec&&Array.isArray(rec.affected)?rec.affected.slice(0,60):[];const refs=rec&&Array.isArray(rec.refs)?rec.refs.map(f=>({...f,u:safeUrl(f.url)})).filter(f=>f.u).slice(0,80):[];
-  const a0=aff[0];const sub=vec||(a0?`${a0.vendor||''} ${a0.product||''}`.trim():'')||(r.p||'');
+  const a0=aff[0];const vp=a0?[a0.vendor,a0.product].filter(Boolean).filter((x,i,a)=>a.findIndex(y=>String(y).toLowerCase()===String(x).toLowerCase())===i).join(' · '):'';const sub=vec||vp||(r.p||'');
   const pct=ep&&typeof ep.percentile==='number'?ep.percentile:null;
   const I=r.I,tt=I&&I.t||{};
   const dates=rec?[[rec.published,'Published'],tt.poc&&[tt.poc,'First public PoC on GitHub'],tt.msf&&[tt.msf,'Metasploit module spotted',1],tt.nuclei&&[tt.nuclei,'Nuclei template spotted',1],tt.buzz&&[tt.buzz,'People started talking about it'],tt.active&&[tt.active,'CISA SSVC: exploitation active',1],kev&&[kev.date_added,'Added to CISA KEV',1],kev&&kev.due_date&&[kev.due_date,'CISA deadline for US agencies',1],[rec.modified,'Last modified']].filter(x=>x&&x[0]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))):[];
@@ -368,7 +371,7 @@ function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec
     <div class="d-metric"><span class="label">Exploit maturity</span><div class="ladder" role="img" aria-label="Exploit maturity ${r.L} of 3: ${LADDER[r.L]}">${[1,2,3].map(i=>`<i class="${i<=r.L?'on l'+r.L:''}"></i>`).join('')}</div><div class="v" style="font-size:20px;margin-top:10px">${LADDER[r.L]}</div><div class="s">${r.L===3?(r.k?'on CISA KEV':'CISA SSVC: active'):r.L===2?[r.m?r.m+' Metasploit':'',r.n?r.n+' Nuclei':''].filter(Boolean).join(' · '):r.L===1?(r.g?r.g+' GitHub repo'+(r.g>1?'s':''):r.v==='poc'?'CISA SSVC: PoC':'Exploit-DB or tagged refs'):'nothing public yet'}</div></div>
   </div>
   <div class="d-body">
-    <div class="why-box"><span class="chip ${P[0]===1?'crit':P[0]===2?'high':'none'}">Why P${P[0]}</span><p data-fx="why"><b>${P[2].replace(/\.$/,'')}.</b>${r.f?' A fix or vendor advisory is linked below.':r.L>=1&&P[0]<=2?' No patch linked yet, so look for a workaround.':''}${pct!=null?` EPSS puts it above ${(pct*100).toFixed(1)}% of all CVEs.`:''}${kev&&kev.required_action?' CISA: '+esc(String(kev.required_action).slice(0,300)):''}</p></div>
+    <div class="why-box"><span class="chip ${P[0]===1?'crit':P[0]===2?'high':'none'}">Why P${P[0]}</span><p data-fx="why"><b>${P[2].replace(/\.$/,'')}.</b>${r.f?' A fix or vendor advisory is linked below.':r.L>=1&&P[0]<=2?' No patch linked yet, so look for a workaround.':''}${pct!=null?` EPSS puts it above ${(pct*100).toFixed(1)}% of all CVEs.`:''}${kev&&kev.required_action?' CISA: '+esc(clipW(String(kev.required_action),300)):''}</p></div>
     ${!full?`<p class="muted" id="dload">Loading the full record and checking its hash…</p>`:`
     ${rec.desc&&rec.desc.trim()!==String(rec.title).trim()?`<section><div class="sec-h"><h2>Description</h2><span class="meta">${esc((rec.date_basis||'').toLowerCase())}</span></div><p class="desc">${esc(rec.desc)}</p></section>`:''}
     ${kev?`<section><div class="sec-h"><h2>Exploitation</h2><span class="meta">CISA KEV</span></div>
@@ -445,7 +448,7 @@ function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.datas
 function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;sheet.classList.remove('on');back.classList.remove('on');sheet.style.transform='';
   if(fromPop!==true)history.back();setTimeout(()=>{if(!sheetOpen)history.replaceState(null,'',routeURL())},0);document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)';if(lastFocus&&lastFocus.focus)lastFocus.focus({preventScroll:true})}
 back.onclick=closeSheet;addEventListener('popstate',e=>{if(sheetOpen)closeSheet(true);else{const R=route();if(R.cve)openSheet(R.cve,true);else if(R.page){if(R.page==='404')NF_PATH=location.pathname.slice(BASE.pathname.length);openPage(R.page,true)}}});
-addEventListener('keydown',e=>{if(e.key==='Escape'&&sheetOpen)closeSheet()});
+addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(sheetOpen)closeSheet();else{const a=document.activeElement;if(a&&(a.id==='q'||a.id==='msIn'||a.id==='stIn'))a.blur()}});
 (function(){let x0,dx=0,lock=null,y0;sheet.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;x0=e.clientX;y0=e.clientY;dx=0;lock=null});
   sheet.addEventListener('pointermove',e=>{if(x0==null)return;const mx=e.clientX-x0,my=e.clientY-y0;if(lock==null&&Math.hypot(mx,my)>8)lock=Math.abs(mx)>Math.abs(my)&&mx>0?'x':'y';
     if(lock==='x'){dx=Math.max(0,mx);sheet.classList.add('dragging');sheet.style.transform=`translateX(${dx}px)`;back.style.opacity=1-dx/innerWidth}});
@@ -544,7 +547,8 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
     await lines([`<div class="ln"><span class="t-dim">→</span> resolving t.me/${n} … <span class="t-ok">ok</span></div>`],0);
     print(`<div class="ln"><span class="t-dim">→</span> opening Telegram <span class="t-warn" id="pb"></span></div>`);const pb=[...document.querySelectorAll('#pb')].pop();
     for(let i=0;i<=10;i++){pb.textContent=`[${'█'.repeat(i)}${'░'.repeat(10-i)}] ${i*10}%`;await wait(90)}pb.removeAttribute('id');
-    if(!window.SZ_NOREDIRECT)location.href='https://t.me/'+n}
+    const u='https://t.me/'+n;let w=null;if(!window.SZ_NOREDIRECT){try{w=window.open(u,'_blank');if(w)w.opener=null}catch(e){}}
+    print(`<div class="ln"><span class="t-dim">→</span> ${w?'opened in a new tab · ':'popup blocked · '}<a href="${u}" target="_blank" rel="noopener">t.me/${n} ↗</a></div>`)}
   else if(/^cve(\s|$)/.test(lc)){const id=(c.split(' ')[1]||'').toUpperCase();const r=BYID.get(id)||null;
     if(!id)print(`<div class="ln">usage: cve <span class="t-dim">CVE-YYYY-NNNN</span></div>`);
     else if(!r)print(`<div class="ln t-err">${esc(id)}: not in this snapshot</div>`);
@@ -599,37 +603,41 @@ function route(){const rel=(location.pathname.startsWith(BASE.pathname)?location
   return {tab:Math.max(0,tab),cve:m?m[1].toUpperCase():null,page:clean==='about'?'about':!m&&tab<0?'404':null}}
 /* static archived dossier shipped in the page (CVEs that left the 30-day window) */
 const ARCH=(()=>{const a=document.querySelector('article.seo[data-archived]');return a&&CVE_RE.test(a.dataset.archived)?{id:a.dataset.archived,html:a.outerHTML,t:(a.querySelector('.seo-lede')||{}).textContent||''}:null})();
-/* ---------- boot screen: core temperature falls from +37° to 0° as verified data arrives ---------- */
+/* ---------- boot screen: the wordmark fills as verified bytes arrive, then settles into the header ---------- */
 const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step(){},need(){},got(){},ok(){},done(){},fail(){}};if(!el)return nop;
-  el.classList.add('live');const T=document.getElementById('bootT'),pc=document.getElementById('bootPct'),lb=document.getElementById('bootLbl'),log=document.getElementById('bootLog');
-  const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,t0=performance.now(),W=[240,160,64],C=[143,211,244];
-  let target=0,shown=0,need=0,have=0,live=true,fin=null,dl=null,slow=setTimeout(()=>line('slow network · still verifying…'),12000);
+  el.classList.add('live');const de=document.documentElement,mark=document.getElementById('bootMark'),msg=document.getElementById('bootMsg'),pc=document.getElementById('bootPct');
+  const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,t0=performance.now();
+  let target=0,shown=0,need=0,have=0,live=true,fin=null,label='Loading',slow=setTimeout(()=>{label='Slow network…';say()},12000);
   const mb=n=>(n/1048576).toFixed(1);
-  function line(t){const last=log.lastElementChild;if(last&&!last.classList.contains('ok'))last.classList.add('ok');const li=document.createElement('li');li.textContent=t;log.appendChild(li);while(log.children.length>5)log.firstElementChild.remove();return li}
+  function say(t){if(t!=null)label=t;if(msg.textContent!==label)msg.textContent=label}
   function set(p){target=Math.max(target,Math.min(1,p))}
-  let lt=performance.now();function paint(now){now=now||performance.now();const dt=Math.min(250,now-lt);lt=now;shown+=(target-shown)*(RM?1:1-Math.exp(-dt/(fin?70:160)));if(Math.abs(target-shown)<.003)shown=target;
-    el.style.setProperty('--p',shown.toFixed(4));const c=W.map((w,i)=>Math.round(w+(C[i]-w)*Math.min(1,shown*1.15)));el.style.setProperty('--h',`rgb(${c})`);
-    const deg=37*(1-shown);T.textContent=deg<.05?'0.0':'+'+deg.toFixed(1);pc.textContent=Math.round(shown*100)+'%';
-    if(fin&&shown>=.999&&performance.now()-t0>=fin.min)return finish();if(live)requestAnimationFrame(paint)}
-  function finish(){live=false;clearTimeout(slow);el.classList.add('done');lb.textContent='frozen · sub zer0';const li=line('0° — noise frozen. welcome in.');li.classList.add('ok');
-    setTimeout(()=>{el.classList.add('out');document.documentElement.classList.remove('booting');setTimeout(()=>{el.remove();fin.res()},RM?150:820)},RM?60:380)}
-  requestAnimationFrame(paint);document.documentElement.classList.add('booting');
+  let lt=performance.now();function paint(now){now=now||performance.now();const dt=Math.min(250,now-lt);lt=now;shown+=(target-shown)*(RM?1:1-Math.exp(-dt/(fin?60:180)));if(Math.abs(target-shown)<.002)shown=target;
+    el.style.setProperty('--p',shown.toFixed(4));pc.textContent=Math.round(shown*100)+'%';
+    if(fin&&shown>=.999&&now-t0>=fin.min)return finish();if(live)requestAnimationFrame(paint)}
+  function cleanup(){live=false;clearTimeout(slow);de.classList.remove('booting');el.remove()}
+  function finish(){live=false;clearTimeout(slow);say('Ready');
+    const dst=document.querySelector('.top .brand'),r0=mark.getBoundingClientRect(),r1=dst&&dst.getBoundingClientRect();
+    if(RM||!r1||!r1.width||!mark.animate){el.classList.add('fade');setTimeout(()=>{cleanup();fin.res()},RM?60:260);return}
+    const k=r1.height/r0.height,dx=r1.left-r0.left,dy=r1.top-r0.top;el.classList.add('out');
+    const an=mark.animate([{transform:'none'},{transform:`translate(${dx}px,${dy}px) scale(${k})`}],{duration:560,delay:120,easing:'cubic-bezier(.65,0,.2,1)',fill:'forwards'});
+    let done=false;const end=()=>{if(done)return;done=true;cleanup();fin.res()};an.onfinish=end;setTimeout(end,1100)}
+  requestAnimationFrame(paint);de.classList.add('booting');
   return {on:()=>live&&!fin,
-    step(t,p){line(t);set(p)},
-    need(n){need=n||0;have=0;dl=line(`pulling verified data · 0.0 / ${mb(need)} MB`)},
-    got(n){have+=n;if(need){set(.08+.72*Math.min(1,have/need));if(dl)dl.textContent=`pulling verified data · ${mb(Math.min(have,need))} / ${mb(need)} MB`}},
-    ok(path){if(!live||fin)return;line('sha-256 ✓ '+String(path).replace(/^data\//,'').replace(/\.json$/,''))},
-    done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:RM?0:1300};set(1);if(!live)finish();return p},
-    fail(){live=false;clearTimeout(slow);el.classList.add('out');document.documentElement.classList.remove('booting');setTimeout(()=>el.remove(),400)}}})();
+    step(t,p){say(t);set(p)},
+    need(n){need=n||0;have=0;say(`Verifying 0.0/${mb(need)} MB`)},
+    got(n){have+=n;if(need){set(.08+.76*Math.min(1,have/need));say(`Verifying ${mb(Math.min(have,need))}/${mb(need)} MB`)}},
+    ok(){},
+    done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:RM?0:700};set(1);if(!live)finish();return p},
+    fail(){if(!live&&!el.isConnected)return;el.classList.add('fade');setTimeout(cleanup,260)}}})();
 
 (async()=>{renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
   document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;
-  BOOT.step('reaching the snapshot',.03);
-  try{const m=await loadManifest();BOOT.step(`manifest ${String(m.generated_at).slice(0,16).replace('T',' ')} utc · ${m.days.length} shards`,.08);
+  BOOT.step('Connecting',.03);
+  try{const m=await loadManifest();BOOT.step(`Snapshot ${String(m.generated_at).slice(0,16).replace('T',' ')} UTC`,.08);
     BOOT.need((m.search_index.bytes||0)+(m.poc_ids&&m.poc_ids.bytes||0)+(m.intel&&m.intel.bytes||0));
-    adopt(await loadAll(m));BOOT.step(`indexing ${rows.length.toLocaleString('en-US')} CVEs`,.86)}catch(e){BOOT.fail();bootError(e);return}
+    adopt(await loadAll(m));BOOT.step(`Indexing ${rows.length.toLocaleString('en-US')} CVEs`,.88)}catch(e){BOOT.fail();bootError(e);return}
   briefing();research();dossierTab();terminal();live();
-  BOOT.step(`ranking by exploit risk · ${rows.filter(r=>r.P&&r.P[0]===1).length} patch-now`,.95);
+  BOOT.step('Ranking',.96);
   await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
   if(R.cve){history.replaceState(null,'',routeURL());openSheet(R.cve)}

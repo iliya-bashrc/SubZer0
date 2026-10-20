@@ -25,17 +25,14 @@
 <script src="app.js" defer></script>
 </head>
 <body>
-<div class="boot" id="boot" role="status" aria-live="polite" aria-label="Loading SubZer0">
-  <div class="boot-core">
-    <svg class="boot-flake" viewBox="-50 -50 100 100" aria-hidden="true"><path pathLength="1" d="M0-9L7.8-4.5V4.5L0 9-7.8 4.5V-4.5Z"/><g transform="rotate(0)"><path pathLength="1" d="M0-6V-44M0-16l-9-9M0-16l9-9M0-28l-7-7M0-28l7-7M0-38l-4-4M0-38l4-4"/></g><g transform="rotate(60)"><path pathLength="1" d="M0-6V-44M0-16l-9-9M0-16l9-9M0-28l-7-7M0-28l7-7M0-38l-4-4M0-38l4-4"/></g><g transform="rotate(120)"><path pathLength="1" d="M0-6V-44M0-16l-9-9M0-16l9-9M0-28l-7-7M0-28l7-7M0-38l-4-4M0-38l4-4"/></g><g transform="rotate(180)"><path pathLength="1" d="M0-6V-44M0-16l-9-9M0-16l9-9M0-28l-7-7M0-28l7-7M0-38l-4-4M0-38l4-4"/></g><g transform="rotate(240)"><path pathLength="1" d="M0-6V-44M0-16l-9-9M0-16l9-9M0-28l-7-7M0-28l7-7M0-38l-4-4M0-38l4-4"/></g><g transform="rotate(300)"><path pathLength="1" d="M0-6V-44M0-16l-9-9M0-16l9-9M0-28l-7-7M0-28l7-7M0-38l-4-4M0-38l4-4"/></g></svg>
-    <div class="boot-wm" aria-hidden="true"><span style="--i:0">S</span><span style="--i:1">U</span><span style="--i:2">B</span><span style="--i:3">Z</span><span style="--i:4">E</span><span style="--i:5">R</span><span style="--i:6"><b>0</b></span></div>
-    <div class="boot-temp" aria-hidden="true"><span id="bootT">+37.0</span><i>°</i></div>
-    <div class="boot-row"><span id="bootLbl">core temp</span><span id="bootPct">0%</span></div>
-    <div class="boot-bar"><i></i></div>
-    <ol class="boot-log" id="bootLog"><li>cold start</li></ol>
-    <div class="boot-foot">every byte sha-256 verified · fail closed</div>
+<div class="boot" id="boot" aria-busy="true" aria-label="Loading SubZer0"><div class="boot-box">
+  <div class="boot-mark" id="bootMark" aria-hidden="true">
+    <span class="bar"></span>
+    <span class="boot-wm"><span class="boot-dim">SUBZER<b>0</b></span><span class="boot-lit" id="bootLit">SUBZER<b>0</b></span></span>
   </div>
-</div>
+  <div class="boot-line" aria-hidden="true"><i id="bootLine"></i></div>
+  <div class="boot-status"><span id="bootMsg">Loading</span><span id="bootPct">0%</span></div>
+</div></div>
 <div class="grain"></div>
 <div class="app">
   <header class="top">
