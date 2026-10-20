@@ -247,6 +247,12 @@ python -m unittest discover -s tests                         # tests
 
 Issues and PRs are welcome. CI runs the full pipeline test-suite plus snapshot validation on every PR — keep it green. Files under `public/snapshot/` are generated; please don't edit them by hand.
 
+## 🛡️ Official site & copying
+
+The only official build is **https://iliya-bashrc.github.io/SubZer0/**. Every published snapshot manifest is signed with an Ed25519 key held only by the maintainers (`snapshot/manifest.sig`); the official site shows **ed25519 signed ✓** in the Briefing header and in the terminal boot log. Copies on any other host are flagged as **unofficial** in the page itself.
+
+This repository is **source-available, not open source**: reading the code is fine, but copying, re-hosting, forking for redistribution or re-branding it requires written permission — see [LICENSE](LICENSE).
+
 ## ⚠️ Disclaimer
 
 SubZer0 is built for **education and defensive research**. Don't use any information, exploit reference or technique found here against systems you don't own or don't have explicit permission to test.

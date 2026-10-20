@@ -33,8 +33,13 @@ jobs:
       - name: Assemble the site (shell + snapshot + RSS + JSON API)
         run: python3 scripts/build_site.py --out _site
 
+      - name: Sign the manifest (Ed25519; skipped if the secret is not set)
+        env:
+          SUBZER0_SIGNING_KEY: ${{ secrets.SUBZER0_SIGNING_KEY }}
+        run: python3 scripts/sign_manifest.py --site _site
+
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: _site
 
@@ -47,4 +52,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
