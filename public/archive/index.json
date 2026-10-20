@@ -1,0 +1,56 @@
+{
+ "schema_version": 1,
+ "updated_at": "2026-10-20T04:47:36Z",
+ "count": 2295,
+ "months": [
+  {
+   "month": "2025-08",
+   "path": "2025-08.json",
+   "count": 6,
+   "bytes": 10277,
+   "sha256": "cac99604546fa3d109014f39b6c256e7a5659e3996a885423559f4a994699803"
+  },
+  {
+   "month": "2025-09",
+   "path": "2025-09.json",
+   "count": 1,
+   "bytes": 1644,
+   "sha256": "6683cff99da78584ed5b636fdf63e8918e2e1ec29f146444254fa8e49475bf1d"
+  },
+  {
+   "month": "2026-06",
+   "path": "2026-06.json",
+   "count": 1,
+   "bytes": 3852,
+   "sha256": "8ada9e0acd77879d1425ad335277cc39d3d1d58b07409e5fe5bcd2bb77fe7bec"
+  },
+  {
+   "month": "2026-07",
+   "path": "2026-07.json",
+   "count": 9,
+   "bytes": 24685,
+   "sha256": "65c5e1745a133bbe45786446336be3ace150b82c69622a872627978b34cc6696"
+  },
+  {
+   "month": "2026-08",
+   "path": "2026-08.json",
+   "count": 2,
+   "bytes": 4758,
+   "sha256": "868bcfebc6b1e721648c50ae4e17c966d15fe37bc2120e4654c4450442479607"
+  },
+  {
+   "month": "2026-09",
+   "path": "2026-09.json",
+   "count": 813,
+   "bytes": 1573394,
+   "sha256": "328834b3d051f9572bc8c3f9df9af4a0cbe70a617ef5cdd2af1db59127f4283e"
+  },
+  {
+   "month": "2026-10",
+   "path": "2026-10.json",
+   "count": 1463,
+   "bytes": 2703218,
+   "sha256": "27b95f930900290ae1b7866bc67ccd41b71668737403cafdbce1ff761975dfe8"
+  }
+ ]
+}
