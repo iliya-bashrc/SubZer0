@@ -26,6 +26,7 @@ class WorkflowSecurityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.update = (ROOT / ".github/workflows/update-snapshot.yml").read_text(encoding="utf-8")
         cls.checks = (ROOT / ".github/workflows/checks.yml").read_text(encoding="utf-8")
+        cls.deploy = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
         cls.requirements = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
 
     def test_candidate_validation_job_is_read_only_and_checkout_does_not_persist_credentials(self):
@@ -71,7 +72,7 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"(?m)^\s+git .*push origin HEAD:refs/heads/main", self.update)), 1)
 
     def test_all_actions_are_pinned_and_pull_request_checks_are_read_only(self):
-        for workflow in (self.update, self.checks):
+        for workflow in (self.update, self.checks, self.deploy):
             uses = re.findall(r"(?m)^\s+uses:\s+([^\s]+)", workflow)
             self.assertTrue(uses)
             self.assertTrue(all(re.search(r"@[0-9a-f]{40}(?:\s|$)", value) for value in uses), uses)

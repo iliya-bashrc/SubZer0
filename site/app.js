@@ -7,6 +7,23 @@ const fmt=n=>n==null?'—':Number(n).toLocaleString('en-US');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl=u=>{try{const x=new URL(u);return x.protocol==='https:'||x.protocol==='http:'?x.href:null}catch{return null}};
 const CVE_RE=/^CVE-\d{4}-\d{4,}$/;
+/* Provenance. SubZer0 © 2026 @BugCod3 & @RootAccessClub — source-available, All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
+const SZ_ORIGIN=atob('aWxpeWEtYmFzaHJjLmdpdGh1Yi5pbw=='),SZ_HOME='https://'+SZ_ORIGIN+'/SubZer0/',SZ_BUILD='sz0-ib-'+(0x5a0e).toString(36);
+const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname);
+/* Ed25519 public key for snapshot/manifest.sig (scripts/sign_manifest.py). Copies can mirror data, not sign it. */
+const SIGN_PK='Hs5MMxzGzlocXQG0Pz5ZWUSLOfSmBXLDyX3OIA3uGvk=';let SIGNED=null;
+const b64u8=b=>Uint8Array.from(atob(b),c=>c.charCodeAt(0));
+async function verifySig(t){try{if(!crypto.subtle)return null;const r=await fetch(SNAP+'manifest.sig',{cache:'no-store',credentials:'omit'});if(!r.ok)return null;
+  const sig=b64u8((await r.text()).trim());if(sig.length!==64)return false;
+  const k=await crypto.subtle.importKey('raw',b64u8(SIGN_PK),{name:'Ed25519'},false,['verify']);
+  return await crypto.subtle.verify({name:'Ed25519'},k,sig,new TextEncoder().encode(t))}catch{return null}}
+function originGuard(){document.documentElement.style.setProperty('--sz-build',`"${SZ_BUILD}"`);if(OFFICIAL||document.getElementById('szCopy'))return;
+  const tag=()=>{if(!document.title.startsWith('[Unofficial copy] '))document.title='[Unofficial copy] '+document.title};tag();
+  const te=document.querySelector('title');te&&new MutationObserver(tag).observe(te,{childList:true,characterData:true,subtree:true});
+  const b=document.createElement('div');b.id='szCopy';b.className='sz-copy';b.setAttribute('role','alert');
+  b.innerHTML=`Unofficial copy of SubZer0 — data here may be stale or altered. Original: <a href="${SZ_HOME}" rel="noopener">${esc(SZ_HOME.replace('https://',''))}</a>`;
+  document.body.prepend(b)}
+try{console.log('%cSubZer0%c  © 2026 @BugCod3 & @RootAccessClub · '+SZ_HOME+'\nSource-available, All Rights Reserved — copying or re-hosting without permission is not allowed.','font:700 18px monospace;color:#7fd4ff','font:12px monospace;color:inherit')}catch{}
 const SEV={critical:['crit','Critical'],high:['high','High'],medium:['med','Medium'],low:['low','Low'],none:['none','Unscored'],unknown:['none','Unscored']};
 const chip=s=>`<span class="chip ${SEV[s][0]}">${SEV[s][1]}</span>`;
 /* Priority rules. Mirrored in scripts/build_site.py (priority_reason) — keep them in sync. */
@@ -32,8 +49,8 @@ async function fetchBuf(url,max){const r=await fetch(url,{cache:'no-cache',crede
 async function fetchVerified(path,sha,max=8e6){if(!/^data\/[a-z0-9_.-]+\.json$/i.test(path)||!/^[0-9a-f]{64}$/i.test(sha))throw new Error('bad manifest entry: '+path);
   let b=await fetchBuf(SNAP+path,max);if((await sha256Hex(b))!==sha.toLowerCase()){b=await fetchBuf(SNAP+path+'?v='+sha.slice(0,12),max);if((await sha256Hex(b))!==sha.toLowerCase())throw new Error('integrity check failed: '+path)}
   if(typeof BOOT!=='undefined')BOOT.ok(path);return JSON.parse(new TextDecoder().decode(b))}
-async function loadManifest(){const r=await fetch(SNAP+'manifest.json',{cache:'no-store',credentials:'omit'});if(!r.ok)throw new Error('manifest '+r.status);const t=await r.text();if(t.length>2e6)throw new Error('manifest too large');
-  const m=JSON.parse(t);if(!m||!Array.isArray(m.days)||!m.search_index||!m.generated_at)throw new Error('manifest has an unexpected shape');return m}
+async function loadManifest(){const r=await fetch(SNAP+'manifest.json',{cache:'no-store',credentials:'omit'});if(!r.ok)throw new Error('manifest '+r.status);const t=await r.text();if(t.length>2e6)throw new Error('manifest too large');const sv=verifySig(t);
+  const m=JSON.parse(t);if(!m||!Array.isArray(m.days)||!m.search_index||!m.generated_at)throw new Error('manifest has an unexpected shape');SIGNED=await sv;return m}
 async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[],
     m.intel&&m.intel.path?fetchVerified(m.intel.path,m.intel.sha256,1.5e7).catch(e=>{console.warn('intel skipped:',e.message);return null}):null]);return build(m,idx,poc,intel)}
 const arr=v=>Array.isArray(v)?v:[];
@@ -181,7 +198,7 @@ function briefing(){
     <div class="hero-copy"><span class="chip crit">Last 30 days</span>
       <div class="credit-name"><span id="heroN">${fmt(T.cves)}</span> <span>CVEs</span></div>
       <div class="sub">${fmt(T.critical)} critical, ${T.known_exploited} already being exploited, ${fmt(D.poc)} with exploit code out in public${W.length?`, ${W.length} weaponized in Metasploit or Nuclei`:''}.</div>
-      <div class="code" id="heroSha">search index sha256 ✓ · ${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
+      <div class="code" id="heroSha">search index sha256 ✓ · ${SIGNED?'ed25519 signed ✓ · ':SIGNED===false?'<span class="t-warn">signature mismatch</span> · ':''}${OFFICIAL?'':'<span class="t-warn">unofficial copy</span> · '}${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
     <div class="hero-meta"><span class="chip ice">Live</span><div class="code">next refresh in <span id="cd"></span></div></div>
   </div>
   <div class="stats">
@@ -438,6 +455,9 @@ function pageHTML(kind){const close='<button class="d-close" id="closeSheet">←
       <dt>CVEs</dt><dd>NVD CVE API 2.0 and the GitHub Advisory Database</dd><dt>Exploited</dt><dd>CISA Known Exploited Vulnerabilities, CISA Vulnrichment (SSVC)</dd><dt>Likelihood</dt><dd>FIRST EPSS</dd>
       <dt>Exploits</dt><dd>Exploit-DB, PoC-in-GitHub, Metasploit modules, Nuclei templates</dd><dt>Chatter</dt><dd>Bluesky, Mastodon, Reddit (r/netsec and friends), Hacker News</dd></dl>
       <p class="desc" style="margin-top:14px">Your browser downloads a manifest and checks the SHA-256 of every data file before showing it. If a check fails, nothing is shown. Your watchlist and stack stay in this browser.</p></section>
+    <section><div class="sec-h"><h2>Your data</h2><span class="meta">no cookies · no tracking</span></div><dl class="kv">
+      <dt>Cookies</dt><dd>None. SubZer0 never sets a cookie.</dd><dt>Stack</dt><dd>${ST.stack.length} item${ST.stack.length===1?'':'s'}, saved in this browser only</dd><dt>Watchlist</dt><dd>${ST.watch.size} CVE${ST.watch.size===1?'':'s'}, saved in this browser only</dd><dt>Offline copy</dt><dd>The last verified snapshot, kept by the service worker</dd></dl>
+      <div class="d-actions" style="margin-top:14px"><button class="btn" data-act="wipe">Clear my data on this device</button></div></section>
     ${credits()}</div>`}
 function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.dataset.page===kind)return;const was=sheetOpen;lastFocus=was?lastFocus:document.activeElement;
   sheet.dataset.id='';sheet.dataset.page=kind;sheet.scrollTop=0;sheet.setAttribute('aria-label',PAGES[kind]);sheet.innerHTML=pageHTML(kind);paintDossier(sheet,true);watchHeads(sheet);
@@ -456,6 +476,7 @@ addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(sheetOpen)closeShee
   sheet.addEventListener('pointerup',end);sheet.addEventListener('pointercancel',end)})();
 document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(a){const id=a.dataset.id;
     if(a.dataset.act==='copy')copy(id,id+' copied');
+    if(a.dataset.act==='wipe'){if(!confirm('Clear your stack, watchlist and the offline copy from this browser?'))return;try{Object.keys(localStorage).filter(k=>k.startsWith('sz.')).forEach(k=>localStorage.removeItem(k));sessionStorage.removeItem('sz.fx')}catch{}ST.watch.clear();ST.stack.length=0;if(self.caches)caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('subzer0-data')).map(k=>caches.delete(k)))).catch(()=>{});snack('local data cleared');setTimeout(()=>location.reload(),700);return}
     if(a.dataset.act==='share'){const u=SITE+'/cve/'+id;navigator.share&&matchMedia('(pointer:coarse)').matches?navigator.share({title:id,url:u}).catch(()=>{}):copy(u,'link copied')}
     if(a.dataset.act==='watch'){const on=toggleWatch(id);document.querySelectorAll(`[data-act="watch"][data-id="${id}"]`).forEach(b=>{b.classList.toggle('on',on);b.textContent=on?'★ Watching':'☆ Watch'});snack(on?'added to watchlist':'removed from watchlist')}
     if(a.dataset.act==='json'){const f=REC.get(id);const r=BYID.get(id);const ix=r&&r.I?{exploit_maturity:LADDER[r.L],github_pocs:r.I.g,metasploit:r.I.m,nuclei:r.I.n,ssvc:r.I.s,chatter:r.I.b,first_seen:r.I.t,patch_linked:r.I.f}:{};
@@ -514,6 +535,8 @@ async function boot(){document.getElementById('to').innerHTML='';busy=true;docum
   const lg=document.getElementById('lg');for(const ch of 'user'){lg.textContent+=ch;if(!reduce)await wait(70)}document.querySelector('#to .cur')?.remove();
   await lines([`<div class="ln">Last login: ${now.toUTCString().slice(0,25)} on tty1</div>`,`<div class="ln"> </div>`,
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Mounted snapshot <span class="t-dim">snapshot/manifest.json</span></div>`,
+    ...(SIGNED?[`<div class="ln"><span class="t-ok">[  OK  ]</span> Verified signature <span class="t-dim">ed25519 · manifest signed by the SubZer0 publisher</span></div>`]:[]),
+    ...(OFFICIAL?[]:[`<div class="ln"><span class="t-warn">[ WARN ]</span> Unofficial copy <span class="t-dim">original at ${esc(SZ_HOME)}</span></div>`]),
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Verified sha256 <span class="t-dim">index + ${D.m.days.length} day shards checked against manifest</span></div>`,
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Reached feeds <span class="t-dim">${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy</span></div>`,
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Indexed <span class="t-dim">${D.totals.cves.toLocaleString()} CVEs · ${D.totals.known_exploited} KEV · ${D.poc} PoC</span></div>`,
@@ -630,7 +653,7 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
     done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:RM?0:700};set(1);if(!live)finish();return p},
     fail(){if(!live&&!el.isConnected)return;el.classList.add('fade');setTimeout(cleanup,260)}}})();
 
-(async()=>{renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
+(async()=>{originGuard();renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
   document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;
   BOOT.step('Connecting',.03);
   try{const m=await loadManifest();BOOT.step(`Snapshot ${String(m.generated_at).slice(0,16).replace('T',' ')} UTC`,.08);

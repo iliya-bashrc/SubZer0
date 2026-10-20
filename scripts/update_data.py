@@ -805,9 +805,20 @@ def _nvd_affected(cve: dict[str, Any]) -> list[dict[str, str]]:
 def _title(description: str, fallback: str) -> str:
     value = re.sub(r"\s+", " ", description).strip()
     if not value:
-        return fallback[:160]
+        return _clip(fallback, 160)
     first_sentence = re.split(r"(?<=[.!?])\s+", value, maxsplit=1)[0]
-    return (first_sentence or value)[:180]
+    return _clip(first_sentence or value, 180)
+
+
+def _clip(value: str, limit: int) -> str:
+    """Shorten at a word boundary and mark the cut, instead of chopping mid-word."""
+    if len(value) <= limit:
+        return value
+    cut = value[: limit - 1]
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:-") + "…"
 
 
 def _record(cve_id: str, published: str | None = None) -> dict[str, Any]:
@@ -1560,7 +1571,7 @@ def write_snapshot(
             products = " ".join(f"{a.get('vendor', '')} {a.get('product', '')}" for a in affected)[:80]
             search_index.append([
                 cve_id,
-                str(record.get("title") or record.get("desc") or "")[:110],
+                _clip(str(record.get("title") or record.get("desc") or ""), 110),
                 str(record.get("sev") or "none"),
                 round(float(record.get("score") or 0.0), 1),
                 1 if record.get("kev") else 0,

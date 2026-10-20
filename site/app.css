@@ -477,3 +477,7 @@ html.booting .top .brand{visibility:hidden}
 @media (max-width:760px){.boot-mark{--s:1.6}}
 .seo-arch{border-left:2px solid var(--ice);padding:8px 14px;background:rgba(143,211,244,.06);color:var(--ink);font-size:14px}
 .sheet .seo{padding-top:72px}
+/* SubZer0 © 2026 @BugCod3 & @RootAccessClub — All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
+:root{--sz-origin:"iliya-bashrc.github.io/SubZer0"}
+.sz-copy{position:sticky;top:0;z-index:90;padding:9px 16px;background:var(--crit);color:#fff;font:600 13px var(--sans);text-align:center}
+.sz-copy a{color:#fff;text-decoration:underline}
