@@ -105,14 +105,45 @@ a{color:inherit;text-decoration:none}
 @keyframes slidein{from{opacity:0;transform:translateY(-12px)}}
 
 .chart{margin-top:48px}
-.chart svg{display:block;width:100%;height:220px;margin-top:20px}
-.legend{display:flex;gap:20px;margin-top:12px;font-size:13px;color:var(--ink2)}
+.chart svg{display:block;width:100%;height:220px}
+.ch-wrap{display:flex;gap:10px;margin-top:20px}
+.ch-y{position:relative;font:400 10px var(--mono);color:var(--ink3);text-align:right;min-width:30px}
+.ch-y span{position:absolute;right:0;transform:translateY(-50%);white-space:nowrap}
+.ch-plot{position:relative;flex:1;min-width:0;overflow:visible}
+.ch-x{display:flex;justify-content:space-between;margin:8px 0 0 40px;font:400 10px var(--mono);color:var(--ink3);text-transform:uppercase;letter-spacing:.06em}
+.ch-x .now{display:flex;align-items:center;gap:6px;color:var(--ice)}
+.ch-x .now i{width:6px;height:6px;border-radius:50%;background:var(--ice);box-shadow:0 0 0 0 var(--ice);animation:chPing 2.4s var(--ease,ease) infinite}
+.ch-grid{stroke:var(--line);stroke-width:1;stroke-dasharray:3 5;vector-effect:non-scaling-stroke}
+.ch-hit{fill:transparent;cursor:crosshair}
+.chart g.cb{transform-box:fill-box;transform-origin:50% 100%;transform:scaleY(0);transition:opacity .2s,filter .2s}
+.chart.in g.cb{animation:chGrow .9s cubic-bezier(.2,.9,.25,1.15) both;animation-delay:calc(var(--i)*28ms)}
+.chart.done g.cb{animation:none;transform:none}
+.chart svg.hov g.cb{opacity:.28}
+.chart svg.hov g.cb.on{opacity:1;filter:brightness(1.25) drop-shadow(0 0 6px rgba(242,238,230,.25))}
+.chart g.cb .xcap{animation:chBlink 3.2s steps(2,end) infinite;animation-delay:calc(var(--i)*90ms)}
+.chart g.now .nowcap{fill:var(--ice);filter:drop-shadow(0 0 4px var(--ice));animation:chGlow 1.8s ease-in-out infinite}
+.ch-scan{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.ch-scan::after{content:"";position:absolute;top:0;bottom:0;width:1px;left:-2%;background:linear-gradient(180deg,transparent,rgba(160,215,235,.55) 40%,rgba(160,215,235,.55) 85%,transparent);box-shadow:0 0 12px 2px rgba(160,215,235,.18);opacity:.8;animation:chScan 9s linear 1.5s infinite}
+.chart svg.hov~.ch-scan{display:none}
+.ch-tip{position:absolute;top:0;z-index:3;min-width:150px;padding:10px 12px;background:rgba(12,14,17,.94);border:1px solid var(--line2);backdrop-filter:blur(6px);font-size:12px;color:var(--ink2);pointer-events:none;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+.ch-tip .d{font:400 10px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--ink3)}
+.ch-tip .n{margin:4px 0 6px;font:600 20px/1 var(--display);color:var(--ink)}.ch-tip .n small{font:400 11px var(--sans);color:var(--ink3)}
+.ch-tip .r{display:flex;align-items:center;gap:8px;line-height:1.7}.ch-tip .r i{width:8px;height:8px}.ch-tip .r b{margin-left:auto;font-weight:600;color:var(--ink)}
+.ch-tip .r.x{color:var(--ink);font-family:var(--mono);font-size:11px}
+@keyframes chGrow{0%{transform:scaleY(0)}100%{transform:scaleY(1)}}
+@keyframes chBlink{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes chGlow{0%,100%{opacity:.45}50%{opacity:1}}
+@keyframes chPing{0%{box-shadow:0 0 0 0 rgba(160,215,235,.6)}70%,100%{box-shadow:0 0 0 7px rgba(160,215,235,0)}}
+@keyframes chScan{0%{left:-2%;opacity:0}5%{opacity:.8}55%{left:101%;opacity:.8}56%,100%{left:101%;opacity:0}}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:14px;font-size:13px;color:var(--ink2)}
 .legend span{display:flex;align-items:center;gap:8px}.legend i{width:10px;height:10px}
+.legend b{font:500 12px var(--mono);color:var(--ink)}
 
 .sources{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:1px;margin-top:20px;background:var(--line);border:1px solid var(--line)}
 .src{padding:16px;background:var(--void)}
 .src .n{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)}
 .src .n i{width:6px;height:6px;background:var(--low)}
+.src-live .n i{background:var(--ice);animation:chGlow 1.8s ease-in-out infinite}.src-live .s{color:var(--ice)}
 .src .v{margin-top:10px;font:600 20px/1 var(--display)}
 .src .s{margin-top:6px;font:400 11px var(--mono);color:var(--ink3)}
 

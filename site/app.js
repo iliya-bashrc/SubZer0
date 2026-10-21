@@ -212,14 +212,46 @@ function earlyWarning(){const E=D.live&&D.live.em||[];if(!E.length)return'';
         <div class="ew-name${e.name.length>28?' long':''}">${esc(e.name)}</div><div class="ew-t">${esc(e.title||'')}</div>
         ${cv.length?`<div class="ew-cves">${cv.map(c=>BYID.has(c)?`<button class="ew-cve" data-cve="${c}">${c}<small>${esc(ST_LABEL[st[c]]||'')}</small></button>`:`<a class="ew-cve" href="https://www.cve.org/CVERecord?id=${c}" target="_blank" rel="noopener noreferrer">${c}<small>${esc(ST_LABEL[st[c]]||'not published yet')}</small></a>`).join('')}</div>`:''}
         <div class="ew-src">${src.length} source${src.length===1?'':'s'}: ${src.slice(0,6).map(x=>`<a href="${esc(safeUrl(x.u))}" target="_blank" rel="noopener noreferrer" title="${esc(x.t||'')}">${esc(x.n)}</a>`).join(' · ')}</div></article>`}).join('')}</div></section>`}
+/* ---------- briefing chart: grow-in, hover/tap readout, live "today" bar ---------- */
+let CHART_SEEN=false;
+function dayLabel(d){if(!d)return'';const t=new Date(d+'T00:00:00Z');return isNaN(t)?String(d):t.toLocaleDateString('en',{month:'short',day:'numeric',timeZone:'UTC'})}
+function chartSvg(days,max){
+  const bw=1000/Math.max(1,days.length),w=bw*.64,pad=bw*.18,H=190,peak=days.reduce((b,d,i)=>d.n>days[b].n?i:b,0);let o='';
+  [.25,.5,.75].forEach(f=>o+=`<line class="ch-grid" x1="0" x2="1000" y1="${200-f*H}" y2="${200-f*H}"/>`);
+  days.forEach((d,i)=>{let y=200,g='';const x=i*bw+pad;
+    [['l','--low'],['m','--med'],['h','--high'],['c','--crit']].forEach(([k,c])=>{const hh=(d[k]||0)/max*H;y-=hh;if(hh>0)g+=`<rect x="${x}" y="${y}" width="${w}" height="${hh}" fill="var(${c})" opacity="${k==='c'?1:.78}"/>`});
+    const rest=Math.max(0,d.n-d.c-d.h-d.m-d.l)/max*H;if(rest>0){y-=rest;g+=`<rect x="${x}" y="${y}" width="${w}" height="${rest}" fill="#3A3F46"/>`}
+    if(d.x)g+=`<rect class="xcap" x="${x}" y="${y-8}" width="${w}" height="3" fill="var(--ink)"/>`;
+    const last=i===days.length-1;
+    o+=`<g class="cb${last?' now':''}${i===peak?' peak':''}" style="--i:${i}">${g}${last?`<rect class="nowcap" x="${x}" y="${y-2}" width="${w}" height="2"/>`:''}</g>`});
+  days.forEach((d,i)=>o+=`<rect class="ch-hit" data-b="${i}" x="${i*bw}" y="0" width="${bw}" height="200"/>`);
+  return o}
+function initChart(days){
+  const sec=document.getElementById('chart');if(!sec)return;const svg=sec.querySelector('svg'),tip=document.getElementById('chTip'),plot=sec.querySelector('.ch-plot');
+  if(CHART_SEEN||FX.reduce||!('IntersectionObserver' in window))sec.classList.add('in','done');
+  else{const io=new IntersectionObserver(es=>{if(es.some(e=>e.isIntersecting)){CHART_SEEN=true;sec.classList.add('in');io.disconnect()}},{threshold:.35});io.observe(sec)}
+  let cur=-1;const gs=svg.querySelectorAll('g.cb');
+  const show=i=>{if(i===cur)return;cur=i;gs.forEach((g,j)=>g.classList.toggle('on',j===i));svg.classList.toggle('hov',i>=0);
+    if(i<0){tip.hidden=true;return}const d=days[i],u=Math.max(0,d.n-d.c-d.h-d.m-d.l);
+    tip.innerHTML=`<div class="d">${esc(dayLabel(d.d))}${i===days.length-1?' · today':''}</div><div class="n">${fmt(d.n)} <small>CVEs</small></div>`+
+      [['c','Critical','--crit'],['h','High','--high'],['m','Medium','--med'],['l','Low','--low']].map(([k,l,c])=>`<div class="r"><i style="background:var(${c})"></i>${l}<b>${fmt(d[k]||0)}</b></div>`).join('')+
+      (u?`<div class="r"><i style="background:#3A3F46"></i>Unscored<b>${fmt(u)}</b></div>`:'')+(d.x?`<div class="r x">▬ ${fmt(d.x)} exploited</div>`:'');
+    tip.hidden=false;const pw=plot.clientWidth,cx=(i+.5)/days.length*pw,tw=tip.offsetWidth;
+    tip.style.left=Math.max(0,Math.min(pw-tw,cx-tw/2))+'px'};
+  const at=e=>{const r=svg.getBoundingClientRect();return Math.max(0,Math.min(days.length-1,Math.floor((e.clientX-r.left)/r.width*days.length)))};
+  svg.addEventListener('pointermove',e=>{if(e.pointerType==='mouse')show(at(e))});
+  svg.addEventListener('pointerleave',e=>{if(e.pointerType==='mouse')show(-1)});
+  svg.addEventListener('click',e=>{const i=at(e);show(i===cur&&e.pointerType!=='mouse'?-1:i)});
+  if(!initChart.away){initChart.away=1;document.addEventListener('pointerdown',e=>{const c=document.getElementById('chart');if(c&&!c.contains(e.target)){const t=document.getElementById('chTip');if(t)t.hidden=true;c.querySelector('svg')?.classList.remove('hov');c.querySelectorAll('g.on').forEach(g=>g.classList.remove('on'))}})}
+}
+/* grid of source cards: stretch the last card so no empty hole is left on any screen width */
+function fillGrid(el){if(!el)return;const fit=()=>{const k=[...el.children];k.forEach(c=>c.style.gridColumn='');const cols=getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length;const rem=k.length%cols;if(cols>1&&rem&&k.length)k[k.length-1].style.gridColumn=`span ${cols-rem+1}`};fit();
+  if(!fillGrid.bound){fillGrid.bound=1;addEventListener('resize',()=>fillGrid(document.querySelector('#p0 .sources')))}}
 function briefing(){
   const W=rows.filter(r=>r.w);
   const T=D.totals,q=rows.filter(r=>r.P[0]<=2).sort((a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0)).slice(0,7);
   const feed=rows.filter(r=>r.c>0).slice(0,7),days=D.days,max=Math.max(...days.map(d=>d.n));
-  const bw=100/days.length;let bars='';
-  days.forEach((d,i)=>{let y=200;[['l','--low'],['m','--med'],['h','--high'],['c','--crit']].forEach(([k,c])=>{const hh=d[k]/max*190;y-=hh;bars+=`<rect x="${i*bw+bw*.18}%" y="${y}" width="${bw*.64}%" height="${hh}" fill="var(${c})" opacity="${k==='c'?1:.78}"/>`});
-    const rest=(d.n-d.c-d.h-d.m-d.l)/max*190;if(rest>0){y-=rest;bars+=`<rect x="${i*bw+bw*.18}%" y="${y}" width="${bw*.64}%" height="${rest}" fill="#3A3F46"/>`}
-    if(d.x)bars+=`<rect x="${i*bw+bw*.18}%" y="${y-8}" width="${bw*.64}%" height="3" fill="var(--ink)"/>`});
+  const bars=chartSvg(days,max);
   document.getElementById('p0').innerHTML=`<div class="wrap">
   <div class="hero"><canvas id="hc"></canvas><div class="ice"></div><svg class="frost" id="hfrost" aria-hidden="true"></svg><div class="strip"></div>
     <div class="hero-copy"><span class="chip crit">Last 30 days</span>
@@ -255,16 +287,19 @@ function briefing(){
     <section><div class="sec-h"><h2>No patch yet</h2><span class="meta">urgent, no fix in the refs</span></div>${miniList(rows.filter(r=>r.P[0]<=2&&!r.f&&r.L>=1).sort((a,b)=>a.P[0]-b.P[0]||b.L-a.L||(b.e||0)-(a.e||0)).slice(0,5),r=>'P'+r.P[0]+' · '+LADDER[r.L].toLowerCase())}<a class="more-l" href="research?view=nopatch" data-view="nopatch">all unpatched →</a></section>
   </div>`:''}
   <section class="mystack" id="mystack"></section>
-  <section class="chart"><div class="sec-h"><h2>What got published</h2><span class="meta">last 30 days by severity. ▬ means exploited</span></div>
-    <svg viewBox="0 0 1000 200" preserveAspectRatio="none">${bars}</svg>
-    <div class="legend"><span><i style="background:var(--crit)"></i>Critical</span><span><i style="background:var(--high)"></i>High</span><span><i style="background:var(--med)"></i>Medium</span><span><i style="background:var(--low)"></i>Low</span><span><i style="background:#3A3F46"></i>Unscored</span></div></section>
+  <section class="chart" id="chart"><div class="sec-h"><h2>What got published</h2><span class="meta">last 30 days by severity · ▬ exploited · tap a bar</span></div>
+    <div class="ch-wrap"><div class="ch-y" aria-hidden="true"><span style="top:${10/200*100}%">${fmt(max)}</span><span style="top:${105/200*100}%">${fmt(Math.round(max/2))}</span><span style="top:100%">0</span></div>
+      <div class="ch-plot"><svg viewBox="0 0 1000 200" preserveAspectRatio="none" aria-label="CVEs published per day, last 30 days">${bars}</svg><div class="ch-scan" aria-hidden="true"></div><div class="ch-tip" id="chTip" hidden></div></div></div>
+    <div class="ch-x"><span>${esc(dayLabel(days[0]&&days[0].d))}</span><span>${esc(dayLabel(days[days.length>>1]&&days[days.length>>1].d))}</span><span class="now">today<i></i></span></div>
+    <div class="legend"><span><i style="background:var(--crit)"></i>Critical <b>${fmt(days.reduce((a,d)=>a+(d.c||0),0))}</b></span><span><i style="background:var(--high)"></i>High <b>${fmt(days.reduce((a,d)=>a+(d.h||0),0))}</b></span><span><i style="background:var(--med)"></i>Medium <b>${fmt(days.reduce((a,d)=>a+(d.m||0),0))}</b></span><span><i style="background:var(--low)"></i>Low <b>${fmt(days.reduce((a,d)=>a+(d.l||0),0))}</b></span><span><i style="background:#3A3F46"></i>Unscored <b>${fmt(days.reduce((a,d)=>a+Math.max(0,d.n-d.c-d.h-d.m-d.l),0))}</b></span></div></section>
   <section style="margin-top:48px"><div class="sec-h"><h2>Where the data comes from</h2><span class="meta">your browser checks the SHA-256 of every file</span></div>
     <div class="sources">${D.sources.map(s=>`<div class="src"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${s.v==null?"—":fmt(s.v)}</div><div class="s">${s.ok?'checked '+esc((s.at||'').replace('T',' ').slice(5,16)):'<span style="color:var(--crit)">failed last run</span>'}</div></div>`).join('')}
-      ${D.isrc.map(s=>`<div class="src${s.ok?'':' bad'}"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${fmt(s.v)}</div><div class="s">${s.ok?'exploit intel':'<span style="color:var(--high)" title="'+esc(s.note)+'">kept last good data</span>'}</div></div>`).join('')}</div></section>
+      ${D.isrc.map(s=>`<div class="src${s.ok?'':' bad'}"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${fmt(s.v)}</div><div class="s">${s.ok?'exploit intel':'<span style="color:var(--high)" title="'+esc(s.note)+'">kept last good data</span>'}</div></div>`).join('')}
+      ${D.live?`<div class="src src-live"><div class="n"><i></i>Early warning</div><div class="v">${fmt(D.live.n)}</div><div class="s">live · CVE.org + ${D.live.feedsOk} feeds · ${esc(D.live.at.slice(11,16))}</div></div>`:''}</div></section>
   ${credits()}
   </div>`;
   requestAnimationFrame(()=>{glitch(document.getElementById('hc'),7);frost(document.getElementById('hfrost'),11)});renderMyStack();
-  const p0=document.getElementById('p0');watchHeads(p0);
+  const p0=document.getElementById('p0');watchHeads(p0);initChart(days);fillGrid(p0.querySelector('.sources'));
   p0.querySelectorAll('#feed .feed-item.new .t').forEach(t=>typeIn(t,900));
   if(FX.once('hero')){decode(document.getElementById('heroN'),900);typeIn(document.getElementById('heroSha'),1100)}
 }
