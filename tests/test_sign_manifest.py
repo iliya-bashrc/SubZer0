@@ -38,6 +38,37 @@ class SignManifestTests(unittest.TestCase):
                 if old is not None:
                     os.environ["SUBZER0_SIGNING_KEY"] = old
 
+    def test_pasted_note_bad_key_and_mismatch_never_block(self):
+        import tempfile
+        seed = bytes(range(32))
+        pk = base64.b64encode(sm.public_key(seed)).decode()
+        note = ("SubZer0 manifest signing key\n2) Name:  SUBZER0_SIGNING_KEY\n3) Value (64 hex chars):\n\n"
+                + seed.hex() + "\n\nPublic key: " + pk + "\n")
+        self.assertEqual(sm.parse_seed(note), seed)
+        self.assertEqual(sm.parse_seed("  " + seed.hex().upper() + "\n"), seed)
+        self.assertIsNone(sm.parse_seed("not a key"))
+        self.assertIsNone(sm.parse_seed(seed.hex() + " " + bytes(32).hex()))
+        old = os.environ.pop("SUBZER0_SIGNING_KEY", None)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                snap = Path(d) / "snapshot"
+                snap.mkdir()
+                (snap / "manifest.json").write_text("{}")
+                (Path(d) / "app.js").write_text("const SIGN_PK='" + pk + "';")
+                os.environ["SUBZER0_SIGNING_KEY"] = "garbage"
+                self.assertEqual(sm.main(["--site", d]), 0)
+                self.assertFalse((snap / "manifest.sig").exists())
+                os.environ["SUBZER0_SIGNING_KEY"] = bytes(32).hex()
+                self.assertEqual(sm.main(["--site", d]), 0)
+                self.assertFalse((snap / "manifest.sig").exists())
+                os.environ["SUBZER0_SIGNING_KEY"] = note
+                self.assertEqual(sm.main(["--site", d]), 0)
+                self.assertTrue((snap / "manifest.sig").exists())
+        finally:
+            os.environ.pop("SUBZER0_SIGNING_KEY", None)
+            if old is not None:
+                os.environ["SUBZER0_SIGNING_KEY"] = old
+
     def test_app_embeds_a_32_byte_public_key(self):
         import re
         m = re.search(r"SIGN_PK='([A-Za-z0-9+/=]+)'", (ROOT / "site" / "app.js").read_text())
