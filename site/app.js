@@ -258,7 +258,6 @@ function briefing(){
       <div class="credit-name"><span id="heroN">${fmt(T.cves)}</span> <span>CVEs</span></div>
       <div class="sub">${fmt(T.critical)} critical, ${T.known_exploited} already being exploited, ${fmt(D.poc)} with exploit code out in public${W.length?`, ${W.length} weaponized in Metasploit or Nuclei`:''}.</div>
       <div class="code" id="heroSha">${liveLine()}search index sha256 ✓ · ${SIGNED?'ed25519 signed ✓ · ':SIGNED===false?'<span class="t-warn">signature mismatch</span> · ':''}${OFFICIAL?'':'<span class="t-warn">unofficial copy</span> · '}${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
-    <div class="hero-meta"><span class="chip ice">Live</span><div class="code">next refresh in <span id="cd"></span></div></div>
   </div>
   ${earlyWarning()}
   <div class="stats">
