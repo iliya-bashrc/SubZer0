@@ -79,6 +79,9 @@ NAMED = re.compile(r"\b([A-Za-z][A-Za-z0-9]{1,24}(?:2shell|4shell|shell|bleed|ha
 NAMED_STOP = {"powershell", "webshell", "webshells", "shell", "reverseshell", "bashshell", "cshell", "nutshell",
               "eggshell", "seashell", "bombshell", "hijack", "hijacks", "carjack", "ransomleak", "dataleak", "subshell",
               "theshell", "ashell", "aishell"}
+# famous old bugs the press name-drops for comparison ("the worst since Heartbleed"); never the subject of a new event
+HISTORIC_NAMED = {"heartbleed", "shellshock", "log4shell", "spring4shell", "text4shell", "proxyshell", "rowhammer",
+                  "cloudbleed", "regresshion", "sambacry", "bluekeep"}
 
 MAX_FEED_BYTES = 4 * 1024 * 1024
 FEED_WINDOW = timedelta(days=4)
@@ -414,7 +417,7 @@ def _named(text: str) -> list[str]:
     for m in NAMED.finditer(text):
         word = m.group(1)
         low = word.lower()
-        if low in NAMED_STOP or low.endswith("powershell") or len(low) < 6:
+        if low in NAMED_STOP or low in HISTORIC_NAMED or low.endswith("powershell") or len(low) < 6:
             continue
         # must look like a name: mixed case, a digit, or a vendor-ish prefix (php2shell, Log4Shell, CitrixBleed)
         if not (re.search(r"\d", word) or re.search(r"[a-z][A-Z]", word) or word[0].isupper()):
@@ -456,6 +459,51 @@ def cluster(articles: list[dict]) -> list[dict]:
     return list(groups.values())
 
 
+def _event_names(e: dict) -> set[str]:
+    k = str(e.get("key") or "")
+    return ({k[5:]} if k.startswith("name:") else set()) | {str(e.get("name") or "").lower()}
+
+
+def _covered(p: dict, events: list[dict]) -> bool:
+    """A previous event is a duplicate when a current one shares a CVE or its name."""
+    if str(p.get("key") or "")[5:] in HISTORIC_NAMED:
+        return True
+    pc, pn = set(p.get("cves") or []), _event_names(p) - {""}
+    return any(pc & set(e.get("cves") or []) or pn & _event_names(e) for e in events)
+
+
+def _prev_match(prev: list[dict], names: list[str], cves: list[str]) -> dict | None:
+    for p in prev:
+        if isinstance(p, dict) and (set(p.get("cves") or []) & set(cves) or _event_names(p) & set(names)):
+            return p
+    return None
+
+
+def _merge_overlapping(events: list[dict]) -> list[dict]:
+    """Two clusters that ended up with a shared CVE are one event: keep the stronger, fold in the other's sources."""
+    out: list[dict] = []
+    for e in sorted(events, key=lambda e: (e.get("level") != "p0", -int(e.get("score") or 0))):
+        twin = next((o for o in out if set(o["cves"]) & set(e["cves"])), None)
+        if twin is None:
+            out.append(e)
+            continue
+        seen = {s["u"] for s in twin["sources"]}
+        twin["sources"] = (twin["sources"] + [s for s in e["sources"] if s["u"] not in seen])[:8]
+        twin["cves"] = sorted(set(twin["cves"]) | set(e["cves"]), key=lambda c: (len(c), c))[:6]
+        twin["status"] = {**e.get("status", {}), **twin.get("status", {})}
+        twin["signals"] = sorted(set(twin["signals"]) | set(e["signals"]), key=[n for n, _, _ in SIGNALS].index)
+        twin["first_seen"] = min(twin["first_seen"], e["first_seen"])
+        twin["last_seen"] = max(twin["last_seen"], e["last_seen"])
+    return out
+
+
+def _rank_names(names: set[str], arts: list[dict]) -> list[str]:
+    """The event's own name is the one in the most headlines, then the most article text; alphabetical last."""
+    def rank(n: str) -> tuple:
+        return (-sum(n in a["title"].lower() for a in arts), -sum(a["text"].lower().count(n) for a in arts), n)
+    return sorted(names, key=rank)
+
+
 def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str, list], prev: list[dict],
                    now: datetime, lookup: Callable[[str], str] | None = None, max_lookups: int = 25) -> list[dict]:
     prev_by_key = {p.get("key"): p for p in prev if isinstance(p, dict)}
@@ -471,7 +519,7 @@ def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str,
         sigs = [name for name, rx, _ in SIGNALS if rx.search(text)]
         cves = sorted({k[4:] for k in g["keys"] if k.startswith("cve:")}, key=lambda c: (len(c), c))
         cves = ["CVE-" + c for c in cves][:6]
-        names = sorted({k[5:] for k in g["keys"] if k.startswith("name:")})
+        names = _rank_names({k[5:] for k in g["keys"] if k.startswith("name:")}, arts)
         if weight < 2 or not (set(sigs) & URGENT):
             continue
         status: dict[str, str] = {}
@@ -492,7 +540,10 @@ def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str,
         if not fresh and all(s == "kev" for s in status.values()):
             continue
         key = ("name:" + names[0]) if names else ("cve:" + ",".join(cves))
-        old = prev_by_key.get(key) or {}
+        old = prev_by_key.get(key) or _prev_match(prev, names, cves) or {}
+        ok = str(old.get("key") or "")
+        if ok.startswith("name:") and ok[5:] in names:
+            key = ok  # stay on the key the event was first published under
         first = parse_time(old.get("first_seen")) or arts[0]["at"]
         best = _best_title(arts, names)
         hit = re.search(re.escape(names[0]), best, re.I) if names else None
@@ -513,10 +564,11 @@ def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str,
             "sources": [{"n": a["src"], "u": a["url"], "t": clean(a["title"], 160), "at": iso(a["at"])}
                         for a in sorted(sources.values(), key=lambda a: (-a["w"], a["at"]))][:8],
         })
-    # keep recently-seen events that dropped out of the feed window
+    out = _merge_overlapping(out)
+    # keep recently-seen events that dropped out of the feed window (unless a live event already covers them)
     keys = {e["key"] for e in out}
     for p in prev:
-        if isinstance(p, dict) and p.get("key") not in keys:
+        if isinstance(p, dict) and p.get("key") not in keys and not _covered(p, out):
             last = parse_time(p.get("last_seen"))
             if last and now - last < EMERGING_TTL:
                 for c in p.get("cves") or []:

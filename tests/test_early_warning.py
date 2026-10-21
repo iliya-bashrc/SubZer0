@@ -83,9 +83,38 @@ class EmergingTests(unittest.TestCase):
         self.assertEqual(out[0]["first_seen"], "2026-10-20T00:00:00Z")
         self.assertEqual(out[0]["status"]["CVE-2026-7777"], "reserved")
 
+    def test_name_dropped_old_bug_does_not_rename_or_duplicate_the_event(self):
+        arts = [
+            art("CISA", "PHP2Shell: Two Unpatched Critical PHP RCE Flaws", "CVE-2026-109618 CVE-2026-109619 exploited", w=2),
+            art("Tenable", "PHP2Shell (CVE-2026-109618): the worst open-source bug since Heartbleed", "remote code execution"),
+            art("Huntress", "Exploitation of PHP2Shell observed", "CVE-2026-109619 actively exploited"),
+        ]
+        prev = [{"key": "name:php2shell", "name": "PHP2Shell", "cves": ["CVE-2026-109618", "CVE-2026-109619"],
+                 "first_seen": "2026-10-20T20:00:00Z", "last_seen": "2026-10-21T08:00:00Z", "level": "p0", "score": 30,
+                 "sources": []},
+                {"key": "name:heartbleed", "name": "heartbleed", "cves": ["CVE-2026-109618"],
+                 "first_seen": "2026-10-21T00:00:00Z", "last_seen": "2026-10-21T08:00:00Z", "sources": []}]
+        out = ew.build_emerging(arts, {}, {}, prev, NOW, lambda c: "unpublished")
+        self.assertEqual([e["name"] for e in out], ["PHP2Shell"])
+        self.assertEqual(out[0]["key"], "name:php2shell")
+        self.assertEqual(out[0]["first_seen"], "2026-10-20T20:00:00Z")
+
+    def test_clusters_sharing_a_cve_are_merged(self):
+        a = ew._merge_overlapping([
+            {"key": "name:foo2shell", "cves": ["CVE-2026-1"], "level": "p0", "score": 9, "sources": [{"u": "a"}], "status": {},
+             "signals": ["rce"], "first_seen": "2026-10-21T01:00:00Z", "last_seen": "2026-10-21T02:00:00Z"},
+            {"key": "cve:CVE-2026-1", "cves": ["CVE-2026-1", "CVE-2026-2"], "level": "watch", "score": 3, "sources": [{"u": "b"}],
+             "status": {}, "signals": ["poc"], "first_seen": "2026-10-20T01:00:00Z", "last_seen": "2026-10-21T03:00:00Z"}])
+        self.assertEqual(len(a), 1)
+        self.assertEqual(a[0]["key"], "name:foo2shell")
+        self.assertEqual(a[0]["cves"], ["CVE-2026-1", "CVE-2026-2"])
+        self.assertEqual([s["u"] for s in a[0]["sources"]], ["a", "b"])
+        self.assertEqual(a[0]["first_seen"], "2026-10-20T01:00:00Z")
+
+
     def test_names_ignore_everyday_words(self):
         self.assertEqual(ew._named("PowerShell webshell in a nutshell"), [])
-        self.assertEqual(ew._named("React2Shell and Log4Shell and CitrixBleed"), ["react2shell", "log4shell", "citrixbleed"])
+        self.assertEqual(ew._named("React2Shell and Log4Shell and CitrixBleed"), ["react2shell", "citrixbleed"])
 
 
 class WorkflowTests(unittest.TestCase):
