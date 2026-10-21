@@ -17,7 +17,7 @@ jobs:
   prepare:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -51,6 +51,7 @@ jobs:
       - name: Collect the complete upstream feed into a staged static snapshot
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: python scripts/update_data.py --output-dir snapshot
 
       - name: Add exploit intel (GitHub PoCs, Metasploit, Nuclei, CISA SSVC, chatter)

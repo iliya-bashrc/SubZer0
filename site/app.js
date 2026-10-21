@@ -13,7 +13,7 @@ const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname
 /* Ed25519 public key for snapshot/manifest.sig (scripts/sign_manifest.py). Copies can mirror data, not sign it. */
 const SIGN_PK='Hs5MMxzGzlocXQG0Pz5ZWUSLOfSmBXLDyX3OIA3uGvk=';let SIGNED=null;
 const b64u8=b=>Uint8Array.from(atob(b),c=>c.charCodeAt(0));
-async function verifySig(t){try{if(!crypto.subtle)return null;const r=await fetch(SNAP+'manifest.sig',{cache:'no-store',credentials:'omit'});if(!r.ok)return null;
+async function verifySig(t,url=SNAP+'manifest.sig'){try{if(!crypto.subtle)return null;const r=await fetch(url,{cache:'no-store',credentials:'omit'});if(!r.ok)return null;
   const sig=b64u8((await r.text()).trim());if(sig.length!==64)return false;
   const k=await crypto.subtle.importKey('raw',b64u8(SIGN_PK),{name:'Ed25519'},false,['verify']);
   return await crypto.subtle.verify({name:'Ed25519'},k,sig,new TextEncoder().encode(t))}catch{return null}}
@@ -35,7 +35,13 @@ function prio(r){const e=r.e||0;
   if(r.c>=9||(r.c>=7&&(r.x||e>=.05))||r.w||r.au) return [2,'This week',r.w?'Weaponized in '+(r.m?'Metasploit':'Nuclei'):r.x&&r.c>=7?'Exploit code is public':r.c>=9?'Critical score':r.au&&r.c<7?'CISA: automatable with total impact':'EPSS keeps going up'];
   if(r.c>=7) return [3,'Planned','High, but nobody is exploiting it yet'];
   return [4,'Track','Quiet for now'];}
-let D=null,rows=[],BYID=new Map(),FRESH=new Set();
+let D=null,rows=[],BYID=new Map(),FRESH=new Set(),RAW=null,LIVE=null;
+/* Live layer (scripts/early_warning.py, every ~15 min): CVE.org / GHSA / KEV records newer than the snapshot plus
+   early warnings from CERT + security-news feeds. Not part of the SHA-256 snapshot, so every row is labelled LIVE. */
+const LIVE_URL=new URL('live/early.json',BASE).href;
+async function loadLive(){try{const r=await fetch(LIVE_URL,{cache:'no-store',credentials:'omit'});if(!r.ok)return null;const t=await r.text();if(t.length>4e6)return null;
+  const sv=verifySig(t,LIVE_URL.replace(/\.json$/,'.sig'));const j=JSON.parse(t);if(!j||j.schema!==1||!Array.isArray(j.cves)||!Array.isArray(j.emerging))return null;
+  const ok=await sv;if(ok===false)return null;j._signed=ok===true;return j}catch{return null}}
 const LADDER=['No exploit seen','Public PoC','Weaponized','Exploited in the wild'];
 const FLAG={fork:'fork of another repo',nodesc:'no description',fresh:'created in the last 7 days',bait:'looks like bait or a scam',known:'owner has posted fake PoCs before',newacct:'brand-new GitHub account'};
 const REC=new Map();let EPSS=null;
@@ -52,13 +58,19 @@ async function fetchVerified(path,sha,max=8e6){if(!/^data\/[a-z0-9_.-]+\.json$/i
 async function loadManifest(){const r=await fetch(SNAP+'manifest.json',{cache:'no-store',credentials:'omit'});if(!r.ok)throw new Error('manifest '+r.status);const t=await r.text();if(t.length>2e6)throw new Error('manifest too large');const sv=verifySig(t);
   const m=JSON.parse(t);if(!m||!Array.isArray(m.days)||!m.search_index||!m.generated_at)throw new Error('manifest has an unexpected shape');SIGNED=await sv;return m}
 async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[],
-    m.intel&&m.intel.path?fetchVerified(m.intel.path,m.intel.sha256,1.5e7).catch(e=>{console.warn('intel skipped:',e.message);return null}):null]);return build(m,idx,poc,intel)}
+    m.intel&&m.intel.path?fetchVerified(m.intel.path,m.intel.sha256,1.5e7).catch(e=>{console.warn('intel skipped:',e.message);return null}):null]);
+  RAW={m,idx,poc,intel};LIVE=await loadLive();return build(m,idx,poc,intel,LIVE)}
 const arr=v=>Array.isArray(v)?v:[];
 function intelOf(I){I=I&&typeof I==='object'?I:{};const s=arr(I.s),b=arr(I.b),g=arr(I.g).filter(x=>Array.isArray(x)&&typeof x[0]==='string'),t=I.t&&typeof I.t==='object'?I.t:{};
   return {g,m:arr(I.m).filter(Array.isArray),n:arr(I.n).filter(Array.isArray),s,b,t,f:I.f===1}}
-function build(m,idx,poc,intel){const P=new Set(Array.isArray(poc)?poc:[]);const IC=intel&&intel.cves&&typeof intel.cves==='object'?intel.cves:{};
-  const R=[];for(const t of idx){if(!Array.isArray(t)||!CVE_RE.test(t[0]))continue;const s=SEV[t[2]]?t[2]:'unknown';
-    const r={id:t[0],t:String(t[1]||''),s,c:+t[3]||0,k:t[4]?1:0,e:typeof t[5]==='number'?t[5]:null,a:String(t[6]||''),d:String(t[7]||t[6]||''),p:String(t[8]||''),x:P.has(t[0])?1:0};
+function liveOf(L){const kev=new Set(arr(L&&L.kev).filter(x=>typeof x==='string'&&CVE_RE.test(x))),src=new Map(),tup=[];
+  for(const t of arr(L&&L.cves)){if(!Array.isArray(t)||typeof t[0]!=='string'||!CVE_RE.test(t[0])||src.has(t[0]))continue;src.set(t[0],String(t[9]||'live'));tup.push(t)}
+  const em=arr(L&&L.emerging).filter(e=>e&&typeof e==='object'&&typeof e.name==='string').slice(0,12);return {kev,src,tup,em}}
+function build(m,idx,poc,intel,L){const P=new Set(Array.isArray(poc)?poc:[]);const IC=intel&&intel.cves&&typeof intel.cves==='object'?intel.cves:{};
+  const LV=liveOf(L),have=new Set();const all=[];for(const t of idx)if(Array.isArray(t)){have.add(t[0]);all.push(LV.kev.has(t[0])&&!t[4]?[...t.slice(0,4),1,...t.slice(5)]:t)}
+  for(const t of LV.tup)if(!have.has(t[0]))all.push(t);
+  const R=[];for(const t of all){if(!Array.isArray(t)||!CVE_RE.test(t[0]))continue;const s=SEV[t[2]]?t[2]:'unknown';
+    const r={id:t[0],t:String(t[1]||''),s,c:+t[3]||0,k:t[4]?1:0,e:typeof t[5]==='number'?t[5]:null,a:String(t[6]||''),d:String(t[7]||t[6]||''),p:String(t[8]||''),x:P.has(t[0])?1:0,lv:LV.src.get(t[0])||(LV.kev.has(t[0])&&!have.has(t[0])?'kev':''),kl:LV.kev.has(t[0])?1:0};if(have.has(r.id)&&r.lv)r.lv='';
     const I=IC[r.id]?intelOf(IC[r.id]):null;r.I=I;
     if(I){const good=I.g.filter(g=>!arr(g[5]).includes('bait'));r.g=good.length;r.gb=I.g.length-good.length;r.m=I.m.length;r.n=I.n.length;r.w=r.m||r.n?1:0;
       r.v=I.s[0]||'';r.au=I.s[1]==='yes'&&I.s[2]==='total'?1:0;r.b=+I.b[0]||0;r.f=I.f?1:0;
@@ -70,7 +82,8 @@ function build(m,idx,poc,intel){const P=new Set(Array.isArray(poc)?poc:[]);const
   R.sort((a,b)=>b.d.localeCompare(a.d)||b.id.localeCompare(a.id,undefined,{numeric:true}));
   const src=(m.source_status||[]).map(s=>({n:String(s.name),ok:!!s.ok,v:s.records??s.advisories??s.catalog_records??s.exploit_cves??s.scores??null,at:String(s.checked_at||'')}));
   const isrc=intel&&Array.isArray(intel.sources)?intel.sources.filter(x=>x&&typeof x.name==='string').map(x=>({n:x.name,ok:!!x.ok,v:+x.count||0,note:String(x.note||'')})):[];
-  return {D:{m,gen:m.generated_at,totals:m.totals,days:m.days.map(d=>({d:d.date,n:d.count,c:d.critical,h:d.high,m:d.medium,l:d.low,x:d.exploited})),sources:src,isrc,intel:!!intel,poc:R.filter(r=>r.x).length},rows:R}}
+  return {D:{m,gen:m.generated_at,totals:m.totals,days:m.days.map(d=>({d:d.date,n:d.count,c:d.critical,h:d.high,m:d.medium,l:d.low,x:d.exploited})),sources:src,isrc,intel:!!intel,poc:R.filter(r=>r.x).length,
+    live:L?{at:String(L.generated_at||''),age:+L.snapshot_age_hours||0,n:R.filter(r=>r.lv).length,k:LV.kev.size,em:LV.em,signed:!!L._signed,feeds:arr(L.feeds).length,feedsOk:arr(L.feeds).filter(f=>f&&f.ok).length}:null},rows:R}}
 function adopt(x){D=x.D;rows=x.rows;BYID=new Map(rows.map(r=>[r.id,r]))}
 async function getRecord(id){if(REC.has(id))return REC.get(id);const r=BYID.get(id);if(!r)throw new Error(id+' is not in this snapshot');
   const day=D.m.days.find(d=>d.date===r.a);if(!day)throw new Error('no shard for '+r.a);const sh=await fetchVerified(day.path,day.sha256,2e7);
@@ -185,6 +198,20 @@ function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target=
     <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
       <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
     <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
+const ago=iso=>{const t=Date.parse(iso);if(!t)return'';const m=Math.max(0,Math.round((Date.now()-t)/6e4));return m<1?'just now':m<60?m+'m ago':m<2880?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
+const lvTag=r=>r.lv?`<span class="lv" title="live record from ${esc(r.lv==='cve.org'?'CVE.org':r.lv==='ghsa'?'GitHub advisories':'CISA KEV')} — full enrichment arrives with the next snapshot">LIVE</span>`:'';
+function liveLine(){const L=D.live,age=(Date.now()-Date.parse(D.gen))/36e5;let s='';
+  if(L)s+=`live layer ${ago(L.at)}${L.signed?' (signed)':''} · ${L.n} newer CVEs · `;
+  if(age>8)s+=`<span class="t-warn">full snapshot ${Math.round(age)}h old${L?', live layer covering':''}</span> · `;return s?s+'<br>':''}
+const SIG_LABEL={rce:'RCE',exploited:'Exploited','zero-day':'Zero-day',unpatched:'No patch yet',poc:'PoC',critical:'Critical',unauth:'No auth'};
+const ST_LABEL={unpublished:'not published yet',reserved:'reserved, no details',published:'published · outside window',live:'just published',snapshot:'in snapshot',kev:'on KEV',unknown:'status unknown',rejected:'rejected'};
+function earlyWarning(){const E=D.live&&D.live.em||[];if(!E.length)return'';
+  return `<section class="ew" aria-label="Early warning"><div class="sec-h"><h2>Early warning</h2><span class="meta">before NVD has it · from ${D.live.feedsOk} CERT &amp; security-news feeds · unconfirmed until a record lands</span></div>
+    <div class="ew-list">${E.slice(0,6).map(e=>{const p0=e.level==='p0',src=arr(e.sources).filter(x=>x&&safeUrl(x.u)),cv=arr(e.cves).filter(c=>typeof c==='string'&&CVE_RE.test(c)),st=e.status&&typeof e.status==='object'?e.status:{};
+      return `<article class="ew-item${p0?' p0':''}"><div class="ew-top"><span class="chip ${p0?'crit':'high'}">${p0?'P0 · act now':'Watch'}</span>${arr(e.signals).filter(x=>SIG_LABEL[x]).map(x=>`<span class="ew-sig">${SIG_LABEL[x]}</span>`).join('')}<span class="ew-when">first seen ${esc(ago(e.first_seen))}</span></div>
+        <div class="ew-name${e.name.length>28?' long':''}">${esc(e.name)}</div><div class="ew-t">${esc(e.title||'')}</div>
+        ${cv.length?`<div class="ew-cves">${cv.map(c=>BYID.has(c)?`<button class="ew-cve" data-cve="${c}">${c}<small>${esc(ST_LABEL[st[c]]||'')}</small></button>`:`<a class="ew-cve" href="https://www.cve.org/CVERecord?id=${c}" target="_blank" rel="noopener noreferrer">${c}<small>${esc(ST_LABEL[st[c]]||'not published yet')}</small></a>`).join('')}</div>`:''}
+        <div class="ew-src">${src.length} source${src.length===1?'':'s'}: ${src.slice(0,6).map(x=>`<a href="${esc(safeUrl(x.u))}" target="_blank" rel="noopener noreferrer" title="${esc(x.t||'')}">${esc(x.n)}</a>`).join(' · ')}</div></article>`}).join('')}</div></section>`}
 function briefing(){
   const W=rows.filter(r=>r.w);
   const T=D.totals,q=rows.filter(r=>r.P[0]<=2).sort((a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0)).slice(0,7);
@@ -198,9 +225,10 @@ function briefing(){
     <div class="hero-copy"><span class="chip crit">Last 30 days</span>
       <div class="credit-name"><span id="heroN">${fmt(T.cves)}</span> <span>CVEs</span></div>
       <div class="sub">${fmt(T.critical)} critical, ${T.known_exploited} already being exploited, ${fmt(D.poc)} with exploit code out in public${W.length?`, ${W.length} weaponized in Metasploit or Nuclei`:''}.</div>
-      <div class="code" id="heroSha">search index sha256 ✓ · ${SIGNED?'ed25519 signed ✓ · ':SIGNED===false?'<span class="t-warn">signature mismatch</span> · ':''}${OFFICIAL?'':'<span class="t-warn">unofficial copy</span> · '}${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
+      <div class="code" id="heroSha">${liveLine()}search index sha256 ✓ · ${SIGNED?'ed25519 signed ✓ · ':SIGNED===false?'<span class="t-warn">signature mismatch</span> · ':''}${OFFICIAL?'':'<span class="t-warn">unofficial copy</span> · '}${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy · last sync ${D.gen.replace('T',' ').slice(0,16)} UTC${sinceLast()}</div></div>
     <div class="hero-meta"><span class="chip ice">Live</span><div class="code">next refresh in <span id="cd"></span></div></div>
   </div>
+  ${earlyWarning()}
   <div class="stats">
     <div class="stat"><span class="chip crit">Patch now</span><div class="v">${rows.filter(r=>r.P[0]===1).length}</div><div class="s">fix these first</div></div>
     <div class="stat"><span class="chip high">Critical</span><div class="v">${fmt(T.critical)}</div><div class="s">CVSS 9.0 and up</div></div>
@@ -213,7 +241,7 @@ function briefing(){
     <section><div class="sec-h"><h2>Patch queue</h2><span class="meta">exploited stuff goes on top</span></div>
       ${q.map(r=>`<button class="queue-item" data-cve="${r.id}">
         <div class="prio">P${r.P[0]}<small style="color:${r.P[0]===1?'var(--crit)':'var(--high)'}">${r.P[1]}</small></div>
-        <div style="min-width:0"><div style="display:flex;align-items:center;gap:10px">${chip(r.s)}<span class="id">${r.id}</span>${r.k?'<span class="kev">KEV</span>':''}${r.L===2?xcell(r):r.x?'<span class="poc">POC</span>':''}</div>
+        <div style="min-width:0"><div style="display:flex;align-items:center;gap:10px">${chip(r.s)}<span class="id">${r.id}</span>${lvTag(r)}${r.k?'<span class="kev">KEV</span>':''}${r.L===2?xcell(r):r.x?'<span class="poc">POC</span>':''}</div>
           <div class="why">${r.T}</div><div class="code">› ${r.P[2]}${r.p?' · '+r.Pr:''}</div></div>
         <div class="epss">${r.e!=null?(r.e*100).toFixed(1)+'% EPSS':'— EPSS'}<span class="bar"><i style="width:${(r.e||0)*100}%"></i></span></div>
         <div class="cvss">${r.c>0?r.c.toFixed(1):'—'}</div></button>`).join('')}
@@ -247,7 +275,7 @@ function renderMyStack(){const el=document.getElementById('mystack');if(!el)retu
   el.innerHTML=`<div class="sec-h"><h2>Your stack</h2><span class="meta">${ST.stack.map(esc).join(', ')} · <a href="#research" data-mystack style="color:var(--ice)">edit</a></span></div>
     <div class="sb" style="margin-top:16px">${m.length?m.slice(0,6).map(r=>`<button class="ms-item" data-cve="${r.id}"><div style="display:flex;gap:6px">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></div><div class="id">${r.id}</div><div class="t">${esc(r.t)}</div></button>`).join(''):`<div class="ms-empty" style="border:0">Nothing in the last 30 days matches your stack. Enjoy it while it lasts.</div>`}</div>`;
   el.querySelector('[data-mystack]').onclick=e=>{e.preventDefault();F.view='stack';go(1);draw()}}
-const feedItem=(r,n)=>`<button class="feed-item${n?' new':''}" data-cve="${r.id}"><time>${n?'now':r.d.slice(5)}</time><div>${chip(r.s)}<div class="id">${r.id}</div><div class="t">${r.T}</div></div></button>`;
+const feedItem=(r,n)=>`<button class="feed-item${n?' new':''}" data-cve="${r.id}"><time>${n?'now':r.d.slice(5)}</time><div>${chip(r.s)}<div class="id">${r.id}${lvTag(r)}</div><div class="t">${r.T}</div></div></button>`;
 document.addEventListener('click',e=>{const p=e.target.closest('[data-page]');if(p&&p!==sheet&&PAGES[p.dataset.page]){e.preventDefault();openPage(p.dataset.page);return}
   const v=e.target.closest('[data-view]');if(v&&v!==sheet&&v.dataset.view){e.preventDefault();F.view=v.dataset.view;F.q='';const qi=document.getElementById('q');if(qi)qi.value='';SHOWN=200;go(1);draw()}});
 
@@ -423,6 +451,8 @@ function intelHTML(r){const I=r.I;if(!I)return '';const out=[];
     ${arr(links).map(l=>{const u=safeUrl(l[1]);return u?`<a class="ref" href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow"><div style="min-width:0"><div class="d">${esc(new URL(u).host)} · ${esc(l[2]||'')}</div><div class="l">${{bsky:'Bluesky post',masto:'Mastodon post',reddit:'Reddit thread',hn:'Hacker News thread'}[l[0]]||'Post'}</div></div></a>`:''}).join('')}</section>`)}
   return out.join('')}
 async function fillDossier(el,id,inSheet){const r=BYID.get(id);if(!r){if(ARCH&&ARCH.id===id){el.innerHTML=(inSheet?'<button class="d-close" id="closeSheet">← Back · Esc</button>':'')+ARCH.html;const c=el.querySelector('#closeSheet');if(c)c.onclick=closeSheet;return}el.innerHTML=`<div class="empty"><b>${esc(id)}</b> isn't in the current 30-day snapshot.</div>`;return}
+  if(r.lv){el.innerHTML=dossierHTML(r,null,null,inSheet);paintDossier(el,inSheet);const l=el.querySelector('#dload');
+    if(l)l.innerHTML=`<span class="lv">LIVE</span> Just published via ${esc(r.lv==='cve.org'?'CVE.org':r.lv==='ghsa'?'GitHub advisories':'CISA KEV')}; references, EPSS and exploit intel arrive with the next full snapshot. <a href="https://www.cve.org/CVERecord?id=${r.id}" target="_blank" rel="noopener noreferrer">Official record →</a>`;return}
   el.innerHTML=dossierHTML(r,null,null,inSheet);paintDossier(el,inSheet);const t0=performance.now();const fx=()=>{if((inSheet||cur===2)&&performance.now()-t0<1200){decode(el.querySelector('[data-fx="id"]'),520,t0);typeIn(el.querySelector('[data-fx="why"]'),900,t0+150)}};fx();
   try{const [full,ep]=await Promise.all([getRecord(id),getEpss().then(s=>s[id]||null)]);if(el.dataset.id!==id)return;el.innerHTML=dossierHTML(r,full,ep,inSheet);paintDossier(el,inSheet);fx();watchHeads(el);
     if(r.e!=null)epssSeries(id).then(pts=>{const w=el.querySelector(`[data-spark="${id}"]`);if(!w||!pts)return;const mx=Math.max(...pts.map(p=>p[1]),.01);
@@ -485,7 +515,7 @@ document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(
   const t=e.target.closest('[data-cve]');if(t&&CVE_RE.test(t.dataset.cve))openSheet(t.dataset.cve)});
 
 /* ---------- terminal ---------- */
-const CMDS=[['./info','about this thing'],['./help','what you can type'],['./latest','newest CVEs'],['./kev','being exploited right now'],['./trending','what people are talking about'],['./weaponized','Metasploit / Nuclei ready'],['./about','how priority works'],['./status','are the feeds ok?'],['./bugcod3','BugCod3 on Telegram',1],['./rootaccessclub','RootAccessClub on Telegram',1],['./clear','wipe the screen']];
+const CMDS=[['./info','about this thing'],['./help','what you can type'],['./latest','newest CVEs'],['./kev','being exploited right now'],['./early','early warnings, before NVD'],['./trending','what people are talking about'],['./weaponized','Metasploit / Nuclei ready'],['./about','how priority works'],['./status','are the feeds ok?'],['./bugcod3','BugCod3 on Telegram',1],['./rootaccessclub','RootAccessClub on Telegram',1],['./clear','wipe the screen']];
 const EXTRA=['cve ','search ','watch ','unwatch ','watchlist','stack','stack add ','stack rm ','export csv','export json','whoami','date','ls','uname -a','history','banner','sudo','exit'];
 const P_='<span class="p-user">user@subzer0</span><span class="t-dim">:</span><span class="p-path">~</span><span class="t-dim">$</span>';
 const GL={S:[' ████','█    ',' ███ ','    █','████ '],U:['█   █','█   █','█   █','█   █',' ███ '],B:['████ ','█   █','████ ','█   █','████ '],Z:['█████','   █ ','  █  ',' █   ','█████'],E:['█████','█    ','████ ','█    ','█████'],R:['████ ','█   █','████ ','█  █ ','█   █'],'0':[' ███ ','█  ██','█ █ █','██  █',' ███ ']};
@@ -540,6 +570,7 @@ async function boot(){document.getElementById('to').innerHTML='';busy=true;docum
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Verified sha256 <span class="t-dim">index + ${D.m.days.length} day shards checked against manifest</span></div>`,
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Reached feeds <span class="t-dim">${D.sources.filter(s=>s.ok).length}/${D.sources.length} sources healthy</span></div>`,
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Indexed <span class="t-dim">${D.totals.cves.toLocaleString()} CVEs · ${D.totals.known_exploited} KEV · ${D.poc} PoC</span></div>`,
+    ...(D.live?[`<div class="ln"><span class="${D.live.em.some(e=>e.level==='p0')?'t-warn">[ WARN ]':'t-ok">[  OK  ]'}</span> Early warning <span class="t-dim">${D.live.em.length} signals · ${D.live.n} live CVEs · type ./early</span></div>`]:[]),
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Started live watcher <span class="t-dim">polling every 60s</span></div>`],110);
   print(`<pre class="banner" aria-label="SubZer0">${BANNER}</pre>`);sizeBanner();
   await lines([`<div class="ln t-dim">made by <span class="t-ice">@BugCod3</span> and <span class="t-ice">@RootAccessClub</span>. for learning, not for breaking things.</div>`,
@@ -564,6 +595,7 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
     if(!D.intel)print(`<div class="ln t-warn">exploit intel isn't in this snapshot yet. it shows up after the next refresh.</div>`);
     else{print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">${tr?'BUZZ':'TOOLING'}</span><span class="t-dim">SUMMARY</span>${ls.map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span class="${tr?'t-warn':'t-err'}">${tr?r.b+'/100':[r.m?'MSF':'',r.n?'NUCLEI':''].filter(Boolean).join('+')}</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${ls.length?'click a row to open it':'nothing yet'} · search ${tr?'buzz&gt;20':'weaponized:yes'} for more</div>`)}}
   else if(k==='./about'){print(`<div class="ln t-dim">opening about…</div>`);openPage('about')}
+  else if(k==='./early'){const E=D.live&&D.live.em||[];print(E.length?E.map(e=>`<div class="ln"><span class="${e.level==='p0'?'t-err':'t-warn'}">[${e.level==='p0'?'  P0  ':' WATCH'}]</span> ${esc(e.name)} <span class="t-dim">· ${arr(e.cves).map(esc).join(', ')||'no CVE yet'} · ${arr(e.sources).length} sources · ${arr(e.signals).map(esc).join(', ')}</span></div>`).join(''):'<div class="ln t-dim">No early warnings right now.</div>')}
   else if(k==='./kev'){const ks=rows.filter(r=>r.k).slice(0,6);print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">STATUS</span><span class="t-dim">SUMMARY</span>${ks.map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span class="t-err">KEV</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${ks.length} of ${D.totals.known_exploited} known-exploited shown</div>`)}
   else if(k==='./status'){await lines([...D.sources.map(s=>`<div class="ln"><span class="${s.ok?'t-ok':'t-err'}">[${s.ok?'  OK  ':' FAIL '}]</span> ${esc(s.n)} <span class="t-dim">· ${(+s.v||0).toLocaleString()} records</span></div>`),`<div class="ln t-dim">generated ${D.gen.replace('T',' ').replace('Z',' UTC')} · sha256(manifest) verified</div>`],90)}
   else if(k==='./bugcod3'||k==='./rootaccessclub'){const n=k==='./bugcod3'?'BugCod3':'RootAccessClub';
@@ -599,17 +631,19 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
   print(`<div class="ln"> </div>`)}
 
 /* ---------- live: poll the manifest, diff, update in place ---------- */
-function nextRun(){const now=Date.now(),d=new Date();for(let k=0;k<2;k++)for(const h of [0,6,12,18]){const t=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()+k,h,17);if(t>now)return t}return now}
+function nextRun(){const now=Date.now(),q=9e5,off=24e4;return Math.floor((now-off)/q)*q+off+q}/* live layer: ~every 15 min (:04 :19 :34 :49) */
 function dur(ms){const s=Math.max(0,Math.floor(ms/1000));return `${Math.floor(s/3600)}h ${String(Math.floor(s%3600/60)).padStart(2,'0')}m ${String(s%60).padStart(2,'0')}s`}
 let polling=false,lastPoll=0;
 function tick(){const s=dur(nextRun()-Date.now());const n=document.getElementById('nextSync');if(n)n.textContent='next run '+s;const cd=document.getElementById('cd');if(cd)cd.textContent=s;
   if(document.visibilityState==='visible'&&Date.now()-lastPoll>60000)poll()}
 async function poll(){if(polling)return;polling=true;lastPoll=Date.now();
-  try{const m=await loadManifest();if(m.generated_at===D.gen)return;const old=new Set(rows.map(r=>r.id)),oldK=new Set(rows.filter(r=>r.k).map(r=>r.id));
-    const x=await loadAll(m);adopt(x);REC.clear();EPSS=null;
+  try{const m=await loadManifest();const old=new Set(rows.map(r=>r.id)),oldK=new Set(rows.filter(r=>r.k).map(r=>r.id));let x;
+    if(m.generated_at===D.gen){const L=await loadLive();if(!L||!RAW||(D.live&&L.generated_at===D.live.at))return;LIVE=L;x=build(RAW.m,RAW.idx,RAW.poc,RAW.intel,L)}else x=await loadAll(m);
+    const oldEm=new Set((D.live&&D.live.em||[]).map(e=>e.key));adopt(x);const newEm=(D.live&&D.live.em||[]).filter(e=>e.level==='p0'&&!oldEm.has(e.key));if(newEm.length)earlyToast(newEm[0]);REC.clear();EPSS=null;
     const fresh=rows.filter(r=>!old.has(r.id)),newK=rows.filter(r=>r.k&&!oldK.has(r.id));FRESH=new Set(fresh.map(r=>r.id));
     rerender();announce(fresh,newK);setHealth(true)}
   catch(e){setHealth(false,e.message)}finally{polling=false}}
+function earlyToast(e){const T=document.getElementById('toast');if(!T)return;T.innerHTML=`<div style="display:flex;gap:8px"><span class="chip crit">Early warning</span></div><div class="credit-name">${esc(e.name)}</div><div class="t">${esc(e.title||'')}</div>`;delete T.dataset.cve;T.classList.add('on');clearTimeout(T._t);T._t=setTimeout(()=>T.classList.remove('on'),12000)}
 function setHealth(ok,msg){const l=document.querySelector('.live');if(!l)return;l.classList.toggle('bad',!ok);l.title=ok?'data verified':'last check failed: '+msg}
 function rerender(){const keep=[...document.querySelectorAll('.panel')].map(p=>p.scrollTop);briefing();draw();document.querySelectorAll('.panel').forEach((p,i)=>{if(i!==3)p.scrollTop=keep[i]})}
 function announce(fresh,newK){if(!fresh.length&&!newK.length)return;const pool=[...newK,...fresh];const pick=pool.sort((a,b)=>a.P[0]-b.P[0]||b.c-a.c)[0];

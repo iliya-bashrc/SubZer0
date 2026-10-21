@@ -1678,7 +1678,18 @@ def refresh(
     def epss_request_with_budget(url: str, headers: dict[str, str] | None = None) -> tuple[Any, Any]:
         return ingress_budget.fetch(epss_api_request_fn, url, headers)
 
-    nvd_items, nvd_total, nvd_pages = iter_nvd(start, end, request_with_budget, sleep_fn, api_key=nvd_api_key)
+    # NVD is the flakiest feed (timeouts, truncated bodies, totals that move while new CVEs land mid-pagination).
+    # Restart the whole paginated read a couple of times before failing closed.
+    for nvd_attempt in range(3):
+        try:
+            nvd_items, nvd_total, nvd_pages = iter_nvd(start, end, request_with_budget, sleep_fn, api_key=nvd_api_key)
+            break
+        except FeedError as exc:
+            if nvd_attempt == 2:
+                raise
+            print(f"NVD read failed ({exc}); restarting pagination in {60 * (nvd_attempt + 1)}s", file=sys.stderr)
+            ingress_budget = _JSONIngressBudget()  # a restart re-reads NVD; do not count the aborted pass twice
+            sleep_fn(60 * (nvd_attempt + 1))
     if nvd_total == 0 or not nvd_items:
         raise FeedError("NVD returned no records; refusing to publish a partial feed")
     ghsa_items, ghsa_pages = iter_github_advisories(start, end, request_with_budget, token=github_token)
