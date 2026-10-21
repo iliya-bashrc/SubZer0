@@ -16,6 +16,7 @@ import argparse
 import base64
 import hashlib
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -96,6 +97,26 @@ def sign(seed: bytes, msg: bytes) -> bytes:
     return rb + int.to_bytes(s, 32, "little")
 
 
+def parse_seed(raw: str) -> bytes | None:
+    """Accept the bare 64-hex seed, or a pasted note that contains exactly one."""
+    raw = raw.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{64}", raw):
+        return bytes.fromhex(raw)
+    found = set(re.findall(r"(?<![0-9A-Za-z+/])[0-9a-fA-F]{64}(?![0-9A-Za-z+/=])", raw))
+    return bytes.fromhex(found.pop()) if len(found) == 1 else None
+
+
+def embedded_public_key(site: Path) -> str | None:
+    """SIGN_PK from the shipped app.js, so a wrong key can never publish bad signatures."""
+    for path in (site / "app.js",):
+        if path.is_file():
+            m = re.search(r"SIGN_PK='([A-Za-z0-9+/=]{44})'", path.read_text(encoding="utf-8", errors="replace"))
+            if m:
+                return m.group(1)
+    return None
+
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--site", type=Path, help="built site root containing snapshot/manifest.json")
@@ -110,17 +131,19 @@ def main(argv=None) -> int:
     if not args.site:
         ap.error("--site is required")
 
-    raw = os.environ.get("SUBZER0_SIGNING_KEY", "").strip()
-    if not raw:
+    raw = os.environ.get("SUBZER0_SIGNING_KEY", "")
+    if not raw.strip():
         print("sign_manifest: SUBZER0_SIGNING_KEY not set; skipping signature", file=sys.stderr)
         return 0
-    try:
-        seed = bytes.fromhex(raw)
-        if len(seed) != 32:
-            raise ValueError
-    except ValueError:
-        print("sign_manifest: SUBZER0_SIGNING_KEY must be 64 hex characters", file=sys.stderr)
-        return 1
+    seed = parse_seed(raw)
+    if seed is None:
+        # Never block a deploy over the optional signature: warn and ship unsigned.
+        print("::warning::sign_manifest: SUBZER0_SIGNING_KEY has no single 64-hex key; shipping unsigned", file=sys.stderr)
+        return 0
+    expected = embedded_public_key(args.site)
+    if expected and base64.b64encode(public_key(seed)).decode() != expected:
+        print("::warning::sign_manifest: key does not match SIGN_PK in app.js; shipping unsigned", file=sys.stderr)
+        return 0
 
     manifest = args.site / "snapshot" / "manifest.json"
     if not manifest.is_file():
