@@ -153,7 +153,19 @@ class LivePocTests(unittest.TestCase):
         self.assertNotIn("c/unrelated", names18)
         self.assertNotIn("a/CVE-2026-109618-poc", [r[0] for r in out["CVE-2026-109619"]])
         self.assertIn("bnd9/a3f605e1ad42e68186f60bb923e73e31", names18)  # curated gist kept
-        self.assertIn("nodesc", out["CVE-2026-109618"][0][5])
+        arow = next(r for r in out["CVE-2026-109618"] if r[0] == "a/CVE-2026-109618-poc")
+        self.assertIn("nodesc", arow[5])
+
+    def test_curated_description_overrides_empty_search_row(self):
+        now = datetime(2026, 10, 21, 18, tzinfo=timezone.utc)
+        fake = lambda url, **kw: {"items": [{"full_name": "junaire/CVE-2026-109618-exploit", "description": None,
+                                             "stargazers_count": 99, "forks_count": 1, "created_at": "2026-10-21T10:00:00Z"}]}
+        ev = [{"name": "PHP2Shell", "score": 30, "cves": ["CVE-2026-109618"]}]
+        out, _ = ew.live_pocs(ev, {"CVE-2026-109618": 1}, {}, None, now, 1e18, fetch=fake)
+        row = next(r for r in out["CVE-2026-109618"] if r[0] == "junaire/CVE-2026-109618-exploit")
+        self.assertEqual(row[1], 99)
+        self.assertTrue(row[4])
+        self.assertNotIn("nodesc", row[5])
 
     def test_search_failure_keeps_previous(self):
         def boom(url, **kw):
