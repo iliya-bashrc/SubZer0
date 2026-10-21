@@ -769,6 +769,11 @@ def _merge_poc_rows(*lists: Iterable[list], keep: Iterable[list] = ()) -> list[l
             k = r[0].lower()
             if k not in seen or (r[1] or 0) > (seen[k][1] or 0):
                 seen[k] = r
+    for r in keep or []:  # hand-curated text wins over empty/automatic descriptions
+        k = r[0].lower()
+        if r[4] and seen[k] is not r:
+            o = seen[k]
+            seen[k] = [o[0], o[1], o[2], o[3] or r[3], r[4], [f for f in o[5] if f != "nodesc"]]
     pinned = {r[0].lower() for r in keep or []}
     rank = sorted(seen.values(), key=lambda r: (-(r[1] or 0), r[3] or ""))
     top = [r for r in rank if r[0].lower() not in pinned][:max(0, MAX_LIVE_POCS - len(pinned))]

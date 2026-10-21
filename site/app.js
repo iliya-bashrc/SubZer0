@@ -63,7 +63,7 @@ async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified
 const arr=v=>Array.isArray(v)?v:[];
 function intelOf(I){I=I&&typeof I==='object'?I:{};const s=arr(I.s),b=arr(I.b),g=arr(I.g).filter(x=>Array.isArray(x)&&typeof x[0]==='string'),t=I.t&&typeof I.t==='object'?I.t:{};
   return {g,m:arr(I.m).filter(Array.isArray),n:arr(I.n).filter(Array.isArray),s,b,t,f:I.f===1}}
-function mergePocs(I,lp){const seen=new Map(I.g.map(g=>[g[0].toLowerCase(),g]));for(const g of lp){const k=g[0].toLowerCase(),o=seen.get(k);if(!o)seen.set(k,g);else if((+g[1]||0)>(+o[1]||0))seen.set(k,[o[0],g[1],g[2],o[3]||g[3],o[4]||g[4],arr(o[5])])}
+function mergePocs(I,lp){const seen=new Map(I.g.map(g=>[g[0].toLowerCase(),g]));for(const g of lp){const k=g[0].toLowerCase(),o=seen.get(k);if(!o)seen.set(k,g);else{const hi=(+g[1]||0)>(+o[1]||0),d=g[4]||o[4];seen.set(k,[o[0],hi?g[1]:o[1],hi?g[2]:o[2],o[3]||g[3],d,arr(o[5]).filter(f=>!(d&&f==='nodesc'))])}}
   I.g=[...seen.values()].sort((a,b)=>(+b[1]||0)-(+a[1]||0)||String(a[3]||'').localeCompare(String(b[3]||'')));I.lp=1;
   const first=lp.map(g=>g[3]).filter(d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0];if(first&&(!I.t.poc||first<I.t.poc))I.t={...I.t,poc:first}}
 function liveOf(L){const kev=new Set(arr(L&&L.kev).filter(x=>typeof x==='string'&&CVE_RE.test(x))),src=new Map(),tup=[];

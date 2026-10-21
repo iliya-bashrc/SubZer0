@@ -2,15 +2,68 @@
   "_note": "Hand-picked PoCs that GitHub search or PoC-in-GitHub miss (e.g. gists). Rows: [owner/repo or owner/gist-id, stars, forks, created, description, flags]. Flag 'gist' links to gist.github.com.",
   "pocs": {
     "CVE-2026-109618": [
-      ["bnd9/a3f605e1ad42e68186f60bb923e73e31", 0, 0, "2026-10-21", "php CVE-2026-109619 + CVE-2026-109618 · php-oom-uaf-exploit.py", ["gist"]],
-      ["9bie/php2shell-bypass-aslr-exp", 231, 81, "2026-10-21", "", ["nodesc"]],
-      ["junaire/CVE-2026-109618-exploit", 61, 45, "2026-10-21", "", ["nodesc"]],
-      ["JoasASantos/php2shell-scanner", 24, 10, "2026-10-21", "Non-destructive scanner for CVE-2026-109618 / CVE-2026-109619 (PHP core RCE). Subdomain recon via crt.sh + subfinder, robust banner grabbing, version-based detection.", []],
-      ["enactive-systems/CVE-2026-109618-poc", 14, 3, "2026-10-21", "", ["nodesc"]],
-      ["Ademking/php2shell-nuclei-templates", 10, 2, "2026-10-21", "", ["nodesc"]]
+      [
+        "bnd9/a3f605e1ad42e68186f60bb923e73e31",
+        0,
+        0,
+        "2026-10-21",
+        "php CVE-2026-109619 + CVE-2026-109618 · php-oom-uaf-exploit.py",
+        [
+          "gist"
+        ]
+      ],
+      [
+        "9bie/php2shell-bypass-aslr-exp",
+        231,
+        81,
+        "2026-10-21",
+        "One-shot exploit.py: pure-HTTP RCE on PHP 8.4.26 + Apache prefork + mod_php with ASLR bypass, no session_start() needed. Docker lab (official php:8.4.26-apache).",
+        []
+      ],
+      [
+        "junaire/CVE-2026-109618-exploit",
+        61,
+        45,
+        "2026-10-21",
+        "Working exploit.py for the session.upload_progress unauthenticated RCE (two requests). Docker target: nginx + php-fpm 8.2.34. Mitigation: session.upload_progress.enabled=Off.",
+        []
+      ],
+      [
+        "JoasASantos/php2shell-scanner",
+        24,
+        10,
+        "2026-10-21",
+        "Non-destructive scanner for CVE-2026-109618 / CVE-2026-109619 (PHP core RCE). Subdomain recon via crt.sh + subfinder, robust banner grabbing, version-based detection.",
+        []
+      ],
+      [
+        "enactive-systems/CVE-2026-109618-poc",
+        14,
+        3,
+        "2026-10-21",
+        "Minimal 2-file PoC (poc.php + poc.py) with run_lab.sh that runs PHP 8.4.26 vs 8.4.27 side by side to show RCE vs patched.",
+        []
+      ],
+      [
+        "Ademking/php2shell-nuclei-templates",
+        10,
+        2,
+        "2026-10-21",
+        "Nuclei templates to detect and verify php2shell (session.upload_progress) chains: LFI session injection, var_destroy UAF, handler mismatch. Authorized testing only.",
+        []
+      ]
     ],
     "CVE-2026-109619": [
-      ["bnd9/a3f605e1ad42e68186f60bb923e73e31", 0, 0, "2026-10-21", "php CVE-2026-109619 + CVE-2026-109618 · php-oom-uaf-exploit.py", ["gist"]]
+      [
+        "bnd9/a3f605e1ad42e68186f60bb923e73e31",
+        0,
+        0,
+        "2026-10-21",
+        "php CVE-2026-109619 + CVE-2026-109618 · php-oom-uaf-exploit.py",
+        [
+          "gist"
+        ]
+      ]
     ]
   }
 }
