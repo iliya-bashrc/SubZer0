@@ -63,15 +63,18 @@ async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified
 const arr=v=>Array.isArray(v)?v:[];
 function intelOf(I){I=I&&typeof I==='object'?I:{};const s=arr(I.s),b=arr(I.b),g=arr(I.g).filter(x=>Array.isArray(x)&&typeof x[0]==='string'),t=I.t&&typeof I.t==='object'?I.t:{};
   return {g,m:arr(I.m).filter(Array.isArray),n:arr(I.n).filter(Array.isArray),s,b,t,f:I.f===1}}
+function mergePocs(I,lp){const seen=new Map(I.g.map(g=>[g[0].toLowerCase(),g]));for(const g of lp){const k=g[0].toLowerCase(),o=seen.get(k);if(!o)seen.set(k,g);else if((+g[1]||0)>(+o[1]||0))seen.set(k,[o[0],g[1],g[2],o[3]||g[3],o[4]||g[4],arr(o[5])])}
+  I.g=[...seen.values()].sort((a,b)=>(+b[1]||0)-(+a[1]||0)||String(a[3]||'').localeCompare(String(b[3]||'')));I.lp=1;
+  const first=lp.map(g=>g[3]).filter(d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0];if(first&&(!I.t.poc||first<I.t.poc))I.t={...I.t,poc:first}}
 function liveOf(L){const kev=new Set(arr(L&&L.kev).filter(x=>typeof x==='string'&&CVE_RE.test(x))),src=new Map(),tup=[];
   for(const t of arr(L&&L.cves)){if(!Array.isArray(t)||typeof t[0]!=='string'||!CVE_RE.test(t[0])||src.has(t[0]))continue;src.set(t[0],String(t[9]||'live'));tup.push(t)}
-  const em=arr(L&&L.emerging).filter(e=>e&&typeof e==='object'&&typeof e.name==='string').slice(0,12);return {kev,src,tup,em}}
+  const em=arr(L&&L.emerging).filter(e=>e&&typeof e==='object'&&typeof e.name==='string').slice(0,12);const pc=L&&L.pocs&&typeof L.pocs==='object'&&!Array.isArray(L.pocs)?L.pocs:{};return {kev,src,tup,em,pc}}
 function build(m,idx,poc,intel,L){const P=new Set(Array.isArray(poc)?poc:[]);const IC=intel&&intel.cves&&typeof intel.cves==='object'?intel.cves:{};
   const LV=liveOf(L),have=new Set();const all=[];for(const t of idx)if(Array.isArray(t)){have.add(t[0]);all.push(LV.kev.has(t[0])&&!t[4]?[...t.slice(0,4),1,...t.slice(5)]:t)}
   for(const t of LV.tup)if(!have.has(t[0]))all.push(t);
   const R=[];for(const t of all){if(!Array.isArray(t)||!CVE_RE.test(t[0]))continue;const s=SEV[t[2]]?t[2]:'unknown';
     const r={id:t[0],t:String(t[1]||''),s,c:+t[3]||0,k:t[4]?1:0,e:typeof t[5]==='number'?t[5]:null,a:String(t[6]||''),d:String(t[7]||t[6]||''),p:String(t[8]||''),x:P.has(t[0])?1:0,lv:LV.src.get(t[0])||(LV.kev.has(t[0])&&!have.has(t[0])?'kev':''),kl:LV.kev.has(t[0])?1:0};if(have.has(r.id)&&r.lv)r.lv='';
-    const I=IC[r.id]?intelOf(IC[r.id]):null;r.I=I;
+    const lp=arr(LV.pc[r.id]).filter(x=>Array.isArray(x)&&typeof x[0]==='string');const I=IC[r.id]||lp.length?intelOf(IC[r.id]):null;if(I&&lp.length)mergePocs(I,lp);r.I=I;
     if(I){const good=I.g.filter(g=>!arr(g[5]).includes('bait'));r.g=good.length;r.gb=I.g.length-good.length;r.m=I.m.length;r.n=I.n.length;r.w=r.m||r.n?1:0;
       r.v=I.s[0]||'';r.au=I.s[1]==='yes'&&I.s[2]==='total'?1:0;r.b=+I.b[0]||0;r.f=I.f?1:0;
       if(!r.c&&typeof I.s[3]==='number'&&I.s[3]>0){r.c=I.s[3];r.ca=1;if(s==='none'||s==='unknown')r.s=r.c>=9?'critical':r.c>=7?'high':r.c>=4?'medium':'low'}
@@ -465,16 +468,16 @@ function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec
     <p class="proto-note">record checked against shard sha256 ${full.sha.slice(0,16)}…</p>`}
   </div>`}
 const msfUrl=n=>{const [t,...rest]=String(n).split('/');const dir={exploit:'exploits',auxiliary:'auxiliary',post:'post',payload:'payloads',encoder:'encoders',nop:'nops',evasion:'evasion'}[t];return dir&&rest.length?`https://github.com/rapid7/metasploit-framework/blob/master/modules/${dir}/${rest.map(encodeURIComponent).join('/')}.rb`:null};
-const ghUrl=f=>/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(f)?'https://github.com/'+f:null;
+const ghUrl=(f,fl)=>/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(f)?(arr(fl).includes('gist')?'https://gist.github.com/':'https://github.com/')+f:null;
 const SSVC_T={none:'No exploitation seen',poc:'Public proof of concept',active:'Exploited (active)',yes:'Yes',no:'No',partial:'Partial',total:'Total'};
 function intelHTML(r){const I=r.I;if(!I)return '';const out=[];
   if(I.m.length||I.n.length)out.push(`<section><div class="sec-h"><h2>Weaponized</h2><span class="meta">ready-made attack tooling</span></div>
     ${I.m.map(m=>{const u=msfUrl(m[0]);return `<a class="ref" ${u?`href="${esc(u)}" target="_blank" rel="noopener noreferrer"`:''}><div style="min-width:0"><div class="d">metasploit · ${esc(m[1])}${m[2]!=null?' · rank '+esc(m[2]):''}${m[6]?' · has check':''}</div><div class="l">${esc(m[5]||m[0])}</div><div class="code">${esc(m[0])}</div></div></a>`}).join('')}
     ${I.n.map(n=>`<a class="ref" href="https://github.com/projectdiscovery/nuclei-templates/blob/main/${esc(String(n[0]).split('/').map(encodeURIComponent).join('/'))}" target="_blank" rel="noopener noreferrer"><div style="min-width:0"><div class="d">nuclei · ${esc(n[1])}</div><div class="l">${esc(n[2]||n[0])}</div><div class="code">${esc(n[0])}</div></div></a>`).join('')}</section>`);
-  if(I.g.length)out.push(`<section><div class="sec-h"><h2>GitHub PoCs · ${I.g.length}</h2><span class="meta">via PoC-in-GitHub</span></div>
+  if(I.g.length)out.push(`<section><div class="sec-h"><h2>GitHub PoCs · ${I.g.length}</h2><span class="meta">via PoC-in-GitHub${I.lp?' + live GitHub search':''}</span></div>
     <div class="warn"><b>Untrusted code.</b> Fake PoCs that drop malware are common. Read it first, run it only in a throwaway lab, never on your own machine.</div>
-    ${I.g.slice(0,12).map(g=>{const u=ghUrl(g[0]),fl=arr(g[5]).filter(f=>FLAG[f]);return `<a class="ref${fl.includes('bait')||fl.includes('known')?' sus':''}" ${u?`href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow"`:''}><div style="min-width:0"><div class="d">★ ${fmt(g[1])} · forks ${fmt(g[2])}${g[3]?' · '+esc(g[3]):''}</div><div class="l">${esc(g[0])}</div>${g[4]?`<div class="code" style="white-space:normal">${esc(g[4])}</div>`:''}${fl.length?`<div class="tags">${fl.map(f=>`<span class="tag ${f==='bait'||f==='known'?'bad':''}" title="${esc(FLAG[f])}">⚠ ${esc(FLAG[f])}</span>`).join('')}</div>`:''}</div></a>`}).join('')}
-    ${I.g.length>12?`<div class="code" style="margin-top:10px">+${I.g.length-12} more on GitHub</div>`:''}</section>`);
+    ${I.g.slice(0,30).map(g=>{const u=ghUrl(g[0],g[5]),fl=arr(g[5]).filter(f=>FLAG[f]);return `<a class="ref${fl.includes('bait')||fl.includes('known')?' sus':''}" ${u?`href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow"`:''}><div style="min-width:0"><div class="d">★ ${fmt(g[1])} · forks ${fmt(g[2])}${g[3]?' · '+esc(g[3]):''}</div><div class="l">${esc(g[0])}</div>${g[4]?`<div class="code" style="white-space:normal">${esc(g[4])}</div>`:''}${fl.length?`<div class="tags">${fl.map(f=>`<span class="tag ${f==='bait'||f==='known'?'bad':''}" title="${esc(FLAG[f])}">⚠ ${esc(FLAG[f])}</span>`).join('')}</div>`:''}</div></a>`}).join('')}
+    ${I.g.length>30?`<div class="code" style="margin-top:10px">+${I.g.length-30} more on GitHub</div>`:''}</section>`);
   if(I.s.length)out.push(`<section><div class="sec-h"><h2>CISA SSVC</h2><span class="meta">CISA Vulnrichment</span></div><dl class="kv">
     <dt>Exploitation</dt><dd>${esc(SSVC_T[I.s[0]]||'—')}</dd><dt>Automatable</dt><dd>${esc(SSVC_T[I.s[1]]||'—')}</dd><dt>Technical impact</dt><dd>${esc(SSVC_T[I.s[2]]||'—')}</dd>
     ${typeof I.s[3]==='number'?`<dt>CISA ADP CVSS</dt><dd class="mono">${I.s[3].toFixed(1)}${I.s[4]?' · '+esc(I.s[4]):''}</dd>`:''}
