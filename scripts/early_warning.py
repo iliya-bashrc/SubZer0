@@ -89,6 +89,12 @@ EMERGING_TTL = timedelta(days=7)
 MAX_LIVE_CVES = 1500
 MAX_CVE_FETCH = 1500
 MAX_EMERGING = 12
+GH_SEARCH = "https://api.github.com/search/repositories?q={q}&sort=stars&order=desc&per_page=30"
+REPO_OK = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$")
+POC_BAIT = re.compile(r"\b(download|\.exe|\.rar|\.zip|password|telegram|buy|sell|private exploit)\b", re.I)
+MAX_LIVE_POCS = 30
+MAX_POC_QUERIES = 12
+CURATED_POCS = Path(__file__).resolve().parent / "curated_pocs.json"
 
 
 def now_utc() -> datetime:
@@ -694,6 +700,12 @@ def run(site: Path, previous: dict, token: str | None, budget_s: int = 300, now:
     kev_set = set(kev_flag)
     articles, feed_status = collect_news(now, deadline)
     emerging = build_emerging(articles, index, live, previous.get("emerging") or [], now, cve_org_status)
+    pocs = guard("GitHub PoC search", lambda: live_pocs(emerging, index, previous, token, now, deadline), None)
+    if pocs:
+        sources.append(pocs[1])
+        pocs = pocs[0]
+    else:
+        pocs = previous.get("pocs") if isinstance(previous.get("pocs"), dict) else {}
     rows = sorted(live.values(), key=lambda x: (x[6], x[0]), reverse=True)[:MAX_LIVE_CVES]
     age_h = round((now - snap_at).total_seconds() / 3600, 1)
     return {
@@ -704,9 +716,111 @@ def run(site: Path, previous: dict, token: str | None, budget_s: int = 300, now:
         "cves": rows,
         "kev": sorted(kev_set),
         "emerging": emerging,
+        "pocs": pocs,
         "sources": sources,
         "feeds": feed_status,
     }
+
+
+# ---------------------------------------------------------------- live PoC search
+# PoC-in-GitHub only lands in the daily snapshot and lags by hours, so for hot events we search
+# GitHub directly every run. Rows use the snapshot intel shape: [full_name, stars, forks, created, desc, flags].
+
+def _poc_row(item: dict, now: datetime) -> list | None:
+    full = str(item.get("full_name") or "")
+    if not REPO_OK.fullmatch(full) or item.get("archived"):
+        return None
+    created = str(item.get("created_at") or "")[:10] or None
+    stars = int(item.get("stargazers_count") or 0)
+    desc = clean(item.get("description"), 140)
+    flags: list[str] = []
+    if item.get("fork"):
+        flags.append("fork")
+    if not desc:
+        flags.append("nodesc")
+    if created and (now.date() - datetime.fromisoformat(created).date()).days <= 7 and stars < 5:
+        flags.append("fresh")
+    if POC_BAIT.search(desc):
+        flags.append("bait")
+    return [full, stars, int(item.get("forks_count") or 0), created, desc, flags]
+
+
+def load_curated(path: Path = CURATED_POCS) -> dict[str, list]:
+    """Hand-picked PoCs (gists, repos search misses). {"CVE-…": [[full, stars, forks, created, desc, flags], …]}"""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, list] = {}
+    for cid, rows in (doc.get("pocs") or {}).items() if isinstance(doc, dict) else []:
+        cid = str(cid).upper()
+        if not CVE_OK.match(cid) or not isinstance(rows, list):
+            continue
+        good = [r for r in rows if isinstance(r, list) and len(r) >= 6 and isinstance(r[0], str) and REPO_OK.fullmatch(r[0])]
+        if good:
+            out[cid] = good
+    return out
+
+
+def _merge_poc_rows(*lists: Iterable[list], keep: Iterable[list] = ()) -> list[list]:
+    seen: dict[str, list] = {}
+    for rows in (*lists, keep):
+        for r in rows or []:
+            k = r[0].lower()
+            if k not in seen or (r[1] or 0) > (seen[k][1] or 0):
+                seen[k] = r
+    pinned = {r[0].lower() for r in keep or []}
+    rank = sorted(seen.values(), key=lambda r: (-(r[1] or 0), r[3] or ""))
+    top = [r for r in rank if r[0].lower() not in pinned][:max(0, MAX_LIVE_POCS - len(pinned))]
+    return sorted(top + [seen[k] for k in pinned], key=lambda r: (-(r[1] or 0), r[3] or ""))
+
+
+def live_pocs(emerging: list[dict], index: dict, prev: dict, token: str | None, now: datetime, deadline: float,
+              fetch: Callable[..., Any] = http_json) -> tuple[dict[str, list], dict]:
+    """Search GitHub for PoC repos of hot early-warning CVEs, by CVE id and by the bug's nickname."""
+    hdr = {"Accept": "application/vnd.github+json"}
+    if token:
+        hdr["Authorization"] = f"Bearer {token}"
+    found: dict[str, list] = {}
+    queries = 0
+    ok = True
+    for e in sorted(emerging, key=lambda x: -(x.get("score") or 0)):
+        cves = [c for c in e.get("cves") or [] if CVE_OK.match(c)][:4]
+        if not cves:
+            continue
+        name = str(e.get("name") or "")
+        nick = name.lower() if NAMED.fullmatch(name) else ""
+        terms = [(c, c.lower()) for c in cves[:2]] + ([(nick, nick)] if nick else [])
+        for q, must in terms:
+            if queries >= MAX_POC_QUERIES or time.monotonic() > deadline:
+                break
+            queries += 1
+            try:
+                data = fetch(GH_SEARCH.format(q=urllib.parse.quote(f"{q} in:name,description,topics")), headers=hdr, timeout=20)
+            except Exception as exc:
+                print(f"early_warning: PoC search {q!r} failed: {type(exc).__name__}", file=sys.stderr)
+                ok = False
+                continue
+            for item in (data or {}).get("items") or []:
+                row = _poc_row(item, now)
+                if not row:
+                    continue
+                text = (row[0] + " " + row[4]).lower()
+                if must not in text:
+                    continue  # search matched on something unrelated
+                hit = [c for c in cves if c.lower() in text] or cves
+                for c in hit:
+                    found.setdefault(c, []).append(row)
+    out: dict[str, list] = {}
+    curated = load_curated()
+    old = prev.get("pocs") if isinstance(prev.get("pocs"), dict) else {}
+    for c in set(found) | set(curated) | set(old):
+        if c not in index and c not in found and c not in curated:
+            continue  # aged out of the window
+        rows = _merge_poc_rows(old.get(c) or [], found.get(c) or [], keep=curated.get(c) or [])
+        if rows:
+            out[c] = rows
+    return out, {"name": "GitHub PoC search", "ok": ok, "count": sum(len(v) for v in out.values())}
 
 
 def main(argv: list[str] | None = None) -> int:

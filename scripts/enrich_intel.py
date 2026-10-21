@@ -48,7 +48,7 @@ TRUSTED_OWNERS = {
     "projectdiscovery", "rapid7", "horizon3ai", "watchtowrlabs", "sinsinology", "assetnote",
     "chompie1337", "synacktiv", "google", "tenable", "qualys", "trickest", "cisagov",
 }
-MAX_POCS = 8
+MAX_POCS = 16
 MAX_LINKS = 3
 BUZZ_DAYS = 7
 

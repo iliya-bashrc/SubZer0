@@ -130,5 +130,40 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("gh workflow run update-snapshot.yml", watchdog)
 
 
+
+class LivePocTests(unittest.TestCase):
+    def test_search_by_cve_and_nickname_with_curated_pinned(self):
+        now = datetime(2026, 10, 21, 18, tzinfo=timezone.utc)
+        calls = []
+
+        def fake(url, **kw):
+            calls.append(url)
+            item = lambda n, d, s: {"full_name": n, "description": d, "stargazers_count": s, "forks_count": 1,
+                                    "created_at": "2026-10-21T10:00:00Z"}
+            return {"items": [item("a/CVE-2026-109618-poc", "", 50), item("b/php2shell-scan", "scanner", 9),
+                              item("c/unrelated", "nothing here", 999), item("bad name/x", "", 1)]}
+
+        ev = [{"name": "PHP2Shell", "score": 30, "cves": ["CVE-2026-109618", "CVE-2026-109619"]}]
+        out, st = ew.live_pocs(ev, {"CVE-2026-109618": 1, "CVE-2026-109619": 1}, {}, "tok", now, 1e18, fetch=fake)
+        self.assertTrue(st["ok"])
+        self.assertEqual(len(calls), 3)
+        names18 = [r[0] for r in out["CVE-2026-109618"]]
+        self.assertIn("a/CVE-2026-109618-poc", names18)
+        self.assertIn("b/php2shell-scan", names18)
+        self.assertNotIn("c/unrelated", names18)
+        self.assertNotIn("a/CVE-2026-109618-poc", [r[0] for r in out["CVE-2026-109619"]])
+        self.assertIn("bnd9/a3f605e1ad42e68186f60bb923e73e31", names18)  # curated gist kept
+        self.assertIn("nodesc", out["CVE-2026-109618"][0][5])
+
+    def test_search_failure_keeps_previous(self):
+        def boom(url, **kw):
+            raise OSError("down")
+        prev = {"pocs": {"CVE-2026-1111": [["x/y", 3, 0, "2026-10-20", "d", []]]}}
+        out, st = ew.live_pocs([{"name": "x", "cves": ["CVE-2026-1111"]}], {"CVE-2026-1111": 1}, prev, None,
+                               datetime(2026, 10, 21, tzinfo=timezone.utc), 1e18, fetch=boom)
+        self.assertFalse(st["ok"])
+        self.assertEqual(out["CVE-2026-1111"][0][0], "x/y")
+
+
 if __name__ == "__main__":
     unittest.main()
