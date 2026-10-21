@@ -481,3 +481,22 @@ html.booting .top .brand{visibility:hidden}
 :root{--sz-origin:"iliya-bashrc.github.io/SubZer0"}
 .sz-copy{position:sticky;top:0;z-index:90;padding:9px 16px;background:var(--crit);color:#fff;font:600 13px var(--sans);text-align:center}
 .sz-copy a{color:#fff;text-decoration:underline}
+/* Early warning (live layer) */
+.lv{display:inline-block;margin-left:8px;padding:1px 5px;border:1px solid var(--ice);color:var(--ice);font:700 10px/1.4 var(--display);letter-spacing:.12em;vertical-align:middle}
+.ew{margin:28px 0 8px}
+.ew-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.ew-item{position:relative;padding:16px 18px;background:var(--film);border:1px solid var(--line2);border-left:3px solid var(--high)}
+.ew-item.p0{border-left-color:var(--crit);background:linear-gradient(90deg,rgba(229,50,63,.08),var(--film) 60%)}
+.ew-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ew-sig{padding:1px 6px;border:1px solid var(--line2);font:600 10px/1.5 var(--mono);color:var(--ink2);text-transform:uppercase;letter-spacing:.06em}
+.ew-when{margin-left:auto;font:400 11px var(--mono);color:var(--ink3)}
+.ew-name{margin-top:10px;font:700 24px/1.1 var(--display);letter-spacing:.03em;overflow-wrap:anywhere}
+.ew-t{margin-top:6px;font-size:13px;color:var(--ink2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ew-cves{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.ew-cve{display:inline-flex;flex-direction:column;padding:6px 10px;border:1px solid var(--line2);font:600 13px var(--mono);color:var(--ink);text-decoration:none;text-align:left}
+.ew-cve small{font:400 10px var(--mono);color:var(--ink3);margin-top:2px}
+.ew-cve:hover{border-color:var(--ice)}
+.ew-src{margin-top:12px;font:400 11px/1.6 var(--mono);color:var(--ink3)}
+.ew-src a{color:var(--ink2)}
+.ew-src a:hover{color:var(--ice)}
+.ew-name.long{font-size:17px;line-height:1.25}

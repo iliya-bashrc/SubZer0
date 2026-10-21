@@ -247,6 +247,20 @@ python -m unittest discover -s tests                         # tests
 
 Issues and PRs are welcome. CI runs the full pipeline test-suite plus snapshot validation on every PR — keep it green. Files under `public/snapshot/` are generated; please don't edit them by hand.
 
+## ⚡ Early warning: the live layer
+
+Big bugs (php2shell, Log4Shell, React2Shell, …) hit the news and CERT advisories hours or days before NVD publishes a record. The 6-hour snapshot can't see those, so a **fast lane runs every ~15 minutes** (`scripts/early_warning.py`, part of the deploy, no commits):
+
+- **New CVE records** from CVE.org (cvelistV5 delta log) and GitHub advisories that are newer than the snapshot, shown with a `LIVE` tag
+- **CISA KEV additions** since the snapshot, applied straight to the patch queue
+- **Early warnings**: CERT (CISA, CERT-EU, NCSC-NL, SANS ISC) and security-news feeds, grouped by CVE ID or bug name. An item shows up once **2+ independent sources** (a CERT counts double) report RCE / exploitation / zero-day / no-patch signals. If the CVE isn't published yet, the card says so
+- Telegram gets new **P0** early warnings and KEV additions right away
+- A **watchdog** restarts the full snapshot refresh if it's overdue (GitHub often delays cron by hours) or if it failed
+
+The live layer is never mixed into the SHA-256 snapshot. It's signed with the same Ed25519 key, and every row from it is labelled.
+
+> Tip: add a free [NVD API key](https://nvd.nist.gov/developers/request-an-api-key) as the repo secret `NVD_API_KEY`. The full refresh then gets 10× the NVD rate limit and fails far less often.
+
 ## 🛡️ Official site & copying
 
 The only official build is **https://iliya-bashrc.github.io/SubZer0/**. Every published snapshot manifest is signed with an Ed25519 key held only by the maintainers (`snapshot/manifest.sig`); the official site shows **ed25519 signed ✓** in the Briefing header and in the terminal boot log. Copies on any other host are flagged as **unofficial** in the page itself.

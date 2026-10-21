@@ -126,9 +126,13 @@ def main(argv=None) -> int:
     if not manifest.is_file():
         print(f"sign_manifest: {manifest} not found", file=sys.stderr)
         return 1
-    sig = sign(seed, manifest.read_bytes())
-    (manifest.parent / "manifest.sig").write_text(base64.b64encode(sig).decode() + "\n", encoding="ascii")
-    print(f"sign_manifest: signed {manifest} with key {base64.b64encode(public_key(seed)).decode()}")
+    pk = base64.b64encode(public_key(seed)).decode()
+    # the snapshot manifest, plus the live early-warning layer when the deploy produced one
+    for path in (manifest, args.site / "live" / "early.json"):
+        if path.is_file():
+            sig = sign(seed, path.read_bytes())
+            path.with_suffix(".sig").write_text(base64.b64encode(sig).decode() + "\n", encoding="ascii")
+            print(f"sign_manifest: signed {path} with key {pk}")
     return 0
 
 
