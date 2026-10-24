@@ -10,6 +10,30 @@ const CVE_RE=/^CVE-\d{4}-\d{4,}$/;
 /* Provenance. SubZer0 © 2026 @BugCod3 & @RootAccessClub — source-available, All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
 const SZ_ORIGIN=atob('aWxpeWEtYmFzaHJjLmdpdGh1Yi5pbw=='),SZ_HOME='https://'+SZ_ORIGIN+'/SubZer0/',SZ_BUILD='sz0-ib-'+(0x5a0e).toString(36);
 const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname);
+/* Telegram Mini App bridge (no external SDK; CSP stays script-src 'self'). Pads the layout for Telegram's
+   fullscreen controls/safe areas, matches its chrome to the site colours and strips launch data from the URL. */
+(()=>{const h=location.hash,inTg=/tgWebApp/.test(h)||!!window.TelegramWebviewProxy||sessionStorage.getItem('sz-tg')==='1';
+  if(!inTg)return;
+  try{sessionStorage.setItem('sz-tg','1')}catch{}
+  if(/tgWebApp/.test(h))history.replaceState(history.state,'',location.pathname+location.search);
+  const root=document.documentElement;root.classList.add('tgapp');
+  const post=(t,d)=>{const data=JSON.stringify(d||{});
+    try{if(window.TelegramWebviewProxy)return window.TelegramWebviewProxy.postEvent(t,data);
+      if(window.external&&'notify' in window.external)return window.external.notify(JSON.stringify({eventType:t,eventData:d||{}}));
+      if(window.parent!==window)window.parent.postMessage(JSON.stringify({eventType:t,eventData:d||{}}),'https://web.telegram.org')}catch{}};
+  const px=v=>Math.max(0,Math.round(Number(v)||0))+'px';
+  const on=(t,d)=>{d=d||{};
+    if(t==='safe_area_changed'){root.style.setProperty('--tg-safe-top',px(d.top));root.style.setProperty('--tg-safe-bottom',px(d.bottom))}
+    else if(t==='content_safe_area_changed'){root.style.setProperty('--tg-content-top',px(d.top));root.style.setProperty('--tg-content-bottom',px(d.bottom))}
+    else if(t==='fullscreen_changed'||t==='viewport_changed'){post('web_app_request_safe_area');post('web_app_request_content_safe_area')}};
+  const W=window.Telegram=window.Telegram||{};W.WebView=W.WebView||{};const prev=W.WebView.receiveEvent;
+  W.WebView.receiveEvent=(t,d)=>{on(t,d);if(typeof prev==='function')try{prev(t,d)}catch{}};
+  addEventListener('message',e=>{if(e.origin!=='https://web.telegram.org')return;try{const m=JSON.parse(e.data);on(m.eventType,m.eventData)}catch{}});
+  post('web_app_ready');post('web_app_expand');
+  post('web_app_set_header_color',{color:'#07080A'});post('web_app_set_background_color',{color:'#07080A'});post('web_app_set_bottom_bar_color',{color:'#07080A'});
+  post('web_app_setup_swipe_behavior',{allow_vertical_swipe:false});
+  post('web_app_request_safe_area');post('web_app_request_content_safe_area');
+})();
 /* Ed25519 public key for snapshot/manifest.sig (scripts/sign_manifest.py). Copies can mirror data, not sign it. */
 const SIGN_PK='Hs5MMxzGzlocXQG0Pz5ZWUSLOfSmBXLDyX3OIA3uGvk=';let SIGNED=null;
 const b64u8=b=>Uint8Array.from(atob(b),c=>c.charCodeAt(0));
