@@ -10,7 +10,6 @@ from __future__ import annotations
 import html
 import json
 import re
-from pathlib import Path
 
 SEV_LABEL = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low", "none": "Unscored", "unknown": "Unscored"}
 P_LABEL = {1: "P1 · Patch now", 2: "P2 · This week", 3: "P3 · Planned", 4: "P4 · Track"}

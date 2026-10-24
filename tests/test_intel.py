@@ -1,7 +1,6 @@
 """Offline tests for the exploit-intel enrichment and its strict validator."""
 from __future__ import annotations
 
-import copy
 import json
 import shutil
 import sys

@@ -1643,7 +1643,7 @@ def write_snapshot(
                 changes_payload["counts"][kind] = changes_payload["counts"].get(kind, 0) + 1
             (stage_root / "changes.json").write_bytes(_json_bytes(changes_payload))
         except (OSError, ValueError) as changes_exc:
-            raise FeedError(f"Failed to stage the change feed: {changes_exc}") from exc
+            raise FeedError(f"Failed to stage the change feed: {changes_exc}") from changes_exc
 
         try:
             validate_snapshot(stage_root, write_report=True)

@@ -380,43 +380,81 @@ def mastodon(ids: set[str], buzz: dict, deadline: float) -> int:
     return posts
 
 
-def reddit(ids: set[str], buzz: dict, deadline: float) -> int:
+REDDIT_SUBS = ("netsec", "cybersecurity", "blueteamsec", "sysadmin", "AskNetsec")
+
+
+def reddit(ids: set[str], buzz: dict, deadline: float, fetch_fn: Callable[..., bytes] | None = None) -> int:
+    """Newest posts from the security subreddits. The combined feed tops out at 100 posts, so each
+    subreddit is read on its own too (deduplicated); Reddit rate-limits anonymous RSS, so the extra
+    feeds are best effort and a 429 just keeps what was already read."""
+    fetch_fn = fetch_fn or fetch
     ns = {"a": "http://www.w3.org/2005/Atom"}
     since = iso(now_utc() - timedelta(days=BUZZ_DAYS))
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; SubZer0/1.0)"}
+    feeds = ["+".join(REDDIT_SUBS)] + list(REDDIT_SUBS)
+    seen: set[str] = set()
     posts = 0
-    # one combined feed: Reddit rate-limits anonymous RSS hard, so a single request is safest
-    root = ET.fromstring(fetch("https://www.reddit.com/r/netsec+cybersecurity+blueteamsec+sysadmin+AskNetsec/new/.rss?limit=100",
-                               limit=8 * 1024 * 1024, timeout=30, headers={"User-Agent": "Mozilla/5.0 (compatible; SubZer0/1.0)"}))
-    for entry in root.findall("a:entry", ns):
-        when = (entry.findtext("a:updated", "", ns) or "").replace("+00:00", "Z")
-        if when and when < since:
-            continue
-        link = entry.find("a:link", ns)
-        url = link.get("href", "") if link is not None else ""
-        url = url if url.startswith("https://www.reddit.com/r/") else ""
-        text = (entry.findtext("a:title", "", ns) or "") + " " + html.unescape(re.sub(r"<[^>]+>", " ", entry.findtext("a:content", "", ns) or ""))
-        _count(buzz, "reddit", text, url, when, ids)
-        posts += 1
+    for i, sub in enumerate(feeds):
+        if i and time.time() > deadline:
+            break
+        try:
+            raw = fetch_fn(f"https://www.reddit.com/r/{sub}/new/.rss?limit=100", limit=8 * 1024 * 1024, timeout=30, headers=headers)
+        except Exception:
+            if i == 0:
+                raise
+            break  # rate limited: stop asking, keep what we have
+        root = ET.fromstring(raw)
+        for entry in root.findall("a:entry", ns):
+            eid = entry.findtext("a:id", "", ns) or ""
+            link = entry.find("a:link", ns)
+            url = link.get("href", "") if link is not None else ""
+            key = eid or url
+            if key and key in seen:
+                continue
+            seen.add(key)
+            when = (entry.findtext("a:updated", "", ns) or "").replace("+00:00", "Z")
+            if when and when < since:
+                continue
+            url = url if url.startswith("https://www.reddit.com/r/") else ""
+            text = (entry.findtext("a:title", "", ns) or "") + " " + html.unescape(re.sub(r"<[^>]+>", " ", entry.findtext("a:content", "", ns) or ""))
+            _count(buzz, "reddit", text, url, when, ids)
+            posts += 1
+        if i:
+            time.sleep(1.5)
     return posts
 
 
-def hackernews(ids: set[str], buzz: dict, deadline: float) -> int:
+def hackernews(ids: set[str], buzz: dict, deadline: float, fetch_fn: Callable[..., Any] | None = None) -> int:
+    """HN via Algolia. One query returns at most 1,000 hits, so walk back in time: each round asks for
+    hits older than the oldest one already read, until the 7-day window is covered."""
+    fetch_fn = fetch_fn or fetch_json
     since = int((now_utc() - timedelta(days=BUZZ_DAYS)).timestamp())
+    upper: int | None = None
+    seen: set[str] = set()
     posts = 0
-    for page in range(5):
+    for _ in range(8):
         if time.time() > deadline:
             break
-        q = urllib.parse.urlencode({"query": "CVE", "tags": "(story,comment)", "numericFilters": f"created_at_i>{since}", "hitsPerPage": 1000, "page": page})
-        data = fetch_json(f"https://hn.algolia.com/api/v1/search_by_date?{q}", timeout=30)
+        flt = f"created_at_i>{since}" + (f",created_at_i<={upper}" if upper is not None else "")
+        q = urllib.parse.urlencode({"query": "CVE", "tags": "(story,comment)", "numericFilters": flt, "hitsPerPage": 1000})
+        data = fetch_fn(f"https://hn.algolia.com/api/v1/search_by_date?{q}", timeout=30)
         hits = data.get("hits") or []
+        oldest = None
         for h in hits:
             oid = str(h.get("objectID") or "")
+            ts = h.get("created_at_i")
+            if isinstance(ts, int):
+                oldest = ts if oldest is None else min(oldest, ts)
+            if oid in seen:
+                continue
+            seen.add(oid)
             url = f"https://news.ycombinator.com/item?id={oid}" if oid.isdigit() else ""
             text = " ".join(str(h.get(k) or "") for k in ("title", "story_text", "comment_text", "url"))
             _count(buzz, "hn", html.unescape(re.sub(r"<[^>]+>", " ", text)), url, str(h.get("created_at") or ""), ids)
             posts += 1
-        if page + 1 >= int(data.get("nbPages") or 0):
+        if len(hits) < 1000 or oldest is None or (upper is not None and oldest >= upper):
             break
+        upper = oldest
     return posts
 
 
@@ -458,7 +496,6 @@ def build(snapshot: Path, previous: Path | None, budget_s: int = 900, only: set[
     manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
     rows = json.loads((snapshot / manifest["search_index"]["path"]).read_text(encoding="utf-8"))
     ids = {r[0] for r in rows}
-    kev_dates = {}
     prev = load_previous(previous)
     prev_cves = prev.get("cves") or {}
     token = os.environ.get("GITHUB_TOKEN") or None

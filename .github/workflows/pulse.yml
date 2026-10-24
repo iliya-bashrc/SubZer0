@@ -1,0 +1,38 @@
+name: Live pulse (15-minute live-layer clock)
+
+# GitHub often runs short cron schedules only every few hours, so the deploy cron alone cannot
+# keep the live layer fresh. Each (hourly) pulse run dispatches deploy.yml up to 4 times, once
+# every 15 minutes aligned to :04/:19/:34/:49, and then stops. It never re-dispatches itself.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "2 * * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: subzero-pulse
+  cancel-in-progress: true
+
+jobs:
+  pulse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Dispatch the live-layer deploy every 15 minutes (4 rounds, then stop)
+        run: |
+          set -uo pipefail
+          for i in 1 2 3 4; do
+            now=$(date -u +%s)
+            min=$(( (now / 60) % 15 ))
+            wait=$(( ((4 - min + 15) % 15) * 60 - now % 60 ))
+            if [ "$wait" -le 0 ]; then wait=$(( wait + 900 )); fi
+            echo "round $i: sleeping ${wait}s"
+            sleep "$wait"
+            gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref main \
+              && echo "dispatched deploy at $(date -u +%H:%M)" || echo "dispatch failed; next round retries"
+          done

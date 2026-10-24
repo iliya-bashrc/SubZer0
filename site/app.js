@@ -204,13 +204,14 @@ function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target=
 const ago=iso=>{const t=Date.parse(iso);if(!t)return'';const m=Math.max(0,Math.round((Date.now()-t)/6e4));return m<1?'just now':m<60?m+'m ago':m<2880?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
 const lvTag=r=>r.lv?`<span class="lv" title="live record from ${esc(r.lv==='cve.org'?'CVE.org':r.lv==='ghsa'?'GitHub advisories':'CISA KEV')} — full enrichment arrives with the next snapshot">LIVE</span>`:'';
 function liveLine(){const L=D.live,age=(Date.now()-Date.parse(D.gen))/36e5;let s='';
-  if(L)s+=`live layer ${ago(L.at)}${L.signed?' (signed)':''} · ${L.n} newer CVEs · `;
-  if(age>8)s+=`<span class="t-warn">full snapshot ${Math.round(age)}h old${L?', live layer covering':''}</span> · `;return s?s+'<br>':''}
+  const p=[];if(L)p.push(`live layer ${ago(L.at)}${L.signed?' (signed)':''} · ${L.n} newer CVE${L.n===1?'':'s'}`);
+  if(age>8)p.push(`<span class="t-warn">full snapshot ${Math.round(age)}h old${L?', live layer covering':''}</span>`);return p.length?p.join(' · ')+'<br>':''}
+const SOCIAL=new Set(['Bluesky','Mastodon','Reddit','Hacker News']);
 const SIG_LABEL={rce:'RCE',exploited:'Exploited','zero-day':'Zero-day',unpatched:'No patch yet',poc:'PoC',critical:'Critical',unauth:'No auth'};
 const ST_LABEL={unpublished:'not published yet',reserved:'reserved, no details',published:'published · outside window',live:'just published',snapshot:'in snapshot',kev:'on KEV',unknown:'status unknown',rejected:'rejected'};
 function earlyWarning(){const E=D.live&&D.live.em||[];if(!E.length)return'';
   return `<section class="ew" aria-label="Early warning"><div class="sec-h"><h2>Early warning</h2><span class="meta">before NVD has it · from ${D.live.feedsOk} CERT &amp; security-news feeds · unconfirmed until a record lands</span></div>
-    <div class="ew-list">${E.slice(0,6).map(e=>{const p0=e.level==='p0',src=arr(e.sources).filter(x=>x&&safeUrl(x.u)),cv=arr(e.cves).filter(c=>typeof c==='string'&&CVE_RE.test(c)),st=e.status&&typeof e.status==='object'?e.status:{};
+    <div class="ew-list n${Math.min(6,E.length)}">${E.slice(0,6).map(e=>{const p0=e.level==='p0',src=arr(e.sources).filter(x=>x&&safeUrl(x.u)),cv=arr(e.cves).filter(c=>typeof c==='string'&&CVE_RE.test(c)),st=e.status&&typeof e.status==='object'?e.status:{};
       return `<article class="ew-item${p0?' p0':''}"><div class="ew-top"><span class="chip ${p0?'crit':'high'}">${p0?'P0 · act now':'Watch'}</span>${arr(e.signals).filter(x=>SIG_LABEL[x]).map(x=>`<span class="ew-sig">${SIG_LABEL[x]}</span>`).join('')}<span class="ew-when">first seen ${esc(ago(e.first_seen))}</span></div>
         <div class="ew-name${e.name.length>28?' long':''}">${esc(e.name)}</div><div class="ew-t">${esc(e.title||'')}</div>
         ${cv.length?`<div class="ew-cves">${cv.map(c=>BYID.has(c)?`<button class="ew-cve" data-cve="${c}">${c}<small>${esc(ST_LABEL[st[c]]||'')}</small></button>`:`<a class="ew-cve" href="https://www.cve.org/CVERecord?id=${c}" target="_blank" rel="noopener noreferrer">${c}<small>${esc(ST_LABEL[st[c]]||'not published yet')}</small></a>`).join('')}</div>`:''}
@@ -265,11 +266,11 @@ function briefing(){
   ${earlyWarning()}
   <div class="stats">
     <div class="stat"><span class="chip crit">Patch now</span><div class="v">${rows.filter(r=>r.P[0]===1).length}</div><div class="s">fix these first</div></div>
-    <div class="stat"><span class="chip high">Critical</span><div class="v">${fmt(T.critical)}</div><div class="s">CVSS 9.0 and up</div></div>
-    <div class="stat"><span class="chip med">High</span><div class="v">${fmt(T.high)}</div><div class="s">CVSS 7.0 to 8.9</div></div>
-    <div class="stat"><span class="chip info">Exploited</span><div class="v">${T.known_exploited}</div><div class="s">added to CISA KEV</div></div>
-    <div class="stat"><span class="chip low">Public PoC</span><div class="v">${fmt(D.poc)}</div><div class="s">exploit code is out</div></div>
-    <div class="stat"><span class="chip ice">Weaponized</span><div class="v">${D.intel?fmt(W.length):'—'}</div><div class="s">Metasploit or Nuclei</div></div>
+    <div class="stat"><span class="chip crit">Critical</span><div class="v">${fmt(T.critical)}</div><div class="s">CVSS 9.0 and up</div></div>
+    <div class="stat"><span class="chip high">High</span><div class="v">${fmt(T.high)}</div><div class="s">CVSS 7.0 to 8.9</div></div>
+    <div class="stat"><span class="chip crit">Exploited</span><div class="v">${T.known_exploited}</div><div class="s">added to CISA KEV</div></div>
+    <div class="stat"><span class="chip med">Public PoC</span><div class="v">${fmt(D.poc)}</div><div class="s">exploit code is out</div></div>
+    <div class="stat"><span class="chip high">Weaponized</span><div class="v">${D.intel?fmt(W.length):'—'}</div><div class="s">Metasploit or Nuclei</div></div>
   </div>
   <div class="cols">
     <section><div class="sec-h"><h2>Patch queue</h2><span class="meta">exploited stuff goes on top</span></div>
@@ -296,7 +297,7 @@ function briefing(){
     <div class="legend"><span><i style="background:var(--crit)"></i>Critical <b>${fmt(days.reduce((a,d)=>a+(d.c||0),0))}</b></span><span><i style="background:var(--high)"></i>High <b>${fmt(days.reduce((a,d)=>a+(d.h||0),0))}</b></span><span><i style="background:var(--med)"></i>Medium <b>${fmt(days.reduce((a,d)=>a+(d.m||0),0))}</b></span><span><i style="background:var(--low)"></i>Low <b>${fmt(days.reduce((a,d)=>a+(d.l||0),0))}</b></span><span><i style="background:#3A3F46"></i>Unscored <b>${fmt(days.reduce((a,d)=>a+Math.max(0,d.n-d.c-d.h-d.m-d.l),0))}</b></span></div></section>
   <section style="margin-top:48px"><div class="sec-h"><h2>Where the data comes from</h2><span class="meta">your browser checks the SHA-256 of every file</span></div>
     <div class="sources">${D.sources.map(s=>`<div class="src"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${s.v==null?"—":fmt(s.v)}</div><div class="s">${s.ok?'checked '+esc((s.at||'').replace('T',' ').slice(5,16)):'<span style="color:var(--crit)">failed last run</span>'}</div></div>`).join('')}
-      ${D.isrc.map(s=>`<div class="src${s.ok?'':' bad'}"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${fmt(s.v)}</div><div class="s">${s.ok?'exploit intel':'<span style="color:var(--high)" title="'+esc(s.note)+'">kept last good data</span>'}</div></div>`).join('')}
+      ${D.isrc.map(s=>`<div class="src${s.ok?'':' bad'}"><div class="n"><i></i>${esc(s.n)}</div><div class="v">${fmt(s.v)}</div><div class="s">${s.ok?(SOCIAL.has(s.n)?'posts scanned':'exploit intel'):'<span style="color:var(--high)" title="'+esc(s.note)+'">kept last good data</span>'}</div></div>`).join('')}
       ${D.live?`<div class="src src-live"><div class="n"><i></i>Early warning</div><div class="v">${fmt(D.live.n)}</div><div class="s">live · CVE.org + ${D.live.feedsOk} feeds · ${esc(D.live.at.slice(11,16))}</div></div>`:''}</div></section>
   ${credits()}
   </div>`;
@@ -671,7 +672,8 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
 function nextRun(){const now=Date.now(),q=9e5,off=24e4;return Math.floor((now-off)/q)*q+off+q}/* live layer: ~every 15 min (:04 :19 :34 :49) */
 function dur(ms){const s=Math.max(0,Math.floor(ms/1000));return `${Math.floor(s/3600)}h ${String(Math.floor(s%3600/60)).padStart(2,'0')}m ${String(s%60).padStart(2,'0')}s`}
 let polling=false,lastPoll=0;
-function tick(){const s=dur(nextRun()-Date.now());const n=document.getElementById('nextSync');if(n)n.textContent='next run '+s;const cd=document.getElementById('cd');if(cd)cd.textContent=s;
+function tick(){const n=document.getElementById('nextSync');if(n){const at=D&&D.live&&Date.parse(D.live.at),late=at&&Date.now()-at>27*6e4;
+    n.textContent=late?'updated '+ago(D.live.at):'next run '+dur(nextRun()-Date.now());n.title=late?'the 15-minute live run is queued; GitHub sometimes starts scheduled runs late':''}
   if(document.visibilityState==='visible'&&Date.now()-lastPoll>60000)poll()}
 async function poll(){if(polling)return;polling=true;lastPoll=Date.now();
   try{const m=await loadManifest();const old=new Set(rows.map(r=>r.id)),oldK=new Set(rows.filter(r=>r.k).map(r=>r.id));let x;
@@ -730,7 +732,7 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
   try{const m=await loadManifest();BOOT.step(`Snapshot ${String(m.generated_at).slice(0,16).replace('T',' ')} UTC`,.08);
     BOOT.need((m.search_index.bytes||0)+(m.poc_ids&&m.poc_ids.bytes||0)+(m.intel&&m.intel.bytes||0));
     adopt(await loadAll(m));BOOT.step(`Indexing ${rows.length.toLocaleString('en-US')} CVEs`,.88)}catch(e){BOOT.fail();bootError(e);return}
-  briefing();research();dossierTab();terminal();live();
+  lastPoll=Date.now();briefing();research();dossierTab();terminal();live();
   BOOT.step('Ranking',.96);
   await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
