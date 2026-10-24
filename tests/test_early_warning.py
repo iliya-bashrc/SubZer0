@@ -112,6 +112,27 @@ class EmergingTests(unittest.TestCase):
         self.assertEqual(a[0]["first_seen"], "2026-10-20T01:00:00Z")
 
 
+    def test_nickname_card_drops_other_vendors_from_a_multi_vendor_story(self):
+        idx = {
+            "CVE-2026-96652": ["CVE-2026-96652", "Plex Media Server SSRF Vulnerability", "unknown", 0.0, 1, 0.004, "", "", "Plex Media Server"],
+            "CVE-2026-106931": ["CVE-2026-106931", "SiteGuard Server Edition OS command injection", "high", 8.5, 1, 0.01, "", "", "e-guardian siteguard"],
+            "CVE-2026-110936": ["CVE-2026-110936", "A vulnerability in Siemens Software Center", "high", 8.4, 1, 0.002, "", "", "siemens software center"],
+        }
+        body = "CVE-2026-96652 CVE-2026-106931 CVE-2026-110936 actively exploited"
+        arts = [art("CISA", "CISA Orders Agencies to Patch Exploited Plex2Shell, Siemens, and SiteGuard Flaws", body, w=2),
+                art("The Hacker News", "Plex2Shell flaws exploited in the wild", body)]
+        out = ew.build_emerging(arts, idx, {}, [], NOW, lambda c: "unpublished")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"].lower(), "plex2shell")
+        self.assertEqual(out[0]["cves"], ["CVE-2026-96652"])
+
+    def test_unnamed_single_cve_card_leads_with_the_cve_id(self):
+        arts = [art("The Hacker News", "Ransomware Groups Exploit Palo Alto Networks Flaw to Bypass MFA", "CVE-2026-0257 exploited"),
+                art("The Register", "Palo Alto firewall flaw under attack", "CVE-2026-0257 exploited in the wild")]
+        out = ew.build_emerging(arts, {}, {}, [], NOW, lambda c: "published")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "CVE-2026-0257")
+
     def test_names_ignore_everyday_words(self):
         self.assertEqual(ew._named("PowerShell webshell in a nutshell"), [])
         self.assertEqual(ew._named("React2Shell and Log4Shell and CitrixBleed"), ["react2shell", "citrixbleed"])
@@ -125,9 +146,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('|| echo "live layer skipped"', deploy)
         self.assertLess(deploy.index("early_warning.py"), deploy.index("sign_manifest.py"))
         watchdog = deploy.split("  watchdog:\n", 1)[1]
-        self.assertIn("if: github.event_name == 'schedule'", watchdog)
+        self.assertIn("if: github.event_name != 'push'", watchdog)
         self.assertIn("permissions:\n      actions: write\n      contents: read", watchdog)
         self.assertIn("gh workflow run update-snapshot.yml", watchdog)
+        pulse = (ROOT / ".github/workflows/pulse.yml").read_text(encoding="utf-8")
+        self.assertIn("gh workflow run deploy.yml", pulse)
+        self.assertNotIn("gh workflow run pulse.yml", pulse)
+        self.assertIn("timeout-minutes: 62", pulse)
+        self.assertNotIn("contents: write", pulse)
 
 
 

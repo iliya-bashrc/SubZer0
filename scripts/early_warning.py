@@ -510,6 +510,31 @@ def _rank_names(names: set[str], arts: list[dict]) -> list[str]:
     return sorted(names, key=rank)
 
 
+def _name_stem(name: str) -> str:
+    """'plex2shell' -> 'plex', 'citrixbleed' -> 'citrix': the vendor/product part of a bug nickname."""
+    stem = re.sub(r"(?:2|to)?(?:shell|bleed|pwn|hound|break|leak|jack|storm|wreck|bomb)s?$", "", name.lower())
+    return stem if len(stem) >= 3 else ""
+
+
+def _on_topic(cves: list[str], names: list[str], index: dict[str, list], live: dict[str, list]) -> list[str]:
+    """A multi-vendor story ("CISA orders agencies to patch Plex2Shell, Siemens and SiteGuard flaws") lists
+    CVEs for other products too. When the bug has a nickname, keep only the CVEs whose record names that
+    vendor/product; CVEs with no record yet are kept (nothing to check them against)."""
+    stem = _name_stem(names[0]) if names else ""
+    if not stem or len(cves) < 2:
+        return cves
+    def text(c: str) -> str | None:
+        row = index.get(c) or live.get(c)
+        if not row:
+            return None
+        return f"{row[1] if len(row) > 1 else ''} {row[8] if len(row) > 8 else ''}".lower()
+    known = {c: text(c) for c in cves}
+    hits = [c for c, t in known.items() if t is not None and stem in t]
+    if not hits:
+        return cves
+    return [c for c in cves if known[c] is None or c in hits]
+
+
 def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str, list], prev: list[dict],
                    now: datetime, lookup: Callable[[str], str] | None = None, max_lookups: int = 25) -> list[dict]:
     prev_by_key = {p.get("key"): p for p in prev if isinstance(p, dict)}
@@ -526,6 +551,7 @@ def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str,
         cves = sorted({k[4:] for k in g["keys"] if k.startswith("cve:")}, key=lambda c: (len(c), c))
         cves = ["CVE-" + c for c in cves][:6]
         names = _rank_names({k[5:] for k in g["keys"] if k.startswith("name:")}, arts)
+        cves = _on_topic(cves, names, index, live)
         if weight < 2 or not (set(sigs) & URGENT):
             continue
         status: dict[str, str] = {}
@@ -554,6 +580,8 @@ def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str,
         best = _best_title(arts, names)
         hit = re.search(re.escape(names[0]), best, re.I) if names else None
         nice = hit.group(0) if hit else _display_name(names, arts)
+        if not names and len(cves) == 1:
+            nice = cves[0]  # no nickname: lead with the CVE ID like the other cards; the headline goes underneath
         score = weight * 2 + sum(w for name, _, w in SIGNALS if name in sigs) + (4 if "unpublished" in status.values() else 0)
         level = "p0" if ({"exploited", "zero-day"} & set(sigs)) or ("rce" in sigs and weight >= 3) else "watch"
         out.append({
@@ -577,6 +605,10 @@ def build_emerging(articles: list[dict], index: dict[str, list], live: dict[str,
         if isinstance(p, dict) and p.get("key") not in keys and not _covered(p, out):
             last = parse_time(p.get("last_seen"))
             if last and now - last < EMERGING_TTL:
+                pk = str(p.get("key") or "")
+                if pk.startswith("name:") and isinstance(p.get("cves"), list):
+                    p["cves"] = _on_topic(p["cves"], [pk[5:]], index, live)
+                    p["status"] = {c: v for c, v in (p.get("status") or {}).items() if c in p["cves"]}
                 for c in p.get("cves") or []:
                     if c in index:
                         p.setdefault("status", {})[c] = "kev" if index[c][4] else "snapshot"

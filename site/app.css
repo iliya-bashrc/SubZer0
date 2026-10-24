@@ -516,6 +516,7 @@ html.booting .top .brand{visibility:hidden}
 .lv{display:inline-block;margin-left:8px;padding:1px 5px;border:1px solid var(--ice);color:var(--ice);font:700 10px/1.4 var(--display);letter-spacing:.12em;vertical-align:middle}
 .ew{margin:28px 0 8px}
 .ew-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.ew-list.n4{grid-template-columns:repeat(auto-fill,minmax(440px,1fr))}/* 4 cards: 2x2 instead of 3+1 */
 .ew-item{position:relative;padding:16px 18px;background:var(--film);border:1px solid var(--line2);border-left:3px solid var(--high)}
 .ew-item.p0{border-left-color:var(--crit);background:linear-gradient(90deg,rgba(229,50,63,.08),var(--film) 60%)}
 .ew-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
