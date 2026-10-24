@@ -532,3 +532,9 @@ html.booting .top .brand{visibility:hidden}
 .ew-src a{color:var(--ink2)}
 .ew-src a:hover{color:var(--ice)}
 .ew-name.long{font-size:17px;line-height:1.25}
+
+/* Telegram Mini App: keep the header and sheets clear of Telegram's fullscreen controls and safe areas. */
+html.tgapp{--tgt:calc(var(--tg-safe-top,0px) + var(--tg-content-top,0px));--tgb:calc(var(--tg-safe-bottom,0px) + var(--tg-content-bottom,0px))}
+html.tgapp .app{padding-top:var(--tgt);box-sizing:border-box}
+html.tgapp .sheet{padding-top:var(--tgt)}
+html.tgapp .bottom-nav{padding-bottom:max(env(safe-area-inset-bottom),var(--tgb))}
