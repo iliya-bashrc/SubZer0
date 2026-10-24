@@ -538,3 +538,8 @@ html.tgapp{--tgt:calc(var(--tg-safe-top,0px) + var(--tg-content-top,0px));--tgb:
 html.tgapp .app{padding-top:var(--tgt);box-sizing:border-box}
 html.tgapp .sheet{padding-top:var(--tgt)}
 html.tgapp .bottom-nav{padding-bottom:max(env(safe-area-inset-bottom),var(--tgb))}
+
+/* Telegram alerts link in the header */
+.tg-join{display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;border:1px solid var(--line2);color:var(--ink2);font:600 11px/1 var(--display);letter-spacing:.12em;text-transform:uppercase;text-decoration:none;transition:color .2s,border-color .2s}
+.tg-join:hover,.tg-join:focus-visible{color:#2AABEE;border-color:#2AABEE}
+@media (max-width:820px){.tg-join{padding:0;width:32px;justify-content:center;border:0;color:#2AABEE}.tg-join span{display:none}}
