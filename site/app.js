@@ -183,7 +183,7 @@ function syncBack(){try{if(TG)TG.back(sheetOpen||cur!==0)}catch{}}
 function go(i){const prev=cur;cur=Math.max(0,Math.min(3,i));if(TG&&prev!==cur)TG.tick();ensure(cur);syncBack();track.style.transform=`translateX(${-cur*25}%)`;renderNav();if(typeof sheetOpen!=='undefined'&&!sheetOpen&&rows.length)history.replaceState(null,'',routeURL());document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)'}
 /* Swipe between tabs: touch, pen and mouse drag; trackpad horizontal scroll; arrow keys. */
 const NO_DRAG='input,textarea,select,[contenteditable],.term-wrap,pre,p,.desc,.lead,.code,dd,.t-title,.why,.kw,.r-search,.views,.filters,.stackbar';
-const scrollsX=el=>{for(;el&&el!==track;el=el.parentElement){const cs=getComputedStyle(el);if(/(auto|scroll)/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+1)return true}return false};
+const scrollsX=el=>{for(;el&&el!==track&&!el.classList.contains('panel');el=el.parentElement){const cs=getComputedStyle(el);if(/(auto|scroll)/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+1)return true}return false};
 /* a mouse press right on a word (outside buttons and links) means the user wants to select text, not drag */
 function onText(e){if(e.target.closest('button,a,[data-cve],label'))return false;const r=document.caretRangeFromPoint?document.caretRangeFromPoint(e.clientX,e.clientY):null;
   const n=r&&r.startContainer;if(!n||n.nodeType!==3||!n.textContent.trim())return false;const g=document.createRange();g.selectNodeContents(n);
