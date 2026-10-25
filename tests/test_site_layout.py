@@ -22,3 +22,16 @@ class MobileLayoutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SiteSafetyTests(unittest.TestCase):
+    def test_feed_dates_are_sanitised_before_rendering(self):
+        js = (ROOT / "site/app.js").read_text(encoding="utf-8")
+        self.assertIn("const isoD=", js)
+        self.assertIn("a:isoD(t[6]),d:isoD(t[7])||isoD(t[6])", js)
+
+    def test_about_page_matches_privacy_reality(self):
+        js = (ROOT / "site/app.js").read_text(encoding="utf-8")
+        self.assertNotIn("no tracking", js)
+        self.assertIn("GoatCounter", js)
+        self.assertIn("@SubZer0Robot", js)

@@ -7,6 +7,8 @@ const fmt=n=>n==null?'—':Number(n).toLocaleString('en-US');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl=u=>{try{const x=new URL(u);return x.protocol==='https:'||x.protocol==='http:'?x.href:null}catch{return null}};
 const CVE_RE=/^CVE-\d{4}-\d{4,}$/;
+/* dates come from feeds: keep only a clean ISO date/time so they are always safe to print */
+const isoD=v=>(String(v??'').match(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?/)||[''])[0];
 /* Provenance. SubZer0 © 2026 @BugCod3 & @RootAccessClub — source-available, All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
 const SZ_ORIGIN=atob('aWxpeWEtYmFzaHJjLmdpdGh1Yi5pbw=='),SZ_HOME='https://'+SZ_ORIGIN+'/SubZer0/',SZ_BUILD='sz0-ib-'+(0x5a0e).toString(36);
 const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname);
@@ -123,7 +125,7 @@ function build(m,idx,poc,intel,L){const P=new Set(Array.isArray(poc)?poc:[]);con
   const LV=liveOf(L),have=new Set();const all=[];for(const t of idx)if(Array.isArray(t)){have.add(t[0]);all.push(LV.kev.has(t[0])&&!t[4]?[...t.slice(0,4),1,...t.slice(5)]:t)}
   for(const t of LV.tup)if(!have.has(t[0]))all.push(t);
   const R=[];for(const t of all){if(!Array.isArray(t)||!CVE_RE.test(t[0]))continue;const s=SEV[t[2]]?t[2]:'unknown';
-    const r={id:t[0],t:String(t[1]||''),s,c:+t[3]||0,k:t[4]?1:0,e:typeof t[5]==='number'?t[5]:null,a:String(t[6]||''),d:String(t[7]||t[6]||''),p:String(t[8]||''),x:P.has(t[0])?1:0,lv:LV.src.get(t[0])||(LV.kev.has(t[0])&&!have.has(t[0])?'kev':''),kl:LV.kev.has(t[0])?1:0};if(have.has(r.id)&&r.lv)r.lv='';
+    const r={id:t[0],t:String(t[1]||''),s,c:+t[3]||0,k:t[4]?1:0,e:typeof t[5]==='number'?t[5]:null,a:isoD(t[6]),d:isoD(t[7])||isoD(t[6]),p:String(t[8]||''),x:P.has(t[0])?1:0,lv:LV.src.get(t[0])||(LV.kev.has(t[0])&&!have.has(t[0])?'kev':''),kl:LV.kev.has(t[0])?1:0};if(have.has(r.id)&&r.lv)r.lv='';
     const lp=arr(LV.pc[r.id]).filter(x=>Array.isArray(x)&&typeof x[0]==='string');const I=IC[r.id]||lp.length?intelOf(IC[r.id]):null;if(I&&lp.length)mergePocs(I,lp);r.I=I;
     if(I){const good=I.g.filter(g=>!arr(g[5]).includes('bait'));r.g=good.length;r.gb=I.g.length-good.length;r.m=I.m.length;r.n=I.n.length;r.w=r.m||r.n?1:0;
       r.v=I.s[0]||'';r.au=I.s[1]==='yes'&&I.s[2]==='total'?1:0;r.b=+I.b[0]||0;r.f=I.f?1:0;
@@ -259,7 +261,7 @@ const firstSeen=r=>{const t=r.I&&r.I.t||{};return [t.msf,t.nuclei].filter(x=>typ
 function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
     <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
-      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
+      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="https://t.me/SubZer0Robot" ${x}>Bot</a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
     <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
 const ago=iso=>{const t=Date.parse(iso);if(!t)return'';const m=Math.max(0,Math.round((Date.now()-t)/6e4));return m<1?'just now':m<60?m+'m ago':m<2880?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
 const lvTag=r=>r.lv?`<span class="lv" title="live record from ${esc(r.lv==='cve.org'?'CVE.org':r.lv==='ghsa'?'GitHub advisories':'CISA KEV')} — full enrichment arrives with the next snapshot">LIVE</span>`:'';
@@ -574,7 +576,7 @@ function pageHTML(kind){const close='<button class="d-close" id="closeSheet">←
     <p class="desc" style="margin-top:20px">That page isn't here. If you were looking for a CVE, it may have aged out of the 30-day window.</p>
     <div class="d-actions"><a class="btn primary" href="./">Go to the briefing</a><a class="btn" href="research">Search CVEs</a></div></div>`}
   const pr=[[1,'Patch now','On CISA KEV, or CISA SSVC says it is exploited, or it is weaponized in Metasploit/Nuclei with CVSS ≥ 7 or EPSS ≥ 10%, or a public PoC with EPSS ≥ 10%.'],[2,'This week','CVSS ≥ 9, or CVSS ≥ 7 with a PoC or EPSS ≥ 5%, or weaponized at any score, or CISA says it is automatable with total impact.'],[3,'Planned','CVSS ≥ 7 and nobody is exploiting it yet.'],[4,'Track','Everything else. Quiet for now.']];
-  return `<div class="d-hero pg">${close}<span class="chip ice">About</span><div class="credit-name" data-fx="id">SubZer0</div><p class="lead">Every CVE published in the last 30 days, ranked by what you should patch first. A static site with no backend, no account and no tracking.</p></div>
+  return `<div class="d-hero pg">${close}<span class="chip ice">About</span><div class="credit-name" data-fx="id">SubZer0</div><p class="lead">Every CVE published in the last 30 days, ranked by what you should patch first. A static site with no backend, no account and no cookies.</p></div>
   <div class="d-body">
     <section><div class="sec-h"><h2>How priority works</h2><span class="meta">same rules in the RSS feed and Telegram</span></div>
       ${pr.map(([n,l,d])=>`<div class="ref"><span class="chip ${n===1?'crit':n===2?'high':'none'}" style="flex:none">P${n}</span><div><div class="l">${l}</div><div class="code" style="white-space:normal;margin-top:4px">${d}</div></div></div>`).join('')}</section>
@@ -583,9 +585,11 @@ function pageHTML(kind){const close='<button class="d-close" id="closeSheet">←
       <dt>CVEs</dt><dd>NVD CVE API 2.0 and the GitHub Advisory Database</dd><dt>Exploited</dt><dd>CISA Known Exploited Vulnerabilities, CISA Vulnrichment (SSVC)</dd><dt>Likelihood</dt><dd>FIRST EPSS</dd>
       <dt>Exploits</dt><dd>Exploit-DB, PoC-in-GitHub, Metasploit modules, Nuclei templates</dd><dt>Chatter</dt><dd>Bluesky, Mastodon, Reddit (r/netsec and friends), Hacker News</dd></dl>
       <p class="desc" style="margin-top:14px">Your browser downloads a manifest and checks the SHA-256 of every data file before showing it. If a check fails, nothing is shown. Your watchlist and stack stay in this browser.</p></section>
-    <section><div class="sec-h"><h2>Your data</h2><span class="meta">no cookies · no tracking</span></div><dl class="kv">
-      <dt>Cookies</dt><dd>None. SubZer0 never sets a cookie.</dd><dt>Stack</dt><dd>${ST.stack.length} item${ST.stack.length===1?'':'s'}, saved in this browser only</dd><dt>Watchlist</dt><dd>${ST.watch.size} CVE${ST.watch.size===1?'':'s'}, saved in this browser only</dd><dt>Offline copy</dt><dd>The last verified snapshot, kept by the service worker</dd></dl>
+    <section><div class="sec-h"><h2>Your data</h2><span class="meta">no cookies · anonymous page counts</span></div><dl class="kv">
+      <dt>Cookies</dt><dd>None. SubZer0 never sets a cookie.</dd><dt>Stack</dt><dd>${ST.stack.length} item${ST.stack.length===1?'':'s'}, saved in this browser only</dd><dt>Watchlist</dt><dd>${ST.watch.size} CVE${ST.watch.size===1?'':'s'}, saved in this browser only</dd><dt>Offline copy</dt><dd>The last verified snapshot, kept by the service worker</dd><dt>Page counts</dt><dd>Anonymous, via GoatCounter: which page was opened, never who opened it. No cookies, no IDs, nothing you typed.</dd></dl>
       <div class="d-actions" style="margin-top:14px"><button class="btn" data-act="wipe">Clear my data on this device</button></div></section>
+    <section><div class="sec-h"><h2>On Telegram</h2><span class="meta">same data, in your chat</span></div><dl class="kv">
+      <dt>Alerts</dt><dd><a href="https://t.me/RootAccessClub" target="_blank" rel="noopener">@RootAccessClub</a>: new patch-now CVEs after every refresh, plus a daily digest</dd><dt>Bot</dt><dd><a href="https://t.me/SubZer0Robot" target="_blank" rel="noopener">@SubZer0Robot</a>: /cve for one CVE, /top for what to patch now, /watch nginx to get a DM when a product you use lands in patch now</dd><dt>Bot watchlist</dt><dd>Kept by the bot with your chat id only. /unwatch all deletes it.</dd></dl></section>
     ${credits()}</div>`}
 function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.dataset.page===kind)return;const was=sheetOpen;lastFocus=was?lastFocus:document.activeElement;
   sheet.dataset.id='';sheet.dataset.page=kind;sheet.scrollTop=0;sheet.setAttribute('aria-label',PAGES[kind]);sheet.innerHTML=pageHTML(kind);paintDossier(sheet,true);watchHeads(sheet);
@@ -615,7 +619,7 @@ document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(
   const t=e.target.closest('[data-cve]');if(t&&CVE_RE.test(t.dataset.cve))openSheet(t.dataset.cve)});
 
 /* ---------- terminal ---------- */
-const CMDS=[['./info','about this thing'],['./help','what you can type'],['./latest','newest CVEs'],['./kev','being exploited right now'],['./early','early warnings, before NVD'],['./trending','what people are talking about'],['./weaponized','Metasploit / Nuclei ready'],['./about','how priority works'],['./status','are the feeds ok?'],['./bugcod3','BugCod3 on Telegram',1],['./rootaccessclub','RootAccessClub on Telegram',1],['./clear','wipe the screen']];
+const CMDS=[['./info','about this thing'],['./help','what you can type'],['./latest','newest CVEs'],['./kev','being exploited right now'],['./early','early warnings, before NVD'],['./trending','what people are talking about'],['./weaponized','Metasploit / Nuclei ready'],['./about','how priority works'],['./status','are the feeds ok?'],['./bugcod3','BugCod3 on Telegram',1],['./rootaccessclub','RootAccessClub on Telegram',1],['./subzer0robot','ask the bot on Telegram',1],['./clear','wipe the screen']];
 const EXTRA=['cve ','search ','watch ','unwatch ','watchlist','stack','stack add ','stack rm ','export csv','export json','whoami','date','ls','uname -a','history','banner','sudo','exit'];
 const P_='<span class="p-user">user@subzer0</span><span class="t-dim">:</span><span class="p-path">~</span><span class="t-dim">$</span>';
 const GL={S:[' ████','█    ',' ███ ','    █','████ '],U:['█   █','█   █','█   █','█   █',' ███ '],B:['████ ','█   █','████ ','█   █','████ '],Z:['█████','   █ ','  █  ',' █   ','█████'],E:['█████','█    ','████ ','█    ','█████'],R:['████ ','█   █','████ ','█  █ ','█   █'],'0':[' ███ ','█  ██','█ █ █','██  █',' ███ ']};
@@ -697,8 +701,8 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
   else if(k==='./about'){print(`<div class="ln t-dim">opening about…</div>`);openPage('about')}
   else if(k==='./early'){const E=D.live&&D.live.em||[];print(E.length?E.map(e=>`<div class="ln"><span class="${e.level==='p0'?'t-err':'t-warn'}">[${e.level==='p0'?'  P0  ':' WATCH'}]</span> ${esc(e.name)} <span class="t-dim">· ${arr(e.cves).map(esc).join(', ')||'no CVE yet'} · ${arr(e.sources).length} sources · ${arr(e.signals).map(esc).join(', ')}</span></div>`).join(''):'<div class="ln t-dim">No early warnings right now.</div>')}
   else if(k==='./kev'){const ks=rows.filter(r=>r.k).slice(0,6);print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">STATUS</span><span class="t-dim">SUMMARY</span>${ks.map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span class="t-err">KEV</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${ks.length} of ${D.totals.known_exploited} known-exploited shown</div>`)}
-  else if(k==='./status'){await lines([...D.sources.map(s=>`<div class="ln"><span class="${s.ok?'t-ok':'t-err'}">[${s.ok?'  OK  ':' FAIL '}]</span> ${esc(s.n)} <span class="t-dim">· ${(+s.v||0).toLocaleString()} records</span></div>`),`<div class="ln t-dim">generated ${D.gen.replace('T',' ').replace('Z',' UTC')} · sha256(manifest) verified</div>`],90)}
-  else if(k==='./bugcod3'||k==='./rootaccessclub'){const n=k==='./bugcod3'?'BugCod3':'RootAccessClub';
+  else if(k==='./status'){await lines([...D.sources.map(s=>`<div class="ln"><span class="${s.ok?'t-ok':'t-err'}">[${s.ok?'  OK  ':' FAIL '}]</span> ${esc(s.n)} <span class="t-dim">· ${(+s.v||0).toLocaleString()} records</span></div>`),`<div class="ln t-dim">generated ${esc(D.gen.replace('T',' ').replace('Z',' UTC'))} · sha256(manifest) verified</div>`],90)}
+  else if(k==='./bugcod3'||k==='./rootaccessclub'||k==='./subzer0robot'){const n=k==='./bugcod3'?'BugCod3':k==='./subzer0robot'?'SubZer0Robot':'RootAccessClub';
     await lines([`<div class="ln"><span class="t-dim">→</span> resolving t.me/${n} … <span class="t-ok">ok</span></div>`],0);
     print(`<div class="ln"><span class="t-dim">→</span> opening Telegram <span class="t-warn" id="pb"></span></div>`);const pb=[...document.querySelectorAll('#pb')].pop();
     for(let i=0;i<=10;i++){pb.textContent=`[${'█'.repeat(i)}${'░'.repeat(10-i)}] ${i*10}%`;await wait(90)}pb.removeAttribute('id');
