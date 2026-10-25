@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_site as bs  # noqa: E402
+import digest_cards as cards  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE_URL = bs.SITE_URL
@@ -48,8 +49,9 @@ def visible_len(markup: str) -> int:
 
 
 def period_dates(mode: str, now: datetime) -> list[str]:
-    days = 7 if mode == "weekly" else 2  # daily: yesterday + today (UTC) = the last ~24-30h of data
-    return [(now - timedelta(days=i)).date().isoformat() for i in range(days)]
+    if mode == "weekly":  # the 7 full UTC days before the snapshot day (no half-filled last day)
+        return [(now - timedelta(days=i)).date().isoformat() for i in range(1, 8)]
+    return [(now - timedelta(days=i)).date().isoformat() for i in range(2)]  # daily: yesterday + today
 
 
 def rank_key(row: list, ctx: dict) -> tuple:
@@ -160,8 +162,9 @@ def daily_text(d: dict, ctx: dict) -> str | None:
     return "\n\n".join(parts)[:TEXT_MAX]
 
 
-def weekly_caption(d: dict, ctx: dict, early: list[str]) -> str:
-    head = [f"\U0001F4CA <b>SubZer0 Weekly</b> \u00b7 {_span(d)}",
+def weekly_caption(d: dict, ctx: dict, early: list[str], week: int | None = None) -> str:
+    wk = f"Week {week} \u00b7 " if week else ""
+    head = [f"\U0001F4CA <b>SubZer0 Weekly</b> \u00b7 {wk}{_span(d)}",
             f"<i>{d['total']:,} new CVEs \u00b7 {d['critical']} critical \u00b7 {len(d['kev'])} added to KEV \u00b7 {d['pocs']} with public exploits</i>"]
     body = []
     if d["kev"]:
@@ -211,56 +214,36 @@ def early_cve_names(doc: dict) -> dict[str, str]:
 
 
 # ------------------------------------------------------------------ card
-def card_html(d: dict, ctx: dict, early: list[str]) -> str:
-    fonts = (ROOT / "site" / "fonts").as_uri()
+def card_data(d: dict, ctx: dict, manifest: dict, edoc: dict) -> dict:
+    """The small data set every banner theme draws from (details stay in the caption)."""
+    last = datetime.fromisoformat(d["dates"][-1])
+    week = last.isocalendar()[1]
+
+    def item(r: list) -> dict:
+        f = bs.facts(r, ctx)
+        return {"id": r[0], "score": f["c"], "name": label(r, ctx, 42)}
+
     rest = [r for r in d["top"] if r not in d["kev"]]
-    top = (d["kev"][:3] + rest)[:5]
-    top += [r for r in d["kev"][3:] if r not in top][:5 - len(top)]
-    rows = "".join(
-        f'<div class="r"><span class="id">{r[0]}</span><span class="sc {html.escape(r[2] or "")}">'
-        f'{(f"{bs.facts(r, ctx)['c']:.1f}" if bs.facts(r, ctx)["c"] else "\u2014")}</span><span class="t">{html.escape(label(r, ctx, 70))}</span>'
-        f'{"<b class=k>KEV</b>" if r[4] else ("<b class=w>PoC</b>" if bs.facts(r, ctx)["poc"] else "")}</div>'
-        for r in top) or '<div class="r"><span class="t">Quiet week.</span></div>'
-    ew = html.escape(" \u00b7 ".join(early[:3])) if early else "none this week"
-    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
-@font-face{{font-family:CP;src:url({fonts}/ChakraPetch-700.woff2);font-weight:700}}
-@font-face{{font-family:IN;src:url({fonts}/Inter.woff2);font-weight:100 900}}
-@font-face{{font-family:JB;src:url({fonts}/JetBrainsMono.woff2);font-weight:100 900}}
-*{{box-sizing:border-box;margin:0}}
-body{{width:1600px;height:900px;overflow:hidden;position:relative;color:#EDE6DA;font-family:IN;
-background:radial-gradient(circle at 18% 30%,#141A20 0,#07080A 60%)}}
-.grid{{position:absolute;inset:0;background-image:linear-gradient(#ffffff08 1px,transparent 1px),linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:40px 40px}}
-.strip{{position:absolute;top:0;bottom:0;right:7%;width:16px;background:#F29A2E}}
-.brand{{position:absolute;left:72px;top:56px;display:flex;align-items:center;gap:18px}}
-.brand i{{width:7px;height:34px;background:#F29A2E}}.brand b{{font:700 32px CP}}.brand span{{font:500 15px JB;letter-spacing:.3em;color:#8A929A}}
-.wk{{position:absolute;right:190px;top:52px;padding:11px 18px;border:1px solid #23292F;background:#07080Acc;font:500 16px JB;letter-spacing:.25em;color:#C9C2B6}}
-h1{{position:absolute;left:68px;top:118px;font:700 112px/1 CP}}h1 em{{font-style:normal;color:#8FD3EE}}
-.stats{{position:absolute;left:72px;top:262px;display:flex;border:1px solid #23292F;background:#0A0C0Ee6}}
-.stats div{{width:230px;padding:20px 22px}}.stats div+div{{border-left:1px solid #23292F}}
-.stats small{{font:500 13px JB;letter-spacing:.22em;color:#6B747C}}.stats b{{display:block;font:700 50px/1.2 CP;margin-top:6px}}
-.list{{position:absolute;left:72px;top:418px;width:1220px}}
-.list h2{{font:500 14px JB;letter-spacing:.25em;color:#6B747C;margin-bottom:10px}}
-.r{{display:flex;align-items:center;gap:18px;padding:13px 0;border-top:1px solid #1C2126;font-size:21px}}
-.id{{font:600 20px JB;width:250px;color:#EDE6DA}}.sc{{font:700 22px CP;width:56px}}
-.sc.critical{{color:#E5323F}}.sc.high{{color:#F08A24}}.sc.medium{{color:#E9C548}}.t{{flex:1;color:#A7AFB6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-.k,.w{{font:700 13px CP;letter-spacing:.12em;padding:5px 9px}}.k{{background:#E5323F;color:#fff}}.w{{border:1.5px solid #E9C548;color:#E9C548}}
-.ew{{position:absolute;left:72px;bottom:58px;font:500 17px JB;color:#C9C2B6}}.ew span{{color:#6B747C;letter-spacing:.22em;margin-right:16px}}
-.url{{position:absolute;right:190px;bottom:54px;font:500 20px JB;color:#8FD3EE}}
-</style></head><body><div class="grid"></div><div class="strip"></div>
-<div class="brand"><i></i><b>SubZer0</b><span>CVE RADAR</span></div>
-<div class="wk">WEEKLY \u00b7 {html.escape(_span(d).upper())}</div>
-<h1>This <em>week</em></h1>
-<div class="stats">
-<div><small>NEW CVES</small><b>{d['total']:,}</b></div>
-<div><small>CRITICAL</small><b style="color:#E5323F">{d['critical']}</b></div>
-<div><small>CISA KEV</small><b style="color:#F08A24">{len(d['kev'])}</b></div>
-<div><small>PUBLIC POC</small><b style="color:#E9C548">{d['pocs']}</b></div>
-<div><small>HIGH</small><b style="color:#8FD3EE">{d['high']}</b></div>
-</div>
-<div class="list"><h2>TOP TO PATCH</h2>{rows}</div>
-<div class="ew"><span>EARLY WARNING</span>{ew}</div>
-<div class="url">iliya-bashrc.github.io/SubZer0 \u00b7 @SubZer0Robot</div>
-</body></html>"""
+    by_date = {m.get("date"): m for m in manifest.get("days") or [] if isinstance(m, dict)}
+    days = []
+    for ds in d["dates"]:
+        m = by_date.get(ds) or {}
+        days.append({"date": ds, "label": datetime.fromisoformat(ds).strftime("%a").upper(),
+                     "count": int(m.get("count") or 0), "critical": int(m.get("critical") or 0)})
+    spot, spot_cves = None, []
+    for e in edoc.get("emerging") or []:
+        if isinstance(e, dict) and e.get("name") and not str(e["name"]).startswith("CVE-"):
+            spot, spot_cves = str(e["name"])[:24], [str(c) for c in e.get("cves") or []][:2]
+            break
+    return {"week": week, "span": _span(d), "total": d["total"], "critical": d["critical"], "high": d["high"],
+            "kev": len(d["kev"]), "pocs": d["pocs"], "p1": len(d["p1"]),
+            "top": [item(r) for r in (d["kev"][:1] + rest)[:3]], "kev_list": [item(r) for r in d["kev"][:3]],
+            "days": days, "spotlight": spot, "spotlight_cves": spot_cves}
+
+
+def card_html(data: dict, theme: str | None = None) -> tuple[str, str]:
+    theme = theme or cards.pick_theme(data["week"], data["spotlight"])
+    return theme, cards.render(theme, data)
 
 
 def render_card(markup: str, out: Path) -> bool:
@@ -316,6 +299,9 @@ def main() -> int:
     ap.add_argument("--mode", choices=["auto", "daily", "weekly"], default="auto")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--card-out", type=Path, default=None, help="where to keep the rendered weekly card")
+    ap.add_argument("--theme", choices=cards.THEMES + ["all"], default=None,
+                    help="force a banner theme (default: rotate); 'all' sends one card per theme for review")
+    ap.add_argument("--chat", default="", help="send to this chat id instead of TELEGRAM_CHAT_ID (e.g. a private preview)")
     args = ap.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -330,7 +316,8 @@ def main() -> int:
     edoc = early_doc()
     kev_map, ctx["titles"] = shard_facts(args.snapshot, manifest, d["dates"])
     ctx["names"] = {**early_cve_names(edoc), **kev_map}
-    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat = args.chat.strip() or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     dry = args.dry_run or not token or not chat
 
     if mode == "daily":
@@ -347,9 +334,24 @@ def main() -> int:
         return 0 if ok else 1
 
     early = early_names(edoc)
-    caption = weekly_caption(d, ctx, early)
+    data = card_data(d, ctx, manifest, edoc)
+    caption = weekly_caption(d, ctx, early, data["week"])
     card = args.card_out or Path(tempfile.gettempdir()) / "subzer0-weekly.png"
-    have_card = render_card(card_html(d, ctx, early), card)
+    if args.theme == "all":  # review mode: one card per theme, short caption, never the rotation
+        ok_all = True
+        for t in cards.THEMES:
+            out = card.with_name(f"subzer0-{t}.png")
+            if not render_card(cards.render(t, data), out):
+                print(f"digest: theme {t} not rendered")
+                ok_all = False
+                continue
+            print(f"digest: theme {t} rendered at {out}")
+            if not dry:
+                ok_all &= tg_call("sendPhoto", token, {"chat_id": chat, "caption": f"Theme preview: {t}"}, photo=out)
+        return 0 if ok_all else 1
+    theme, markup = card_html(data, args.theme)
+    have_card = render_card(markup, card)
+    print(f"digest: week {data['week']} theme {theme}")
     if dry:
         print(caption)
         print(f"digest: card {'rendered at ' + str(card) if have_card else 'not rendered'}")

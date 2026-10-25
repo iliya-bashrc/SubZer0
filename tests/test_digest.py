@@ -43,19 +43,46 @@ class DigestTests(unittest.TestCase):
         self.assertIsNone(digest.daily_text(d, {}))
 
     def test_weekly_caption_fits_telegram_limit(self):
-        many = [row(f"CVE-2026-{i:05d}", "critical", 9.8, kev=i % 2, title="X" * 300) for i in range(1, 60)]
+        many = [row(f"CVE-2026-{i:05d}", "critical", 9.8, kev=i % 2, date="2026-10-23", title="X" * 300) for i in range(1, 60)]
         d = digest.build_digest(many, {"poc": set(), "intel": {}}, "weekly", NOW)
         cap = digest.weekly_caption(d, {}, ["PHP2Shell", "Plex2Shell"])
         self.assertLessEqual(digest.visible_len(cap), digest.CAPTION_MAX)
         self.assertIn("SubZer0 Weekly", cap)
         self.assertIn("@SubZer0Robot", cap)
 
-    def test_card_markup_escapes_titles(self):
-        d = digest.build_digest([row("CVE-2026-0001", "critical", 9.8, kev=1, title="<script>x</script>")],
-                                {"poc": set(), "intel": {}}, "weekly", NOW)
-        markup = digest.card_html(d, {"poc": set(), "intel": {}}, ["<b>"])
-        self.assertNotIn("<script>x", markup)
-        self.assertIn("&lt;script&gt;", markup)
+    def card(self, **over):
+        data = {"week": 43, "span": "Oct 18 \u2013 Oct 24", "total": 4703, "critical": 351, "high": 1501, "kev": 8,
+                "pocs": 413, "p1": 2, "top": [{"id": "CVE-2026-0001", "score": 9.8, "name": "<script>x</script>"}],
+                "kev_list": [{"id": "CVE-2026-0001", "score": 9.8, "name": "<script>x</script>"}],
+                "days": [{"date": "2026-10-18", "label": "SUN", "count": 500, "critical": 12}] * 7,
+                "spotlight": None, "spotlight_cves": []}
+        data.update(over)
+        return data
+
+    def test_every_theme_renders_and_escapes(self):
+        import digest_cards as cards
+        for theme in cards.THEMES:
+            markup = cards.render(theme, self.card(spotlight="<b>Wave</b>"))
+            self.assertIn("WEEK 43", markup)
+            self.assertNotIn("<script>x", markup)
+            self.assertNotIn("<b>Wave</b>", markup)
+
+    def test_theme_rotation_never_repeats_back_to_back_and_spotlight_wins(self):
+        import digest_cards as cards
+        picks = [cards.pick_theme(w, None) for w in range(1, 54)]
+        self.assertTrue(all(a != b for a, b in zip(picks, picks[1:])))
+        self.assertEqual(set(picks), set(cards.ROTATION))
+        self.assertEqual(cards.pick_theme(43, "PHP2Shell"), "spotlight")
+        self.assertEqual(cards.split_name("PHP2Shell"), ("PHP2", "Shell"))
+        self.assertEqual(cards.split_name("CitrixBleed"), ("Citrix", "Bleed"))
+
+    def test_same_week_renders_identically_and_weeks_differ(self):
+        import digest_cards as cards
+        self.assertEqual(cards.render("frost", self.card()), cards.render("frost", self.card()))
+        self.assertNotEqual(cards.render("frost", self.card()), cards.render("frost", self.card(week=48)))
+
+    def test_weekly_period_is_seven_full_days_before_the_snapshot_day(self):
+        self.assertEqual(digest.period_dates("weekly", NOW), [f"2026-10-{d}" for d in range(23, 16, -1)])
 
     def test_short_title_extracts_product_names(self):
         cases = {

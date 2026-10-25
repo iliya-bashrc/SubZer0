@@ -11,6 +11,15 @@ on:
         type: choice
         options: [auto, daily, weekly]
         default: auto
+      theme:
+        description: "Banner theme (auto rotates; all = one card per theme, for review)"
+        type: choice
+        options: [auto, all, spotlight, bignumber, terminal, radar, heatmap, frost]
+        default: auto
+      send_to:
+        description: "Optional chat id to send to instead of the channel (e.g. your own id for a private preview)"
+        type: string
+        default: ""
       dry_run:
         description: "Only print the post in the log"
         type: boolean
@@ -42,6 +51,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MODE: ${{ inputs.mode || 'auto' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          THEME: ${{ inputs.theme || 'auto' }}
+          SEND_TO: ${{ inputs.send_to || '' }}
         run: |
           case "$MODE" in auto|daily|weekly) ;; *) echo "bad mode"; exit 1;; esac
-          python3 scripts/digest.py --mode "$MODE" ${DRY_RUN:+--dry-run}
+          case "$THEME" in auto|all|spotlight|bignumber|terminal|radar|heatmap|frost) ;; *) echo "bad theme"; exit 1;; esac
+          case "$SEND_TO" in ""|@*|-[0-9]*|[0-9]*) ;; *) echo "bad send_to"; exit 1;; esac
+          ARGS=(--mode "$MODE")
+          [ "$THEME" != auto ] && ARGS+=(--theme "$THEME")
+          [ -n "$SEND_TO" ] && ARGS+=(--chat "$SEND_TO")
+          [ -n "$DRY_RUN" ] && ARGS+=(--dry-run)
+          python3 scripts/digest.py "${ARGS[@]}"
