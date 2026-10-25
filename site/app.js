@@ -12,6 +12,7 @@ const SZ_ORIGIN=atob('aWxpeWEtYmFzaHJjLmdpdGh1Yi5pbw=='),SZ_HOME='https://'+SZ_O
 const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname);
 /* Telegram Mini App bridge (no external SDK; CSP stays script-src 'self'). Pads the layout for Telegram's
    fullscreen controls/safe areas, matches its chrome to the site colours and strips launch data from the URL. */
+let TG=null;
 (()=>{const h=location.hash,inTg=/tgWebApp/.test(h)||!!window.TelegramWebviewProxy||sessionStorage.getItem('sz-tg')==='1';
   if(!inTg)return;
   try{sessionStorage.setItem('sz-tg','1')}catch{}
@@ -22,7 +23,7 @@ const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname
       if(window.external&&'notify' in window.external)return window.external.notify(JSON.stringify({eventType:t,eventData:d||{}}));
       if(window.parent!==window)window.parent.postMessage(JSON.stringify({eventType:t,eventData:d||{}}),'https://web.telegram.org')}catch{}};
   const px=v=>Math.max(0,Math.round(Number(v)||0))+'px';
-  const on=(t,d)=>{d=d||{};
+  let on=(t,d)=>{d=d||{};
     if(t==='safe_area_changed'){root.style.setProperty('--tg-safe-top',px(d.top));root.style.setProperty('--tg-safe-bottom',px(d.bottom))}
     else if(t==='content_safe_area_changed'){root.style.setProperty('--tg-content-top',px(d.top));root.style.setProperty('--tg-content-bottom',px(d.bottom))}
     else if(t==='fullscreen_changed'||t==='viewport_changed'){post('web_app_request_safe_area');post('web_app_request_content_safe_area')}};
@@ -33,6 +34,16 @@ const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname
   post('web_app_set_header_color',{color:'#07080A'});post('web_app_set_background_color',{color:'#07080A'});post('web_app_set_bottom_bar_color',{color:'#07080A'});
   post('web_app_setup_swipe_behavior',{allow_vertical_swipe:false});
   post('web_app_request_safe_area');post('web_app_request_content_safe_area');
+  let backOn=null;const backFns=[];
+  TG={back(v){v=!!v;if(v!==backOn){backOn=v;post('web_app_setup_back_button',{is_visible:v})}},onBack(f){backFns.push(f)},
+    tick(){post('web_app_trigger_haptic_feedback',{type:'selection_change'})},
+    /* t.me links open natively inside Telegram; other sites in Telegram's in-app browser (the Mini App stays open) */
+    open(u){try{const x=new URL(u,location.href);if(x.origin===location.origin)return false;
+      if(/^(www\.)?(t\.me|telegram\.me)$/i.test(x.hostname)){post('web_app_open_tg_link',{path_full:x.pathname+x.search});return true}
+      if(x.protocol==='https:'||x.protocol==='http:'){post('web_app_open_link',{url:x.href});return true}}catch{}return false},
+    share(u,t){post('web_app_open_tg_link',{path_full:'/share/url?url='+encodeURIComponent(u)+(t?'&text='+encodeURIComponent(t):'')})}};
+  document.addEventListener('click',e=>{const a=e.target.closest&&e.target.closest('a[href]');if(!a||e.defaultPrevented)return;if(TG.open(a.href))e.preventDefault()});
+  const on0=on;on=(t,d)=>{if(t==='back_button_pressed'){backFns.forEach(f=>{try{f()}catch{}});return}on0(t,d)};
 })();
 /* Ed25519 public key for snapshot/manifest.sig (scripts/sign_manifest.py). Copies can mirror data, not sign it. */
 const SIGN_PK='Hs5MMxzGzlocXQG0Pz5ZWUSLOfSmBXLDyX3OIA3uGvk=';let SIGNED=null;
@@ -76,14 +87,19 @@ async function fetchBuf(url,max){const r=await fetch(url,{cache:'no-cache',crede
   if(!r.body||typeof BOOT==='undefined'||!BOOT.on()){const b=await r.arrayBuffer();if(b.byteLength>max)throw new Error('file too large: '+url);return b}
   const rd=r.body.getReader(),parts=[];let n=0;for(;;){const {done,value}=await rd.read();if(done)break;n+=value.byteLength;if(n>max){rd.cancel().catch(()=>{});throw new Error('file too large: '+url)}parts.push(value);BOOT.got(value.byteLength)}
   const out=new Uint8Array(n);let o=0;for(const v of parts){out.set(v,o);o+=v.byteLength}return out.buffer}
+/* Reopening the app: a file the service worker already cached is reused when its sha256 still matches the
+   (signed) manifest, so only the manifest and the live feed travel again until the next snapshot. */
+async function fromCache(url,sha,max){try{if(!self.caches)return null;const r=await caches.match(url);if(!r)return null;const b=await r.arrayBuffer();
+  if(b.byteLength>max||(await sha256Hex(b))!==sha.toLowerCase())return null;if(typeof BOOT!=='undefined'&&BOOT.on())BOOT.got(b.byteLength);return b}catch{return null}}
 async function fetchVerified(path,sha,max=8e6){if(!/^data\/[a-z0-9_.-]+\.json$/i.test(path)||!/^[0-9a-f]{64}$/i.test(sha))throw new Error('bad manifest entry: '+path);
-  let b=await fetchBuf(SNAP+path,max);if((await sha256Hex(b))!==sha.toLowerCase()){b=await fetchBuf(SNAP+path+'?v='+sha.slice(0,12),max);if((await sha256Hex(b))!==sha.toLowerCase())throw new Error('integrity check failed: '+path)}
+  let b=await fromCache(SNAP+path,sha,max);
+  if(!b){b=await fetchBuf(SNAP+path,max);if((await sha256Hex(b))!==sha.toLowerCase()){b=await fetchBuf(SNAP+path+'?v='+sha.slice(0,12),max);if((await sha256Hex(b))!==sha.toLowerCase())throw new Error('integrity check failed: '+path)}}
   if(typeof BOOT!=='undefined')BOOT.ok(path);return JSON.parse(new TextDecoder().decode(b))}
 async function loadManifest(){const r=await fetch(SNAP+'manifest.json',{cache:'no-store',credentials:'omit'});if(!r.ok)throw new Error('manifest '+r.status);const t=await r.text();if(t.length>2e6)throw new Error('manifest too large');const sv=verifySig(t);
   const m=JSON.parse(t);if(!m||!Array.isArray(m.days)||!m.search_index||!m.generated_at)throw new Error('manifest has an unexpected shape');SIGNED=await sv;return m}
-async function loadAll(m){const [idx,poc,intel]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[],
+async function loadAll(m){const lp=loadLive();const [idx,poc,intel]=await Promise.all([fetchVerified(m.search_index.path,m.search_index.sha256,2e7),m.poc_ids?fetchVerified(m.poc_ids.path,m.poc_ids.sha256,1e6):[],
     m.intel&&m.intel.path?fetchVerified(m.intel.path,m.intel.sha256,1.5e7).catch(e=>{console.warn('intel skipped:',e.message);return null}):null]);
-  RAW={m,idx,poc,intel};LIVE=await loadLive();return build(m,idx,poc,intel,LIVE)}
+  RAW={m,idx,poc,intel};LIVE=await lp;return build(m,idx,poc,intel,LIVE)}
 const arr=v=>Array.isArray(v)?v:[];
 function intelOf(I){I=I&&typeof I==='object'?I:{};const s=arr(I.s),b=arr(I.b),g=arr(I.g).filter(x=>Array.isArray(x)&&typeof x[0]==='string'),t=I.t&&typeof I.t==='object'?I.t:{};
   return {g,m:arr(I.m).filter(Array.isArray),n:arr(I.n).filter(Array.isArray),s,b,t,f:I.f===1}}
@@ -105,8 +121,8 @@ function build(m,idx,poc,intel,L){const P=new Set(Array.isArray(poc)?poc:[]);con
       if(r.g||r.v==='poc')r.x=1}
     else{r.g=r.gb=r.m=r.n=r.w=r.au=r.b=r.f=0;r.v=''}
     r.L=r.k||r.v==='active'?3:r.w?2:r.x?1:0;
-    r.T=esc(r.t);r.Pr=esc([...new Set(r.p.toLowerCase().split(/\s+/).filter(Boolean))].join(' '));r._t=(r.id+' '+r.t+' '+r.p).toLowerCase();r.P=prio(r);R.push(r)}
-  R.sort((a,b)=>b.d.localeCompare(a.d)||b.id.localeCompare(a.id,undefined,{numeric:true}));
+    r.T=esc(r.t);r.Pr=esc([...new Set(r.p.toLowerCase().split(/\s+/).filter(Boolean))].join(' '));r._t=(r.id+' '+r.t+' '+r.p).toLowerCase();r.P=prio(r);{const q=r.id.split('-');r._n=+q[1]*1e9+ +q[2]}R.push(r)}
+  R.sort((a,b)=>a.d<b.d?1:a.d>b.d?-1:b._n-a._n);
   const src=(m.source_status||[]).map(s=>({n:String(s.name),ok:!!s.ok,v:s.records??s.advisories??s.catalog_records??s.exploit_cves??s.scores??null,at:String(s.checked_at||'')}));
   const isrc=intel&&Array.isArray(intel.sources)?intel.sources.filter(x=>x&&typeof x.name==='string').map(x=>({n:x.name,ok:!!x.ok,v:+x.count||0,note:String(x.note||'')})):[];
   return {D:{m,gen:m.generated_at,totals:m.totals,days:m.days.map(d=>({d:d.date,n:d.count,c:d.critical,h:d.high,m:d.medium,l:d.low,x:d.exploited})),sources:src,isrc,intel:!!intel,poc:R.filter(r=>r.x).length,
@@ -160,7 +176,11 @@ function renderNav(){
   if(a&&ind){ind.style.width=a.offsetWidth-28+'px';ind.style.transform=`translateX(${a.offsetLeft+14}px)`}
 }
 function routeURL(){let p=SLUG[cur];if(cur===1){const u=new URLSearchParams();if(F.q)u.set('q',F.q);if(F.view!=='all')u.set('view',F.view);const q=u.toString();if(q)p+='?'+q}return new URL(p,BASE).href}
-function go(i){cur=Math.max(0,Math.min(3,i));track.style.transform=`translateX(${-cur*25}%)`;renderNav();if(typeof sheetOpen!=='undefined'&&!sheetOpen&&rows.length)history.replaceState(null,'',routeURL());document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)'}
+/* Dossier and Terminal are built the first time they are needed (visit or a drag toward them), so the
+   first paint only pays for Briefing + Research and the dossier's day shard / EPSS file is not downloaded up front. */
+const BUILT=new Set();function ensure(i){if(!rows.length||BUILT.has(i))return;if(i===2){BUILT.add(2);dossierTab()}else if(i===3){BUILT.add(3);terminal()}}
+function syncBack(){try{if(TG)TG.back(sheetOpen||cur!==0)}catch{}}
+function go(i){const prev=cur;cur=Math.max(0,Math.min(3,i));if(TG&&prev!==cur)TG.tick();ensure(cur);syncBack();track.style.transform=`translateX(${-cur*25}%)`;renderNav();if(typeof sheetOpen!=='undefined'&&!sheetOpen&&rows.length)history.replaceState(null,'',routeURL());document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)'}
 /* Swipe between tabs: touch, pen and mouse drag; trackpad horizontal scroll; arrow keys. */
 const NO_DRAG='input,textarea,select,[contenteditable],.term-wrap,pre,p,.desc,.lead,.code,dd,.t-title,.why,.kw,.r-search,.views,.filters,.stackbar';
 const scrollsX=el=>{for(;el&&el!==track;el=el.parentElement){const cs=getComputedStyle(el);if(/(auto|scroll)/.test(cs.overflowX)&&el.scrollWidth>el.clientWidth+1)return true}return false};
@@ -170,17 +190,23 @@ function onText(e){if(e.target.closest('button,a,[data-cve],label'))return false
   return [...g.getClientRects()].some(b=>e.clientX>=b.left-2&&e.clientX<=b.right+2&&e.clientY>=b.top-2&&e.clientY<=b.bottom+2)}
 (function swipe(){let x0=null,y0,dx=0,lock=null,mouse=false,moved=false;const vp=document.getElementById('vp');
   const pull=dx=>`translateX(calc(${-cur*25}% + ${dx/(cur===0&&dx>0||cur===3&&dx<0?3:1)}px))`;
-  vp.addEventListener('pointerdown',e=>{if(sheetOpen||e.button>0)return;mouse=e.pointerType==='mouse';
+  vp.addEventListener('pointerdown',e=>{if(sheetOpen||e.button>0||e.pointerType==='touch')return;mouse=e.pointerType==='mouse';
     if(mouse&&(e.target.closest(NO_DRAG)||scrollsX(e.target)||onText(e)))return;
     if(!mouse&&(e.target.closest('input,textarea,select')||scrollsX(e.target)))return;
     x0=e.clientX;y0=e.clientY;dx=0;lock=null;moved=false});
-  addEventListener('pointermove',e=>{if(x0==null)return;const mx=e.clientX-x0,my=e.clientY-y0;
-    if(lock==null&&Math.hypot(mx,my)>(mouse?12:8)){lock=Math.abs(mx)>Math.abs(my)*1.2?'x':'y';if(lock==='x'&&mouse){document.body.classList.add('grabbing');getSelection().removeAllRanges()}}
-    if(lock==='x'){moved=true;dx=mx;track.classList.add('dragging');track.style.transform=pull(dx)}});
-  const end=()=>{if(x0==null)return;x0=null;document.body.classList.remove('grabbing');track.classList.remove('dragging');
+  const move=(cx,cy)=>{const mx=cx-x0,my=cy-y0;
+    if(lock==null&&Math.hypot(mx,my)>(mouse?12:8)){lock=Math.abs(mx)>Math.abs(my)*1.2?'x':'y';if(lock==='x'){ensure(cur+(mx<0?1:-1));if(mouse){document.body.classList.add('grabbing');getSelection().removeAllRanges()}}}
+    if(lock==='x'){moved=true;dx=mx;track.classList.add('dragging');track.style.transform=pull(dx)}};
+  addEventListener('pointermove',e=>{if(x0==null||e.pointerType==='touch')return;move(e.clientX,e.clientY)});
+  vp.addEventListener('touchstart',e=>{if(sheetOpen||e.touches.length!==1){x0=null;return}const t=e.touches[0];
+    if(e.target.closest('input,textarea,select')||scrollsX(e.target))return;mouse=false;x0=t.clientX;y0=t.clientY;dx=0;lock=null;moved=false},{passive:true});
+  vp.addEventListener('touchmove',e=>{if(x0==null)return;if(e.touches.length!==1){end();return}const t=e.touches[0];move(t.clientX,t.clientY);
+    if(lock==='x'&&e.cancelable)e.preventDefault()},{passive:false});
+  vp.addEventListener('touchend',()=>end());vp.addEventListener('touchcancel',()=>end());
+  function end(){if(x0==null)return;x0=null;document.body.classList.remove('grabbing');track.classList.remove('dragging');
     if(lock==='x'&&Math.abs(dx)>Math.min(110,innerWidth*.18))go(cur+(dx<0?1:-1));else if(lock==='x')go(cur);
-    if(moved){const kill=ev=>{ev.stopPropagation();ev.preventDefault()};addEventListener('click',kill,{capture:true,once:true});setTimeout(()=>removeEventListener('click',kill,{capture:true}),60)}};
-  addEventListener('pointerup',end);addEventListener('pointercancel',end);
+    if(moved){const kill=ev=>{ev.stopPropagation();ev.preventDefault()};addEventListener('click',kill,{capture:true,once:true});setTimeout(()=>removeEventListener('click',kill,{capture:true}),60)}}
+  addEventListener('pointerup',e=>{if(e.pointerType!=='touch')end()});addEventListener('pointercancel',e=>{if(e.pointerType!=='touch')end()});
   let acc=0,quiet=0,cool=0;
   vp.addEventListener('wheel',e=>{if(sheetOpen||Math.abs(e.deltaX)<=Math.abs(e.deltaY)*1.5||scrollsX(e.target)||e.target.closest('.term-out'))return;
     e.preventDefault();const now=Date.now();if(now<cool)return;if(now-quiet>250)acc=0;quiet=now;acc+=e.deltaX;
@@ -526,7 +552,7 @@ function dossierTab(id){id=id||LS.get('last',null);if(!id||!BYID.has(id)){const 
 
 /* sheet with swipe-back + history */
 const sheet=document.getElementById('sheet'),back=document.getElementById('back');let sheetOpen=false,lastFocus=null;
-function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
+function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;syncBack();
   LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);{const t=(BYID.get(id)||(ARCH&&ARCH.id===id?ARCH:{})).t||'';document.title=id+(t?': '+(t.length>70?t.slice(0,69)+'…':t):' · SubZer0')};setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};
 function pageHTML(kind){const close='<button class="d-close" id="closeSheet">← Back · Esc</button>';
@@ -553,23 +579,25 @@ function pageHTML(kind){const close='<button class="d-close" id="closeSheet">←
     ${credits()}</div>`}
 function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.dataset.page===kind)return;const was=sheetOpen;lastFocus=was?lastFocus:document.activeElement;
   sheet.dataset.id='';sheet.dataset.page=kind;sheet.scrollTop=0;sheet.setAttribute('aria-label',PAGES[kind]);sheet.innerHTML=pageHTML(kind);paintDossier(sheet,true);watchHeads(sheet);
-  decode(sheet.querySelector('[data-fx="id"]'),520);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;
+  decode(sheet.querySelector('[data-fx="id"]'),520);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;syncBack();
   const u=kind==='about'?new URL('about',BASE).href:kind==='keys'?location.href:null;
   if(u){replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u)}else if(!was)history.pushState({sheet:1},'',location.href);
   document.title=PAGES[kind]+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
-function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;sheet.classList.remove('on');back.classList.remove('on');sheet.style.transform='';
+function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;setTimeout(syncBack,0);if(sheet.contains(document.activeElement))document.activeElement.blur();sheet.classList.remove('on');back.classList.remove('on');sheet.style.transform='';
   if(fromPop!==true)history.back();setTimeout(()=>{if(!sheetOpen)history.replaceState(null,'',routeURL())},0);document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)';if(lastFocus&&lastFocus.focus)lastFocus.focus({preventScroll:true})}
 back.onclick=closeSheet;addEventListener('popstate',e=>{if(sheetOpen)closeSheet(true);else{const R=route();if(R.cve)openSheet(R.cve,true);else if(R.page){if(R.page==='404')NF_PATH=location.pathname.slice(BASE.pathname.length);openPage(R.page,true)}}});
 addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(sheetOpen)closeSheet();else{const a=document.activeElement;if(a&&(a.id==='q'||a.id==='msIn'||a.id==='stIn'))a.blur()}});
-(function(){let x0,dx=0,lock=null,y0;sheet.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;x0=e.clientX;y0=e.clientY;dx=0;lock=null});
-  sheet.addEventListener('pointermove',e=>{if(x0==null)return;const mx=e.clientX-x0,my=e.clientY-y0;if(lock==null&&Math.hypot(mx,my)>8)lock=Math.abs(mx)>Math.abs(my)&&mx>0?'x':'y';
-    if(lock==='x'){dx=Math.max(0,mx);sheet.classList.add('dragging');sheet.style.transform=`translateX(${dx}px)`;back.style.opacity=1-dx/innerWidth}});
-  const end=()=>{if(x0==null)return;sheet.classList.remove('dragging');back.style.opacity='';if(lock==='x'&&dx>90)closeSheet();else sheet.style.transform='';x0=null};
-  sheet.addEventListener('pointerup',end);sheet.addEventListener('pointercancel',end)})();
+(function(){let x0=null,dx=0,lock=null,y0;
+  sheet.addEventListener('touchstart',e=>{if(e.touches.length!==1||e.target.closest('input,textarea,select')||scrollsX(e.target)){x0=null;return}x0=e.touches[0].clientX;y0=e.touches[0].clientY;dx=0;lock=null},{passive:true});
+  sheet.addEventListener('touchmove',e=>{if(x0==null)return;const t=e.touches[0],mx=t.clientX-x0,my=t.clientY-y0;if(lock==null&&Math.hypot(mx,my)>8)lock=Math.abs(mx)>Math.abs(my)*1.2&&mx>0?'x':'y';
+    if(lock==='x'){if(e.cancelable)e.preventDefault();dx=Math.max(0,mx);sheet.classList.add('dragging');sheet.style.transform=`translateX(${dx}px)`;back.style.opacity=1-dx/innerWidth}},{passive:false});
+  const end=()=>{if(x0==null)return;sheet.classList.remove('dragging');back.style.opacity='';if(lock==='x'&&dx>Math.min(90,innerWidth*.22))closeSheet();else sheet.style.transform='';x0=null};
+  sheet.addEventListener('touchend',end);sheet.addEventListener('touchcancel',end)})();
+if(TG)TG.onBack(()=>{if(sheetOpen)closeSheet();else if(cur!==0)go(0)});
 document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(a){const id=a.dataset.id;
     if(a.dataset.act==='copy')copy(id,id+' copied');
     if(a.dataset.act==='wipe'){if(!confirm('Clear your stack, watchlist and the offline copy from this browser?'))return;try{Object.keys(localStorage).filter(k=>k.startsWith('sz.')).forEach(k=>localStorage.removeItem(k));sessionStorage.removeItem('sz.fx')}catch{}ST.watch.clear();ST.stack.length=0;if(self.caches)caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('subzer0-data')).map(k=>caches.delete(k)))).catch(()=>{});snack('local data cleared');setTimeout(()=>location.reload(),700);return}
-    if(a.dataset.act==='share'){const u=SITE+'/cve/'+id;navigator.share&&matchMedia('(pointer:coarse)').matches?navigator.share({title:id,url:u}).catch(()=>{}):copy(u,'link copied')}
+    if(a.dataset.act==='share'){const u=SITE+'/cve/'+id;if(TG){const r=BYID.get(id);TG.share(u,id+(r?' · '+r.t.slice(0,90):''));return}navigator.share&&matchMedia('(pointer:coarse)').matches?navigator.share({title:id,url:u}).catch(()=>{}):copy(u,'link copied')}
     if(a.dataset.act==='watch'){const on=toggleWatch(id);document.querySelectorAll(`[data-act="watch"][data-id="${id}"]`).forEach(b=>{b.classList.toggle('on',on);b.textContent=on?'★ Watching':'☆ Watch'});snack(on?'added to watchlist':'removed from watchlist')}
     if(a.dataset.act==='json'){const f=REC.get(id);const r=BYID.get(id);const ix=r&&r.I?{exploit_maturity:LADDER[r.L],github_pocs:r.I.g,metasploit:r.I.m,nuclei:r.I.n,ssvc:r.I.s,chatter:r.I.b,first_seen:r.I.t,patch_linked:r.I.f}:{};
       download(id+'.json',JSON.stringify(f?{...f.rec,epss:r&&r.e,poc:!!(r&&r.x),...ix}:r?{id:r.id,title:r.t,severity:r.s,cvss:r.c,epss:r.e,kev:!!r.k,poc:!!r.x,...ix}:{id},null,2),'application/json')}
@@ -664,7 +692,7 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
     await lines([`<div class="ln"><span class="t-dim">→</span> resolving t.me/${n} … <span class="t-ok">ok</span></div>`],0);
     print(`<div class="ln"><span class="t-dim">→</span> opening Telegram <span class="t-warn" id="pb"></span></div>`);const pb=[...document.querySelectorAll('#pb')].pop();
     for(let i=0;i<=10;i++){pb.textContent=`[${'█'.repeat(i)}${'░'.repeat(10-i)}] ${i*10}%`;await wait(90)}pb.removeAttribute('id');
-    const u='https://t.me/'+n;let w=null;if(!window.SZ_NOREDIRECT){try{w=window.open(u,'_blank');if(w)w.opener=null}catch(e){}}
+    const u='https://t.me/'+n;let w=null;if(!window.SZ_NOREDIRECT){try{if(TG&&TG.open(u))w=1;else{w=window.open(u,'_blank');if(w)w.opener=null}}catch(e){}}
     print(`<div class="ln"><span class="t-dim">→</span> ${w?'opened in a new tab · ':'popup blocked · '}<a href="${u}" target="_blank" rel="noopener">t.me/${n} ↗</a></div>`)}
   else if(/^cve(\s|$)/.test(lc)){const id=(c.split(' ')[1]||'').toUpperCase();const r=BYID.get(id)||null;
     if(!id)print(`<div class="ln">usage: cve <span class="t-dim">CVE-YYYY-NNNN</span></div>`);
@@ -756,7 +784,9 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
   try{const m=await loadManifest();BOOT.step(`Snapshot ${String(m.generated_at).slice(0,16).replace('T',' ')} UTC`,.08);
     BOOT.need((m.search_index.bytes||0)+(m.poc_ids&&m.poc_ids.bytes||0)+(m.intel&&m.intel.bytes||0));
     adopt(await loadAll(m));BOOT.step(`Indexing ${rows.length.toLocaleString('en-US')} CVEs`,.88)}catch(e){BOOT.fail();bootError(e);return}
-  lastPoll=Date.now();briefing();research();dossierTab();terminal();live();
+  /* yield between the big render steps so the boot animation keeps moving on slow phones */
+  const breathe=()=>new Promise(r=>setTimeout(r,0));
+  lastPoll=Date.now();await breathe();briefing();await breathe();research();await breathe();ensure(cur);live();
   BOOT.step('Ranking',.96);
   await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
