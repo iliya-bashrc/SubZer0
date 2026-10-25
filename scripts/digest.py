@@ -95,7 +95,8 @@ def shard_facts(snapshot: Path, manifest: dict, dates: list[str]) -> tuple[dict[
             titles[rec["id"]] = str(rec.get("desc") or rec.get("title") or "")[:400]
             k = rec.get("kev")
             if isinstance(k, dict) and (k.get("vendor") or k.get("product")):
-                name = " ".join(x for x in (k.get("vendor"), k.get("product")) if x)
+                v, prod = str(k.get("vendor") or "").strip(), str(k.get("product") or "").strip()
+                name = prod if v and prod.lower().startswith(v.lower()) else " ".join(x for x in (v, prod) if x)
                 out[rec["id"]] = name
     return out, titles
 

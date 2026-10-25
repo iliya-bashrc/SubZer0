@@ -1,5 +1,6 @@
 import sys
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -105,3 +106,40 @@ class DigestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AlertBannerTests(unittest.TestCase):
+    def setUp(self):
+        import digest_cards
+        self.cards = digest_cards
+
+    def item(self, **kw):
+        base = {"id": "CVE-2026-0001", "name": "Acme <Gate>", "score": 9.8, "why": "weaponized (Metasploit)",
+                "epss": 0.5, "kev": True, "weap": True}
+        base.update(kw)
+        return base
+
+    def test_single_and_multi_render_escaped(self):
+        one = self.cards.alert({"count": 1, "stamp": "1 Jan", "items": [self.item()]})
+        self.assertIn("&lt;Gate&gt;", one)
+        self.assertIn("9.8", one)
+        many = self.cards.alert({"count": 7, "stamp": "1 Jan", "kev": 4, "weap": 2,
+                                 "items": [self.item(id=f"CVE-2026-000{i}") for i in range(3)]})
+        self.assertIn("7 <em>to patch</em>", many)
+        self.assertIn("4 CISA KEV", many)
+        self.assertIn("+ 4 more", many)
+
+    def test_unscored_single_has_no_gauge(self):
+        out = self.cards.alert({"count": 1, "stamp": "x", "items": [self.item(score=0, kev=False)]})
+        self.assertNotIn("<svg viewBox=\"0 0 380 380\"", out)
+        self.assertIn("weaponized (Metasploit)", out)
+
+
+class AlertCaptionTests(unittest.TestCase):
+    def test_caption_fits_telegram_limit(self):
+        import notify_telegram as nt
+        rows = [[f"CVE-2026-{i:05d}", "X" * 200, None, 9.0, True, 0.9] for i in range(12)]
+        with mock.patch.object(nt, "priority_reason", return_value=(1, "on CISA KEV")):
+            text = nt.caption(rows, {})
+        self.assertLessEqual(nt.digest.visible_len(text), 1024)
+        self.assertIn("more:", text)
