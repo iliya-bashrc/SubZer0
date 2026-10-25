@@ -61,13 +61,14 @@ def reason(r: list, ctx: dict) -> str:
 
 
 def message(new: list[list], ctx: dict, limit: int = MAX_ITEMS) -> str:
-    lines = [f"<b>SubZer0 · {len(new)} new to patch now</b>"]
+    lines = [f"\U0001F6A8 <b>SubZer0 Alert</b> \u00b7 {len(new)} new to patch now"]
     for r in new[:limit]:
         why = reason(r, ctx)
         score = f" · CVSS {r[3]:.1f}" if r[3] else ""
         lines.append(f'\n<a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> — {escape(str(r[1])[:120])}\n<i>{why}{score}</i>')
     if len(new) > limit:
         lines.append(f"\n…and {len(new) - limit} more: {SITE_URL}research?view=p1")
+    lines.append(f"\n{digest.SIGN}")
     return "\n".join(lines)
 
 

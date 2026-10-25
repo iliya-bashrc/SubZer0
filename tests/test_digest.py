@@ -50,6 +50,8 @@ class DigestTests(unittest.TestCase):
         self.assertLessEqual(digest.visible_len(cap), digest.CAPTION_MAX)
         self.assertIn("SubZer0 Weekly", cap)
         self.assertIn("@SubZer0Robot", cap)
+        self.assertTrue(cap.rstrip().endswith(digest.SIGN))
+        self.assertIn("@RootAccessClub", cap)
 
     def card(self, **over):
         data = {"week": 43, "span": "Oct 18 \u2013 Oct 24", "total": 4703, "critical": 351, "high": 1501, "kev": 8,
@@ -143,3 +145,4 @@ class AlertCaptionTests(unittest.TestCase):
             text = nt.caption(rows, {})
         self.assertLessEqual(nt.digest.visible_len(text), 1024)
         self.assertIn("more:", text)
+        self.assertTrue(text.endswith(nt.digest.SIGN))

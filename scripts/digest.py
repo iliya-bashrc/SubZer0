@@ -33,6 +33,9 @@ SITE_URL = bs.SITE_URL
 LIVE_EARLY = SITE_URL + "live/early.json"
 CAPTION_MAX = 1024
 TEXT_MAX = 3900
+CHANNEL = "@RootAccessClub"
+# Signature at the end of every post (Telegram links the @usernames by itself).
+SIGN = f'\U0001F310 <a href="{SITE_URL}">SubZer0</a> \u00b7 \U0001F4E3 {CHANNEL} \u00b7 \U0001F916 @SubZer0Robot'
 
 
 def clip(text: str, n: int) -> str:
@@ -159,7 +162,7 @@ def daily_text(d: dict, ctx: dict) -> str | None:
         parts.append("\U0001F3AF <b>Patch now</b>\n" + "\n".join(_line(r, ctx) for r in d["p1"][:4]))
     more = len(d["kev"]) + len(d["p1"]) - min(4, len(d["kev"])) - min(4, len(d["p1"]))
     tail = f"+{more} more \u2192 " if more > 0 else "Full list \u2192 "
-    parts.append(f"{tail}{SITE_URL}\n\U0001F916 @SubZer0Robot")
+    parts.append(f"{tail}{SITE_URL}\n\n{SIGN}")
     return "\n\n".join(parts)[:TEXT_MAX]
 
 
@@ -177,7 +180,7 @@ def weekly_caption(d: dict, ctx: dict, early: list[str], week: int | None = None
             f'\u2022 <a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> {html.escape(label(r, ctx, 50))}' for r in top))
     if early:
         body.append("\U0001F6A8 <b>Early warnings</b>: " + html.escape(", ".join(early[:4])))
-    foot = f"Full dossier \u2192 {SITE_URL}\n\U0001F916 @SubZer0Robot"
+    foot = f"Full dossier \u2192 {SITE_URL}\n\n{SIGN}"
     # Drop list items until the caption fits Telegram's 1024-char limit (visible text, tags included to be safe).
     while True:
         text = "\n\n".join(head + body + [foot])
