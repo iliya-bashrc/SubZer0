@@ -178,11 +178,13 @@ flowchart LR
 - **Atomic publish** — a broken run can never leave the live site half-updated.
 - **Feeds** — RSS of *patch now* CVEs at [`/feed.xml`](https://iliya-bashrc.github.io/SubZer0/feed.xml) and a small JSON summary at [`/api/latest.json`](https://iliya-bashrc.github.io/SubZer0/api/latest.json).
 - **Telegram alerts** — CVEs that just became *patch now* get posted after each refresh (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` secrets; without them the step is a no-op).
+- **Telegram bot** — [@SubZer0Robot](https://t.me/SubZer0Robot) runs on a Cloudflare Worker (`worker/bot.js`): `/cve <id>`, `/top`, and `/watch <product>` for a DM when that product gets a *patch now* CVE. It reads the same published files (`api/cve/<id>.json`, `api/latest.json`), so it never disagrees with the site.
 - **Offline** — a service worker keeps the app shell and the last verified snapshot.
+- **Privacy** — no cookies, no accounts. Anonymous page counts via GoatCounter (page path only, never search terms).
 
 ### Stack
 
-Plain **HTML / CSS / JS** — no framework, no build step, no npm, self-hosted fonts · strict **Content-Security-Policy** (the only outside call is FIRST's EPSS API) · **Python 3** stdlib pipeline with hash-pinned CI deps · **GitHub Actions** as the backend, **GitHub Pages** as the host.
+Plain **HTML / CSS / JS** — no framework, no build step, no npm, self-hosted fonts · strict **Content-Security-Policy** (outside calls: FIRST's EPSS API and an anonymous GoatCounter pixel) · **Python 3** stdlib pipeline with hash-pinned CI deps · **GitHub Actions** as the backend, **GitHub Pages** as the host.
 
 ---
 
@@ -215,11 +217,16 @@ python -m unittest discover -s tests                         # tests
 │   ├── update_data.py        5-source ingestion + validation
 │   ├── enrich_intel.py       exploit intel + chatter → data/intel.json
 │   ├── verify_data_snapshot.py   offline integrity validator
-│   ├── build_site.py         assembles _site/, writes feed.xml + api/latest.json
-│   ├── notify_telegram.py    posts newly urgent CVEs
+│   ├── build_site.py         assembles _site/, writes feed.xml, api/latest.json, api/cve/<id>.json
+│   ├── seo_pages.py          one crawlable page per CVE + sitemap.xml
+│   ├── early_warning.py      live layer (live/early.json) between snapshots
+│   ├── notify_telegram.py    posts newly urgent CVEs, DMs bot watchlists
+│   ├── digest.py             daily digest post + banner (digest_cards.py)
+│   ├── deploy_bot.py         uploads worker/bot.js to Cloudflare + sets the webhook
 │   └── verify_pages.py       checks the live site serves the exact files
-├── tests/                    pipeline, integrity, intel & workflow-security tests
-└── .github/workflows/        checks.yml · update-snapshot.yml · deploy.yml
+├── worker/bot.js             @SubZer0Robot (Cloudflare Worker)
+├── tests/                    pipeline, integrity, intel, bot & workflow-security tests
+└── .github/workflows/        checks · update-snapshot · deploy · digest · bot · telegram-test
 ```
 </details>
 

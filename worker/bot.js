@@ -48,17 +48,17 @@ async function handle(update, env) {
   if (cmd === 'list' || cmd === 'watchlist') return list(env, chat);
   if (cmd === 'cve' || (!m && CVE_RE.test(text))) {
     const id = (arg.match(CVE_RE) || text.match(CVE_RE) || [])[0];
-    if (!id) return send(env, chat, 'Send a CVE id, e.g. <code>/cve CVE-2024-3400</code>');
+    if (!id) return send(env, chat, 'Send a CVE id, e.g. <code>/cve CVE-2026-110447</code>');
     return cve(env, chat, id.toUpperCase(), priv);
   }
-  if (!m) return send(env, chat, 'Send me a CVE id (like <code>CVE-2024-3400</code>) or try /top. /help lists everything.');
+  if (!m) return send(env, chat, 'Send me a CVE id (like <code>CVE-2026-110447</code>) or try /top. /help lists everything.');
 }
 
 function help(env) {
   return [
     '<b>SubZer0 Sentinel</b> · CVE briefing in your chat',
     '',
-    '/cve <code>CVE-2024-3400</code> — summary of one CVE (or just send the id)',
+    '/cve <code>CVE-2026-110447</code> — summary of one CVE (or just send the id)',
     '/top — what to patch right now',
     '/watch <code>nginx</code> — DM me when a product you use gets a patch-now CVE',
     '/unwatch <code>nginx</code> · /list — manage your watchlist',

@@ -208,6 +208,8 @@ tbody tr:hover .t-id{color:var(--ice)}
 .why-box b{color:var(--ink);font-weight:600}
 .kv{display:grid;grid-template-columns:160px minmax(0,1fr);gap:10px 16px;margin-top:16px;font-size:14px}
 .kv dt{color:var(--ink3)}.kv dd{color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.kv dd a{color:var(--ice)}
+.kv dd a:hover{text-decoration:underline}
 .ref{display:flex;gap:16px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--line)}
 .ref .d{font:400 12px var(--mono);color:var(--ink3)}
 .ref .l{margin-top:2px;font-size:14px;color:var(--ink)}
