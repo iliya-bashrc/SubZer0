@@ -290,3 +290,82 @@ RENDERERS = {"spotlight": spotlight, "bignumber": bignumber, "terminal": termina
 def render(theme: str, d: dict) -> str:
     rng = random.Random(d["week"] * 7919 + THEMES.index(theme))
     return RENDERERS[theme](d, rng)
+
+
+# ---------------------------------------------------------------- urgent alert banner
+def _alert_chrome(a: dict) -> str:
+    return (f'<div class="brand"><i style="background:{CRIT}"></i><b>SubZer0</b><span>ALERT</span></div>'
+            f'<div class="wk"><i style="background:{CRIT};box-shadow:0 0 12px {CRIT}"></i>{esc(a["stamp"]).upper()}</div>'
+            f'<div class="foot"><span>for defenders, patch first</span>'
+            f'<span><b>iliya-bashrc.github.io/SubZer0</b> \u00b7 @SubZer0Robot</span></div>')
+
+
+def _sev(score: float) -> str:
+    return CRIT if score >= 9 else HIGH if score >= 7 else MED if score >= 4 else CYAN
+
+
+def alert(a: dict) -> str:
+    """Banner for CVEs that just became "patch now". One CVE: product name as the hero with a CVSS gauge.
+    Several: the count as the hero plus the top three."""
+    items, n = a["items"], max(a["count"], len(a["items"]))
+    seed = sum(ord(ch) for ch in "".join(i["id"] for i in items[:3]))
+    rng = random.Random(seed)
+    bars = "".join(
+        f'<rect x="{x}" y="0" width="{rng.choice([2, 3, 5, 8])}" height="{H}" fill="{CRIT}" opacity="{rng.uniform(.04, .16):.2f}"/>'
+        for x in sorted(rng.sample(range(860, W, 6), 46)))
+    css = f"""
+.bars{{position:absolute;inset:0}}
+.fade{{position:absolute;inset:0;background:radial-gradient(ellipse at 82% 50%,rgba(229,50,63,.22),transparent 55%),
+linear-gradient(90deg,#07080A 0,#07080A 50%,rgba(7,8,10,.55) 100%)}}
+.haz{{position:absolute;left:0;right:0;top:0;height:10px;background:repeating-linear-gradient(-45deg,{CRIT} 0 22px,#07080A 22px 44px)}}
+.tag{{left:72px;top:176px;display:flex;gap:12px}}.tag b{{font:700 18px CP;letter-spacing:.14em;padding:11px 15px}}
+h1{{position:absolute;left:66px;top:246px;max-width:860px;font:700 var(--s)/1.02 CP;letter-spacing:-.01em;white-space:nowrap}}
+h1 em{{font-style:normal;color:{CRIT}}}
+.sub{{left:74px;font:600 36px JB;color:{INK}}}
+.why{{left:74px;font:500 24px JB;color:{DIM}}}
+.gauge{{right:150px;top:250px;width:380px;height:380px}}
+.gauge b{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font:700 120px/1 CP}}
+.gauge small{{font:500 18px JB;letter-spacing:.3em;color:{MUTE};margin-top:12px}}
+.st{{left:72px;bottom:120px}}
+.list{{left:74px;top:470px}}.list .cves{{font-size:24px;line-height:1.8}}
+"""
+    tags = [f'<b style="background:{CRIT}">PATCH NOW</b>']
+    first = items[0] if items else {"id": "", "name": "", "score": 0, "why": "", "epss": 0, "kev": False, "weap": False}
+    if n == 1:
+        for on, txt in ((first.get("kev"), "CISA KEV"), (first.get("weap"), "WEAPONIZED")):
+            if on:
+                tags.append(f'<b style="border:1.5px solid #5A2A2E;color:#FF8A92">{txt}</b>')
+        name = first["name"] or first["id"]
+        size = int(min(140, 840 / max(5, len(name) * 0.58)))
+        a1, a2 = split_name(name)
+        score = float(first.get("score") or 0)
+        col = _sev(score)
+        frac = min(1.0, score / 10)
+        r, c = 170, 2 * math.pi * 170
+        gauge = (f'<div class="abs gauge"><svg viewBox="0 0 380 380" width="380" height="380">'
+                 f'<circle cx="190" cy="190" r="{r}" fill="none" stroke="{LINE}" stroke-width="18"/>'
+                 f'<circle cx="190" cy="190" r="{r}" fill="none" stroke="{col}" stroke-width="18" stroke-linecap="butt" '
+                 f'stroke-dasharray="{c * frac:.1f} {c:.1f}" transform="rotate(-90 190 190)"/></svg>'
+                 f'<b style="color:{col}">{score:.1f}<small>CVSS</small></b></div>') if score else ""
+        top = 246 + size + 30
+        epss = f'{(first.get("epss") or 0) * 100:.0f}%'
+        hero = (f'<h1 style="--s:{size}px">{esc(a1)}<em>{esc(a2)}</em></h1>'
+                f'<div class="abs sub" style="top:{top}px">{esc(first["id"])}</div>'
+                + (f'<div class="abs why" style="top:{top + 62}px">{esc(first.get("why"))}</div>'
+                   if first.get("why") and not (first.get("kev") and "KEV" in first["why"]) else "") + gauge
+                + '<div class="abs st">' + _stats([("CVSS", f"{score:.1f}" if score else "\u2014", col),
+                                                   ("EPSS", epss, HIGH), ("CISA KEV", "YES" if first.get("kev") else "NO",
+                                                                          CRIT if first.get("kev") else MUTE)]) + "</div>")
+    else:
+        kev = a.get("kev", sum(1 for i in items if i.get("kev")))
+        weap = a.get("weap", sum(1 for i in items if i.get("weap")))
+        hero = (f'<h1 style="--s:150px">{n} <em>to patch</em></h1>'
+                f'<div class="abs list">{_cves(items, 3)}</div>'
+                + (f'<div class="abs why" style="top:630px">+ {n - 3} more in the caption</div>' if n > 3 else ""))
+        if kev:
+            tags.append(f'<b style="border:1.5px solid #5A2A2E;color:#FF8A92">{kev} CISA KEV</b>')
+        if weap:
+            tags.append(f'<b style="border:1.5px solid #5A2A2E;color:#FF8A92">{weap} WEAPONIZED</b>')
+    body = (f'<svg class="bars" viewBox="0 0 {W} {H}">{bars}</svg><div class="fade"></div><div class="haz"></div>'
+            + _alert_chrome(a) + f'<div class="abs tag">{"".join(tags)}</div>' + hero)
+    return _page(css, body)

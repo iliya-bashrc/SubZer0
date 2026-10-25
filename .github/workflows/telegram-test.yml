@@ -1,8 +1,19 @@
 name: Telegram test message
 
 # Manual check that TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID work: Actions -> Telegram test message -> Run workflow.
+# kind = alert-1 / alert-3 previews the urgent-alert banner with the current top patch-now CVEs.
 on:
   workflow_dispatch:
+    inputs:
+      kind:
+        description: "ping = connection test; alert-1 / alert-3 = preview the alert banner"
+        type: choice
+        options: [ping, alert-1, alert-3]
+        default: ping
+      send_to:
+        description: "Optional chat id to send to instead of the channel (e.g. your own id)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -10,16 +21,40 @@ permissions:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
-      - name: Send a test message to the alerts channel
+      - name: Check out main
+        if: inputs.kind != 'ping' && inputs.kind != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Preview the alert banner
+        if: inputs.kind != 'ping' && inputs.kind != ''
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          KIND: ${{ inputs.kind }}
+          SEND_TO: ${{ inputs.send_to || '' }}
+        run: |
+          case "$KIND" in alert-1) N=1;; alert-3) N=3;; *) echo "bad kind"; exit 1;; esac
+          case "$SEND_TO" in ""|@*|-[0-9]*|[0-9]*) ;; *) echo "bad send_to"; exit 1;; esac
+          python3 scripts/verify_data_snapshot.py --root public/snapshot
+          ARGS=(--sample "$N")
+          [ -n "$SEND_TO" ] && ARGS+=(--chat "$SEND_TO")
+          python3 scripts/notify_telegram.py "${ARGS[@]}"
+
+      - name: Send a test message to the alerts channel
+        if: inputs.kind == 'ping' || inputs.kind == ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TO: ${{ inputs.send_to || '' }}
         run: |
           python3 - <<'PY'
           import json, os, sys, urllib.error, urllib.parse, urllib.request
-          token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+          chat = os.environ.get("SEND_TO", "").strip() or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
           if not token or not chat:
               sys.exit("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is missing")
           text = ("\u2705 <b>SubZer0 Sentinel is connected</b>\n"
