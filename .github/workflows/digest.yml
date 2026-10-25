@@ -1,0 +1,47 @@
+name: Telegram digest (daily + weekly)
+
+# Daily ~10:00 Iran time: short "patch now" post (skipped on quiet days). Saturday: weekly summary card.
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto = weekly on Saturday, daily otherwise"
+        type: choice
+        options: [auto, daily, weekly]
+        default: auto
+      dry_run:
+        description: "Only print the post in the log"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: subzero-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate the committed snapshot
+        run: python3 scripts/verify_data_snapshot.py --root public/snapshot
+
+      - name: Build and post the digest
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MODE: ${{ inputs.mode || 'auto' }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: |
+          case "$MODE" in auto|daily|weekly) ;; *) echo "bad mode"; exit 1;; esac
+          python3 scripts/digest.py --mode "$MODE" ${DRY_RUN:+--dry-run}
