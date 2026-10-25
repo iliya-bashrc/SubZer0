@@ -164,6 +164,38 @@ def build(site: Path, snapshot: Path, out: Path, archive: Path | None = None) ->
     print(f"Built {out}: {len(rows)} CVEs, {len(summary['patch_now'])} in the patch-now feed, {pages} static CVE pages")
 
 
+def cve_api(rec: dict, row: list | None, prio, fx, archived_at: str | None = None) -> dict:
+    """Small per-CVE JSON (api/cve/<id>.json) for the Telegram bot and other lightweight clients."""
+    kev = rec.get("kev") if isinstance(rec.get("kev"), dict) else {}
+    v, prod = str(kev.get("vendor") or "").strip(), str(kev.get("product") or "").strip()
+    product = (prod if v and prod.lower().startswith(v.lower()) else " ".join(x for x in (v, prod) if x)) \
+        or (str(row[8]) if row and len(row) > 8 and row[8] else "")
+    fx = fx or {}
+    score = float(fx.get("c") or 0)
+    sev = (row[2] if row else rec.get("sev")) or "unknown"
+    if sev in ("unknown", "none") and score:  # CISA ADP score when NVD has not rated it yet
+        sev = "critical" if score >= 9 else "high" if score >= 7 else "medium" if score >= 4 else "low"
+    out = {
+        "id": rec["id"],
+        "title": str(rec.get("title") or "")[:200],
+        "desc": str(rec.get("desc") or "")[:600],
+        "severity": sev,
+        "cvss": score or None,
+        "epss": row[5] if row and isinstance(row[5], (int, float)) else None,
+        "kev": bool(row[4]) if row else bool(rec.get("kev")),
+        "public_exploit": bool(fx.get("poc")),
+        "weaponized": bool(fx.get("weap")),
+        "priority": prio[0] if prio else None,
+        "why": prio[1] if prio else "",
+        "published": seo.dates(rec)[0],
+        "products": product[:120],
+        "url": f"{SITE_URL}cve/{rec['id']}",
+    }
+    if archived_at:
+        out["archived"] = str(archived_at)[:10]
+    return out
+
+
 def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[list], ctx: dict, summary: dict, archive: Path) -> int:
     """Crawlable pages: home/tab routes with real titles, one HTML page per CVE, and sitemap.xml."""
     by_id = {r[0]: r for r in rows}
@@ -190,6 +222,11 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
         (out / f"{slug}.html").write_text(seo.render(shell, site_url=SITE_URL, path=slug, title=title, desc=desc, panel=panel), encoding="utf-8")
     cve_dir = out / "cve"
     cve_dir.mkdir(exist_ok=True)
+    api_dir = out / "api" / "cve"
+    api_dir.mkdir(parents=True, exist_ok=True)
+
+    def put_api(doc: dict) -> None:
+        (api_dir / f"{doc['id']}.json").write_text(json.dumps(doc, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     entries: list[tuple[str, str | None]] = [("", manifest.get("generated_at")), ("research", manifest.get("generated_at")), ("about", None)]
     count = 0
     for day in manifest.get("days") or []:
@@ -205,6 +242,7 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
             doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
                              ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known)))
             (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
+            put_api(cve_api(rec, row, prio, fx))
             entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
             count += 1
     import archive as arch  # local module; imported lazily because it imports this file
@@ -221,6 +259,7 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
         doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
                          ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known, archived_at=rec.get("last_seen"))))
         (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
+        put_api(cve_api(rec, row, prio, fx, rec.get("last_seen")))
         entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
         count += 1
     (out / "sitemap.xml").write_text(seo.sitemap(SITE_URL, entries), encoding="utf-8")

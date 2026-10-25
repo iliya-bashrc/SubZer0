@@ -11,9 +11,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -98,6 +102,98 @@ def add_names(ctx: dict, manifest: dict, snapshot: Path) -> None:
     ctx["names"] = {**digest.early_cve_names(digest.early_doc()), **kev_map}
 
 
+# ------------------------------------------------------------------ /watch DMs
+CF_API = "https://api.cloudflare.com/client/v4"
+KV_TITLE = "subzer0-bot"
+MAX_DMS = 500
+
+
+def _norm(s: str) -> str:
+    """Same normalisation as norm() in worker/bot.js."""
+    return " ".join(re.sub(r"[^a-z0-9.+_\- ]", " ", str(s or "").lower()).split())
+
+
+def _cf(token: str, path: str, raw: bool = False):
+    req = urllib.request.Request(CF_API + path, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = r.read(2_000_000)
+    return body if raw else json.loads(body)
+
+
+def load_watches(token: str, account: str) -> dict[str, list[str]]:
+    """chat id -> keywords, read from the bot's KV namespace (empty when Cloudflare is not set up)."""
+    ns = next((n["id"] for n in _cf(token, f"/accounts/{account}/storage/kv/namespaces?per_page=100").get("result") or []
+               if n.get("title") == KV_TITLE), None)
+    if not ns:
+        return {}
+    out: dict[str, list[str]] = {}
+    cursor = ""
+    for _ in range(20):
+        page = _cf(token, f"/accounts/{account}/storage/kv/namespaces/{ns}/keys?prefix=w:&limit=1000" + (f"&cursor={cursor}" if cursor else ""))
+        for k in page.get("result") or []:
+            name = str(k.get("name") or "")
+            if not re.fullmatch(r"w:-?\d{1,20}", name):
+                continue
+            try:
+                doc = json.loads(_cf(token, f"/accounts/{account}/storage/kv/namespaces/{ns}/values/{urllib.parse.quote(name)}", raw=True))
+                kws = [_norm(x) for x in doc.get("k") or [] if isinstance(x, str)]
+            except Exception:
+                continue
+            if kws:
+                out[name[2:]] = [k for k in kws if 3 <= len(k) <= 40][:10]
+        cursor = (page.get("result_info") or {}).get("cursor") or ""
+        if not cursor:
+            break
+    return out
+
+
+def watch_matches(new: list[list], watches: dict[str, list[str]], ctx: dict) -> dict[str, list[tuple[list, str]]]:
+    """chat id -> [(row, keyword)] for every newly urgent CVE whose id, title or product names a watched keyword."""
+    hay = {}
+    for r in new:
+        name = (ctx.get("names") or {}).get(r[0], "")
+        hay[r[0]] = f" {_norm(' '.join(str(x or '') for x in (r[0], r[1], r[8] if len(r) > 8 else '', name)))} "
+    out: dict[str, list[tuple[list, str]]] = {}
+    for chat, kws in watches.items():
+        for r in new:
+            kw = next((k for k in kws if f" {k} " in hay[r[0]]), None)
+            if kw:
+                out.setdefault(chat, []).append((r, kw))
+    return out
+
+
+def watch_text(hits: list[tuple[list, str]], ctx: dict) -> str:
+    lines = [f"\U0001F441 <b>Your watchlist</b> \u00b7 {len(hits)} new to patch now"]
+    for r, kw in hits[:8]:
+        lines.append(f'\n<a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> \u2014 {escape(str(r[1])[:110])}\n<i>{escape(reason(r, ctx))} \u00b7 matched \u201c{escape(kw)}\u201d</i>')
+    if len(hits) > 8:
+        lines.append(f"\n\u2026and {len(hits) - 8} more: {SITE_URL}research?view=p1")
+    lines.append("\n/list to see your watchlist \u00b7 /unwatch name to stop")
+    return "\n".join(lines)
+
+
+def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool) -> None:
+    cf_token, account = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(), os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    if not cf_token or not re.fullmatch(r"[0-9a-f]{32}", account):
+        return
+    try:
+        watches = load_watches(cf_token, account)
+    except Exception as exc:
+        print(f"Watchlists unavailable: {type(exc).__name__}")
+        return
+    hits = watch_matches(new, watches, ctx)
+    sent = 0
+    for chat, items in list(hits.items())[:MAX_DMS]:
+        text = watch_text(items, ctx)
+        if dry:
+            print(f"[watch DM to {chat}]\n{text}")
+            continue
+        if digest.tg_call("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}):
+            sent += 1
+        time.sleep(0.05)
+    print(f"Watchlists: {len(watches)} users, {len(hits)} matched, {sent} DMs sent")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--previous", default="HEAD~1", help="git revision holding the previous snapshot")
@@ -146,6 +242,8 @@ def main() -> int:
         except Exception as exc:  # the banner is a bonus; the text alert must still go out
             print(f"Banner skipped: {type(exc).__name__}")
     if args.dry_run:
+        if args.sample <= 0:
+            send_watch_dms(new, ctx, token, dry=True)
         print(caption(new, ctx) if card else message(new, ctx))
         print(f"Banner: {card or 'not rendered'}")
         return 0
@@ -157,6 +255,8 @@ def main() -> int:
         ok = digest.tg_call("sendMessage", token, {"chat_id": chat, "text": message(new, ctx), "parse_mode": "HTML",
                                                    "disable_web_page_preview": True})
     print(f"Announced {len(new)} CVEs" if ok else "Telegram rejected the message")
+    if args.sample <= 0:
+        send_watch_dms(new, ctx, token, dry=False)
     return 0
 
 
