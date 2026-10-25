@@ -10,6 +10,16 @@ const CVE_RE=/^CVE-\d{4}-\d{4,}$/;
 /* Provenance. SubZer0 © 2026 @BugCod3 & @RootAccessClub — source-available, All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
 const SZ_ORIGIN=atob('aWxpeWEtYmFzaHJjLmdpdGh1Yi5pbw=='),SZ_HOME='https://'+SZ_ORIGIN+'/SubZer0/',SZ_BUILD='sz0-ib-'+(0x5a0e).toString(36);
 const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname);
+/* Privacy-friendly page counts (GoatCounter: no cookies, no personal data). Only on the official site, one
+   pixel per distinct page (tab, CVE dossier, about); query strings and filters are never sent. */
+(()=>{if(location.hostname!==SZ_ORIGIN||navigator.webdriver)return;let last='',tm=0,first=true;
+  const hit=()=>{const path='/'+(location.pathname.startsWith(BASE.pathname)?location.pathname.slice(BASE.pathname.length):'').replace(/\.html$/,'');
+    if(path===last)return;last=path;const q=new URLSearchParams({p:path,t:document.title.slice(0,120),s:screen.width+','+screen.height+','+(window.devicePixelRatio||1),rnd:Math.random().toString(36).slice(2)});
+    let r=first?document.referrer:'';try{if(first&&sessionStorage.getItem('sz-tg')==='1')r='https://t.me/SubZer0Robot'}catch{}
+    if(r&&!r.startsWith(BASE.href))q.set('r',r);first=false;new Image().src='https://subzero.goatcounter.com/count?'+q};
+  const soon=()=>{clearTimeout(tm);tm=setTimeout(hit,first?1200:400)};
+  for(const k of ['pushState','replaceState']){const f=history[k].bind(history);history[k]=(...a)=>{const r=f(...a);soon();return r}}
+  addEventListener('popstate',soon);soon()})();
 /* Telegram Mini App bridge (no external SDK; CSP stays script-src 'self'). Pads the layout for Telegram's
    fullscreen controls/safe areas, matches its chrome to the site colours and strips launch data from the URL. */
 let TG=null;
