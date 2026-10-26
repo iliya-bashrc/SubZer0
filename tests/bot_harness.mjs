@@ -84,6 +84,27 @@ assert.ok(buttons(c[1]).some(x => x.callback_data === 'A:wordpress'));
 c = await run(dm('/start watch_nginx'));
 assert.deepEqual(JSON.parse(store.get('w:7')).k, ['nginx']);
 
+// settings: sensitivity + delivery survive adding and removing names
+c = await run(tap('S:crit'));
+assert.match(c[0].body.text, /critical/);
+c = await run(tap('M:daily'));
+let doc = JSON.parse(store.get('w:7'));
+assert.deepEqual([doc.s, doc.m], ['crit', 'daily']);
+c = await run(dm('/watch fortinet'));
+assert.match(c[0].body.text, /new critical CVE/);
+doc = JSON.parse(store.get('w:7'));
+assert.deepEqual([doc.k, doc.s, doc.m], [['nginx', 'fortinet'], 'crit', 'daily']);
+c = await run(dm('/settings'));
+assert.ok(buttons(c[0]).some(x => x.callback_data === 'M:daily' && x.style === 'success' && x.text.startsWith('✓')));
+assert.match(c[0].body.text, /one summary a day/);
+await run(tap('r:fortinet'));
+doc = JSON.parse(store.get('w:7'));
+assert.deepEqual([doc.k, doc.s, doc.m], [['nginx'], 'crit', 'daily']);
+store.set('q:7', '[]');
+await run(dm('/unwatch all'));
+assert.ok(!store.has('w:7') && !store.has('q:7'));
+await run(dm('/start watch_nginx'));
+
 // free text search finds vendor pages and weaknesses
 c = await run(dm('xss'));
 assert.ok(buttons(c[0]).some(x => x.url === SITE + 'weakness/cwe-79'));

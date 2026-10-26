@@ -165,8 +165,50 @@ def send_dm(token: str, chat: str, text: str, markup: dict) -> tuple[bool, int]:
     return False, 429
 
 
-def load_watches(token: str, account: str) -> dict[str, list[str]]:
-    """chat id -> keywords, read from the bot's KV namespace (empty when Cloudflare is not set up)."""
+DAILY_HOUR = 5  # the first refresh at or after 05:00 UTC (the 06:17 run, ~09:45 Tehran) sends daily summaries
+MAX_QUEUE = 40
+
+
+def is_critical(r: list) -> bool:
+    return r[2] == "critical" or float(r[3] or 0) >= 9
+
+
+def _kv_url(account: str, ns: str, key: str) -> str:
+    return f"{CF_API}/accounts/{account}/storage/kv/namespaces/{ns}/values/{urllib.parse.quote(key)}"
+
+
+def kv_get(token: str, account: str, ns: str, key: str) -> str | None:
+    try:
+        with urllib.request.urlopen(urllib.request.Request(_kv_url(account, ns, key), headers={"Authorization": f"Bearer {token}"}), timeout=20) as r:
+            return r.read(200_000).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
+def kv_put(token: str, account: str, ns: str, key: str, value: str) -> bool:
+    req = urllib.request.Request(_kv_url(account, ns, key), data=value.encode(), method="PUT",
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "text/plain"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def kv_delete(token: str, account: str, ns: str, key: str) -> bool:
+    req = urllib.request.Request(_kv_url(account, ns, key), method="DELETE", headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def load_watches(token: str, account: str, prefs: dict | None = None) -> dict[str, list[str]]:
+    """chat id -> keywords, read from the bot's KV namespace (empty when Cloudflare is not set up).
+    prefs, when given, is filled with chat id -> {"s": "p1" | "crit", "m": "now" | "daily"}."""
     ns = next((n["id"] for n in _cf(token, f"/accounts/{account}/storage/kv/namespaces?per_page=100").get("result") or []
                if n.get("title") == KV_TITLE), None)
     if not ns:
@@ -186,6 +228,8 @@ def load_watches(token: str, account: str) -> dict[str, list[str]]:
                 continue
             if kws:
                 out[name[2:]] = [k for k in kws if 3 <= len(k) <= 40][:10]
+                if prefs is not None:
+                    prefs[name[2:]] = {"s": "crit" if doc.get("s") == "crit" else "p1", "m": "daily" if doc.get("m") == "daily" else "now"}
         cursor = (page.get("result_info") or {}).get("cursor") or ""
         if not cursor:
             break
@@ -207,13 +251,18 @@ def watch_matches(new: list[list], watches: dict[str, list[str]], ctx: dict) -> 
     return out
 
 
-def watch_text(hits: list[tuple[list, str]], ctx: dict) -> str:
-    lines = [f"\U0001F441 <b>Your watchlist</b> \u00b7 {len(hits)} new to patch now"]
+def watch_text(hits: list[tuple[list, str]], ctx: dict, daily: bool = False) -> str:
+    n = len(hits)
+    head = (f"\U0001F5D3 <b>Your daily watchlist summary</b> \u00b7 {n} CVE{'s' if n != 1 else ''}" if daily else
+            f"\U0001F441 <b>Your watchlist</b> \u00b7 {n} new {'to patch now' if all(priority(r, ctx) == 1 for r, _ in hits) else 'alerts'}")
+    lines = [head]
     for r, kw in hits[:8]:
-        lines.append(f'\n<a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> \u2014 {escape(str(r[1])[:110])}\n<i>{escape(reason(r, ctx))} \u00b7 matched \u201c{escape(kw)}\u201d</i>')
-    if len(hits) > 8:
-        lines.append(f"\n\u2026and {len(hits) - 8} more: {SITE_URL}research?view=p1")
-    lines.append("\n/list to see your watchlist \u00b7 /unwatch name to stop")
+        tag = "\U0001F3AF patch now" if priority(r, ctx) == 1 else "\U0001F534 new critical"
+        lines.append(f'\n<a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> \u2014 {escape(str(r[1])[:110])}\n'
+                     f'<i>{tag} \u00b7 {escape(reason(r, ctx))} \u00b7 matched \u201c{escape(kw)}\u201d</i>')
+    if n > 8:
+        lines.append(f"\n\u2026and {n - 8} more: {SITE_URL}research?view=p1")
+    lines.append("\n/settings to change what you get \u00b7 /unwatch name to stop")
     return "\n".join(lines)
 
 
@@ -224,34 +273,80 @@ def watch_buttons(hits: list[tuple[list, str]]) -> dict:
                                  {"text": "\U0001F3AF Patch now", "callback_data": "t:0"}]]}
 
 
-def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool) -> None:
+def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool, crit: list[list] | None = None,
+                   rows: list[list] | None = None, now: datetime | None = None) -> None:
+    """DM watchers. new = newly patch-now rows (everyone); crit = newly published critical rows (users who chose "+ Critical").
+    Users on "daily" get their matches queued in KV (q:<chat>) and one summary at the first refresh after DAILY_HOUR UTC."""
     cf_token, account = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(), os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
     if not cf_token or not re.fullmatch(r"[0-9a-f]{32}", account):
         return
+    prefs: dict[str, dict] = {}
     try:
-        watches = load_watches(cf_token, account)
+        watches = load_watches(cf_token, account, prefs)
     except Exception as exc:
         print(f"Watchlists unavailable: {type(exc).__name__}")
         return
     hits = watch_matches(new, watches, ctx)
-    sent = dropped = 0
+    crit_watch = {c: k for c, k in watches.items() if (prefs.get(c) or {}).get("s") == "crit"}
+    for c, items in (watch_matches(crit or [], crit_watch, ctx) if crit and crit_watch else {}).items():
+        have = {r[0] for r, _ in hits.get(c, [])}
+        hits.setdefault(c, []).extend((r, kw) for r, kw in items if r[0] not in have)
+    daily = [c for c in watches if (prefs.get(c) or {}).get("m") == "daily"]
+    now = now or datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    sent = dropped = queued = 0
     ns = None
-    for chat, items in list(hits.items())[:MAX_DMS]:
-        text = watch_text(items, ctx)
+
+    def namespace():
+        nonlocal ns
+        ns = ns or kv_namespace(cf_token, account)
+        return ns
+
+    def deliver(chat: str, text: str, items) -> bool:
+        nonlocal sent, dropped
         if dry:
             print(f"[watch DM to {chat}]\n{text}")
-            continue
+            return True
         ok, code = send_dm(token, chat, text, watch_buttons(items))
         if ok:
             sent += 1
         elif code == 403 and not chat.startswith("-"):  # blocked: stop trying every 6 hours
             try:
-                ns = ns or kv_namespace(cf_token, account)
-                dropped += bool(ns and drop_watch(cf_token, account, ns, chat))
+                dropped += bool(namespace() and drop_watch(cf_token, account, ns, chat))
             except Exception:
                 pass
         time.sleep(0.05)
-    print(f"Watchlists: {len(watches)} users, {len(hits)} matched, {sent} DMs sent, {dropped} blocked removed")
+        return ok or code == 403
+
+    for chat, items in list(hits.items())[:MAX_DMS]:
+        if chat not in daily:
+            deliver(chat, watch_text(items, ctx), items)
+    if daily:
+        try:
+            ns_id = namespace()
+            due = now.hour >= DAILY_HOUR and ns_id and kv_get(cf_token, account, ns_id, "d:last") != today
+            by_id = {r[0]: r for r in rows or []}
+            for chat in daily[:MAX_DMS]:
+                fresh = [[r[0], kw] for r, kw in hits.get(chat, [])]
+                raw = kv_get(cf_token, account, ns_id, "q:" + chat) if ns_id else None
+                queue = json.loads(raw) if raw else []
+                seen = {i for i, _ in queue}
+                queue += [x for x in fresh if x[0] not in seen]
+                queue = queue[-MAX_QUEUE:]
+                if due:
+                    items = [(by_id[i], kw) for i, kw in queue if i in by_id]
+                    if not items or deliver(chat, watch_text(items, ctx, daily=True), items):
+                        if raw and not dry:
+                            kv_delete(cf_token, account, ns_id, "q:" + chat)
+                        continue
+                if fresh and not dry:
+                    queued += kv_put(cf_token, account, ns_id, "q:" + chat, json.dumps(queue))
+            if due and not dry:
+                kv_put(cf_token, account, ns_id, "d:last", today)
+        except Exception as exc:
+            print(f"Daily summaries skipped: {type(exc).__name__}")
+    print(f"Watchlists: {len(watches)} users ({len(daily)} daily, {len(crit_watch)} +critical), {len(hits)} matched, "
+          f"{sent} DMs sent, {queued} queued, {dropped} blocked removed")
 
 
 def main() -> int:
@@ -273,6 +368,7 @@ def main() -> int:
 
     snapshot = ROOT / "public" / "snapshot"
     manifest, rows, ctx = load_index(snapshot)
+    crit: list[list] = []
     if args.sample > 0:
         new = [r for r in rows if priority(r, ctx) == 1]
     else:
@@ -281,11 +377,14 @@ def main() -> int:
             print("No previous snapshot to compare with; skipping so the channel is not flooded.")
             return 0
         new = [r for r in rows if priority(r, ctx) == 1 and (r[0] not in old or priority(old[r[0]], old_ctx) != 1)]
+        crit = [r for r in rows if r[0] not in old and is_critical(r) and priority(r, ctx) != 1]
     new.sort(key=lambda r: (bool(r[4]), r[5] or 0), reverse=True)
     if args.sample > 0:
         new = new[: args.sample]
     if not new:
         print("Nothing newly urgent.")
+        if args.sample <= 0:  # watchers who also want new critical CVEs, and today's daily summaries
+            send_watch_dms([], ctx, token, dry=args.dry_run, crit=crit, rows=rows)
         return 0
 
     card = None
@@ -303,7 +402,7 @@ def main() -> int:
             print(f"Banner skipped: {type(exc).__name__}")
     if args.dry_run:
         if args.sample <= 0:
-            send_watch_dms(new, ctx, token, dry=True)
+            send_watch_dms(new, ctx, token, dry=True, crit=crit, rows=rows)
         print(caption(new, ctx) if card else message(new, ctx))
         print(f"Banner: {card or 'not rendered'}")
         return 0
@@ -317,7 +416,7 @@ def main() -> int:
                                                    "disable_web_page_preview": True, "reply_markup": alert_buttons(new)})
     print(f"Announced {len(new)} CVEs" if ok else "Telegram rejected the message")
     if args.sample <= 0:
-        send_watch_dms(new, ctx, token, dry=False)
+        send_watch_dms(new, ctx, token, dry=False, crit=crit, rows=rows)
     return 0
 
 

@@ -148,5 +148,50 @@ class ChannelButtonTests(unittest.TestCase):
         drop.assert_called_once_with("t", "a" * 32, "ns", "7")
 
 
+class WatchPreferenceTests(unittest.TestCase):
+    def _run(self, prefs, hour, kv=None, new=None, crit=None):
+        import os
+        from datetime import datetime, timezone
+        from unittest import mock
+        kv = {} if kv is None else kv
+        sent = []
+
+        def load(token, account, p=None):
+            p.update(prefs)
+            return {c: ["fortinet"] for c in prefs}
+        env = {"CLOUDFLARE_API_TOKEN": "t", "CLOUDFLARE_ACCOUNT_ID": "a" * 32}
+        rows = [row("CVE-2026-1111", "Fortinet FortiOS bug", "Fortinet FortiOS"), ["CVE-2026-2222", "Fortinet FortiWeb critical bug", "critical", 9.1, 0, 0.001, "2026-10-26", "", "Fortinet FortiWeb"]]
+        with mock.patch.dict(os.environ, env), mock.patch.object(nt, "load_watches", side_effect=load), \
+                mock.patch.object(nt, "send_dm", side_effect=lambda tok, chat, text, mk: (sent.append((chat, text)) or (True, 200))), \
+                mock.patch.object(nt, "kv_namespace", return_value="ns"), \
+                mock.patch.object(nt, "kv_get", side_effect=lambda t, a, n, k: kv.get(k)), \
+                mock.patch.object(nt, "kv_put", side_effect=lambda t, a, n, k, v: kv.__setitem__(k, v) or True), \
+                mock.patch.object(nt, "kv_delete", side_effect=lambda t, a, n, k: kv.pop(k, None) is not None), mock.patch.object(nt.time, "sleep"):
+            nt.send_watch_dms(rows[:1] if new is None else new, {}, "tok", dry=False, crit=rows[1:] if crit is None else crit, rows=rows,
+                              now=datetime(2026, 10, 27, hour, 17, tzinfo=timezone.utc))
+        return sent, kv
+
+    def test_critical_only_for_users_who_asked(self):
+        sent, _ = self._run({"1": {"s": "p1", "m": "now"}, "2": {"s": "crit", "m": "now"}}, 12)
+        by = dict(sent)
+        self.assertNotIn("CVE-2026-2222", by["1"])
+        self.assertIn("CVE-2026-2222", by["2"])
+        self.assertIn("new critical", by["2"])
+
+    def test_daily_users_are_queued_then_get_one_summary(self):
+        import json
+        sent, kv = self._run({"3": {"s": "crit", "m": "daily"}}, 0)
+        self.assertEqual(sent, [])
+        self.assertEqual([i for i, _ in json.loads(kv["q:3"])], ["CVE-2026-1111", "CVE-2026-2222"])
+        sent, kv = self._run({"3": {"s": "crit", "m": "daily"}}, 6, kv=kv, new=[], crit=[])
+        self.assertEqual(len(sent), 1)
+        self.assertIn("daily watchlist summary", sent[0][1])
+        self.assertNotIn("q:3", kv)
+        self.assertEqual(kv["d:last"], "2026-10-27")
+        sent, kv = self._run({"3": {"s": "crit", "m": "daily"}}, 12, kv=kv)  # already sent today: queue again
+        self.assertEqual(sent, [])
+        self.assertIn("q:3", kv)
+
+
 if __name__ == "__main__":
     unittest.main()
