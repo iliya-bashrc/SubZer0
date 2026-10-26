@@ -28,6 +28,7 @@ COMMANDS = [
     ("watch", "Get a DM when a product gets a patch-now CVE"),
     ("unwatch", "Remove a name from your watchlist"),
     ("list", "Show your watchlist"),
+    ("settings", "Alerts: critical too? instant or daily?"),
     ("help", "How to use SubZer0 Sentinel"),
 ]
 

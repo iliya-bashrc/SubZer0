@@ -110,7 +110,7 @@ async function handle(update, env) {
   if (cmd === 'week' || cmd === 'weekly') return send(env, chat, await weekView(env, priv));
   if (cmd === 'watch') return watch(env, chat, arg, priv);
   if (cmd === 'unwatch') return unwatch(env, chat, arg);
-  if (cmd === 'list' || cmd === 'watchlist') return send(env, chat, await listView(env, chat));
+  if (cmd === 'list' || cmd === 'watchlist' || cmd === 'settings') return send(env, chat, await listView(env, chat));
   if (cmd === 'search' || cmd === 'find') return send(env, chat, await searchView(env, arg, priv));
   if (cmd === 'myid') return send(env, chat, { text: `Your chat id: <code>${esc(chat)}</code>` });
   if (cmd === 'stats') return send(env, chat, await statsView(env, chat));
@@ -139,9 +139,18 @@ async function onTap(q, env) {
     return;
   }
   if (op === 'r') {
-    const k = await getWatch(env, chat), next = k.filter(x => x !== rest);
-    await saveWatch(env, chat, next);
+    const doc = await getDoc(env, chat);
+    doc.k = doc.k.filter(x => x !== rest);
+    await saveDoc(env, chat, doc);
     await answer(`Removed ${rest}`);
+    return edit(env, msg, await listView(env, chat));
+  }
+  if ((op === 'S' && (rest === 'p1' || rest === 'crit')) || (op === 'M' && (rest === 'now' || rest === 'daily'))) {
+    const doc = await getDoc(env, chat);
+    if (!doc.k.length) { await answer('Add a name first: /watch nginx', true); return edit(env, msg, await listView(env, chat)); }
+    if (op === 'S') doc.s = rest; else doc.m = rest;
+    await saveDoc(env, chat, doc);
+    await answer(op === 'S' ? (rest === 'crit' ? '🔴 Patch-now + new critical CVEs' : '🎯 Patch-now CVEs only') : (rest === 'daily' ? '🗓 One summary a day' : '⚡ Right away'));
     return edit(env, msg, await listView(env, chat));
   }
   if (op === 's') return answer('Just send a name like nginx, wordpress or xss — or a CVE id.', true);
@@ -175,7 +184,7 @@ function helpView(env, priv) {
     text: ['<b>SubZer0 Sentinel</b> · CVE briefing in your chat', '',
       '/top — what to patch right now', '/week — this week\'s recap', '/cve <code>CVE-2026-110447</code> — one CVE (or just send the id)',
       '/search <code>nginx</code> — vendor, product or weakness (or just send a word)',
-      '/watch <code>nginx</code> — DM me when it gets a patch-now CVE', '/list — your watchlist (tap ✕ to remove)', '',
+      '/watch <code>nginx</code> — DM me when it gets a patch-now CVE', '/settings — your watchlist: critical too? instant or daily?', '',
       `In any chat: type <code>@${BOT} CVE-2026-…</code> to share a CVE card.`, `Live alerts: @RootAccessClub · Site: ${env.SITE}`].join('\n'),
     markup: kb([[cb('≡ Menu', 'm', 'primary')]]),
   };
@@ -287,11 +296,18 @@ async function searchView(env, q, priv) {
   };
 }
 
+const SENS = { p1: 'a patch-now CVE', crit: 'a patch-now or a new critical CVE' };
 async function listView(env, chat) {
-  const k = await getWatch(env, chat);
+  const doc = await getDoc(env, chat), k = doc.k;
   if (k.length) {
-    return { text: `👁 <b>Your watchlist</b> · ${k.length}/${MAX_WATCH}\n${k.map(x => '• ' + esc(x)).join('\n')}\n\nYou get a DM when one of these gets a patch-now CVE. Tap ✕ to remove, or send <code>/watch name</code> to add.`,
-      markup: kb([...k.map(x => [cb(`✕ ${clip(x, 30)}`, 'r:' + x, 'danger')]), [cb('≡ Menu', 'm')]]) };
+    const on = (label, val, cur) => (val === cur ? '✓ ' : '') + label;
+    return { text: [`👁 <b>Your watchlist</b> · ${k.length}/${MAX_WATCH}`, ...k.map(x => '• ' + esc(x)), '',
+      `🔔 You get ${doc.m === 'daily' ? '<b>one summary a day</b> (around 09:45 Tehran / 06:15 UTC)' : '<b>a DM right away</b>'} when one of these gets <b>${SENS[doc.s]}</b>.`,
+      'Change it below. Tap ✕ to remove a name, or send <code>/watch name</code> to add.'].join('\n'),
+      markup: kb([...k.map(x => [cb(`✕ ${clip(x, 30)}`, 'r:' + x, 'danger')]),
+        [cb(on('🎯 Patch now only', 'p1', doc.s), 'S:p1', doc.s === 'p1' ? 'success' : undefined), cb(on('🔴 + Critical', 'crit', doc.s), 'S:crit', doc.s === 'crit' ? 'success' : undefined)],
+        [cb(on('⚡ Instant', 'now', doc.m), 'M:now', doc.m === 'now' ? 'success' : undefined), cb(on('🗓 Daily summary', 'daily', doc.m), 'M:daily', doc.m === 'daily' ? 'success' : undefined)],
+        [cb('≡ Menu', 'm')]]) };
   }
   const h = await hubs(env);
   const pop = h ? h.topics.filter(t => t.term && t.term.length >= 3 && t.term.length <= 40).sort((x, y) => y.n - x.n).slice(0, 6) : [];
@@ -310,13 +326,18 @@ async function statsView(env, chat) {
 }
 
 /* ---------- watchlist ---------- */
-async function getWatch(env, chat) {
-  try { const v = await env.KV.get('w:' + chat, 'json'); return Array.isArray(v && v.k) ? v.k : []; } catch { return []; }
+/* w:<chat> = { k: keywords, s: "p1" | "crit" (sensitivity), m: "now" | "daily" (delivery), t: updated } */
+async function getDoc(env, chat) {
+  let v = null;
+  try { v = await env.KV.get('w:' + chat, 'json'); } catch { /* treat as empty */ }
+  return { k: Array.isArray(v && v.k) ? v.k : [], s: v && v.s === 'crit' ? 'crit' : 'p1', m: v && v.m === 'daily' ? 'daily' : 'now' };
 }
-async function saveWatch(env, chat, k) {
-  if (k.length) await env.KV.put('w:' + chat, JSON.stringify({ k, t: Date.now() }));
-  else await env.KV.delete('w:' + chat);
+async function getWatch(env, chat) { return (await getDoc(env, chat)).k; }
+async function saveDoc(env, chat, doc) {
+  if (doc.k.length) await env.KV.put('w:' + chat, JSON.stringify({ k: doc.k, s: doc.s, m: doc.m, t: Date.now() }));
+  else { await env.KV.delete('w:' + chat); await env.KV.delete('q:' + chat); }
 }
+async function saveWatch(env, chat, k) { const doc = await getDoc(env, chat); doc.k = k; return saveDoc(env, chat, doc); }
 async function addWatch(env, chat, arg, priv) {
   if (!priv) return { ok: false, toast: 'Watchlists work in a private chat with @' + BOT };
   const kw = norm(arg);
@@ -337,7 +358,7 @@ async function watch(env, chat, arg, priv) {
   const t = topicIn(await hubs(env), r.kw);
   const page = t ? `\n\n📂 ${esc(t.name)} has its own page: ${n(t.n)} CVEs ranked by what to patch first.` : '';
   return send(env, chat, {
-    text: `👁 ${r.added ? 'Watching' : 'Already watching'} <b>${esc(r.kw)}</b>. When a CVE for it becomes <b>patch now</b>, you get a DM here.\nNow watching: ${r.k.map(esc).join(', ')}${page}`,
+    text: `👁 ${r.added ? 'Watching' : 'Already watching'} <b>${esc(r.kw)}</b>. You get a DM here when it gets ${SENS[(await getDoc(env, chat)).s]} (change it in /settings).\nNow watching: ${r.k.map(esc).join(', ')}${page}`,
     markup: kb([t ? [app(env, `📂 Open the ${clip(t.name, 26)} page`, t.path, priv, 'primary')] : null, [cb('👁 My watchlist', 'l', 'success'), cb('≡ Menu', 'm')]]),
   });
 }
