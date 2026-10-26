@@ -20,8 +20,10 @@ SCRIPT = "subzer0"
 KV_TITLE = "subzer0-bot"
 SITE = "https://iliya-bashrc.github.io/SubZer0/"
 COMMANDS = [
-    ("cve", "Summary of one CVE, e.g. /cve CVE-2026-110447"),
+    ("menu", "Main menu"),
     ("top", "What to patch right now"),
+    ("cve", "Summary of one CVE, e.g. /cve CVE-2026-110447"),
+    ("search", "Find a vendor, product or weakness, e.g. /search nginx"),
     ("week", "This week's recap: the CVEs that mattered"),
     ("watch", "Get a DM when a product gets a patch-now CVE"),
     ("unwatch", "Remove a name from your watchlist"),
@@ -46,8 +48,13 @@ def multipart(parts: list[tuple[str, str, str, bytes]]) -> tuple[bytes, str]:
     return bytes(out), f"multipart/form-data; boundary={b}"
 
 
-def metadata(kv_id: str, bot_token: str) -> dict:
-    return {
+DESCRIPTION = ("What to patch first, in your chat. SubZer0 ranks every new CVE by real exploitation (CISA KEV, EPSS, "
+               "public exploits) and can DM you when something you run becomes patch-now.\n\nTry /top, send a CVE id, or /watch nginx.")
+SHORT = "CVE alerts ranked by what to patch first · KEV, EPSS, exploits · free"
+
+
+def metadata(kv_id: str, bot_token: str, admin_id: str = "") -> dict:
+    meta = {
         "main_module": "bot.js",
         "compatibility_date": "2025-01-01",
         "bindings": [
@@ -57,6 +64,9 @@ def metadata(kv_id: str, bot_token: str) -> dict:
             {"type": "plain_text", "name": "SITE", "text": SITE},
         ],
     }
+    if re.fullmatch(r"-?\d{1,20}", admin_id or ""):
+        meta["bindings"].append({"type": "plain_text", "name": "ADMIN_ID", "text": admin_id})
+    return meta
 
 
 def call(url: str, token: str | None = None, method: str = "GET", data: bytes | None = None, ctype: str = "application/json") -> dict:
@@ -100,7 +110,7 @@ def main() -> int:
 
     js = (ROOT / "worker/bot.js").read_bytes()
     body, ctype = multipart([
-        ("metadata", "metadata.json", "application/json", json.dumps(metadata(kv, bot)).encode()),
+        ("metadata", "metadata.json", "application/json", json.dumps(metadata(kv, bot, os.environ.get("TELEGRAM_ADMIN_ID", "").strip())).encode()),
         ("bot.js", "bot.js", "application/javascript+module", js),
     ])
     call(f"{a}/workers/scripts/{SCRIPT}", tok, "PUT", body, ctype)
@@ -114,13 +124,21 @@ def main() -> int:
     print("Worker URL:", url)
 
     tg = f"https://api.telegram.org/bot{bot}"
-    hook = {"url": url + "/tg", "secret_token": webhook_secret(bot), "allowed_updates": ["message"],
+    hook = {"url": url + "/tg", "secret_token": webhook_secret(bot), "allowed_updates": ["message", "callback_query", "inline_query"],
             "drop_pending_updates": True, "max_connections": 20}
     r = call(f"{tg}/setWebhook", None, "POST", json.dumps(hook).encode())
     print("setWebhook:", r.get("description") or r.get("ok"))
     cmds = {"commands": [{"command": c, "description": d} for c, d in COMMANDS]}
     r = call(f"{tg}/setMyCommands", None, "POST", json.dumps(cmds).encode())
     print("setMyCommands:", r.get("ok"))
+    for method, body in (("setMyDescription", {"description": DESCRIPTION}), ("setMyShortDescription", {"short_description": SHORT}),
+                         ("setChatMenuButton", {"menu_button": {"type": "web_app", "text": "Open", "web_app": {"url": SITE}}})):
+        try:
+            print(f"{method}:", call(f"{tg}/{method}", None, "POST", json.dumps(body).encode()).get("ok"))
+        except SystemExit as exc:  # profile text is cosmetic; never fail the deploy for it
+            print(f"{method} skipped: {exc}")
+    me = (call(f"{tg}/getMe").get("result") or {})
+    print("Inline mode:", "on" if me.get("supports_inline_queries") else "off (BotFather -> /setinline to enable)")
     info = call(f"{tg}/getWebhookInfo").get("result") or {}
     print("Webhook pending updates:", info.get("pending_update_count"), "| last error:", info.get("last_error_message") or "none")
     return 0
