@@ -408,7 +408,26 @@ def build(items: list[dict], *, window_start: str, today: date) -> dict:
     for key in keys:
         for i in weeks[key]["items"]:
             links[i["id"]].append((f"week/{key}", week_label(key).split(" (")[0] + " recap"))
-    return {"pages": pages, "weeks": {k: weeks[k]["items"] for k in keys}, "products": products, "vendors": vendors, "links": dict(links)}
+    return {"today": today, "pages": pages, "weeks": {k: weeks[k]["items"] for k in keys}, "products": products, "vendors": vendors, "links": dict(links)}
+
+
+def summary(hubs: dict) -> dict:
+    """Small api/hubs.json for the app (briefing card, research hint, dossier links) and the Telegram bot."""
+    keys = list(hubs["weeks"])
+    week = None
+    if keys:
+        # early in a new week (Mon/Tue) the last full week is the better recap to point people at
+        key = keys[1] if len(keys) > 1 and hubs.get("today") and hubs["today"] < week_range(keys[0])[0] + timedelta(days=2) else keys[0]
+        items = hubs["weeks"][key]
+        s, label = stats(items), week_label(key)
+        week = {"key": key, "path": f"week/{key}", "label": label.split(" (")[0], "span": label.split("(")[1].rstrip(")"),
+                "n": s["n"], "p1": s["p1"], "kev": s["kev"], "crit": s["crit"],
+                "top": [{"id": i["id"], "title": seo.clip(i.get("title") or "", 120), "sev": sev_key(i), "cvss": i.get("score"),
+                         "p": i.get("p"), "why": i.get("why") or "", "kev": bool(i.get("kev"))} for i in sorted(items, key=rank)[:5]]}
+    topics = [{"path": f"{kind}/{slug}", "name": t["name"], "term": (t.get("term") or "").lower(), "n": len(t["items"]),
+               "p1": stats(t["items"])["p1"]} for kind, d in (("product", hubs["products"]), ("vendor", hubs["vendors"])) for slug, t in d.items()]
+    topics.sort(key=lambda t: (-t["p1"], -t["n"]))
+    return {"week": week, "weeks": [{"key": k, "label": week_label(k)} for k in keys[:12]], "topics": topics}
 
 
 SITE = "https://iliya-bashrc.github.io/SubZer0/"

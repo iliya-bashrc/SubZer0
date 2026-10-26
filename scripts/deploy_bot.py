@@ -22,6 +22,7 @@ SITE = "https://iliya-bashrc.github.io/SubZer0/"
 COMMANDS = [
     ("cve", "Summary of one CVE, e.g. /cve CVE-2026-110447"),
     ("top", "What to patch right now"),
+    ("week", "This week's recap: the CVEs that mattered"),
     ("watch", "Get a DM when a product gets a patch-now CVE"),
     ("unwatch", "Remove a name from your watchlist"),
     ("list", "Show your watchlist"),

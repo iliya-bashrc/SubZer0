@@ -55,7 +55,7 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("X-Telegram-Bot-Api-Secret-Token", js)
         self.assertIn("WEBHOOK_SECRET", js)
         self.assertIn("export default", js)
-        for cmd in ("start", "cve", "top", "watch", "unwatch", "list", "help"):
+        for cmd in ("start", "cve", "top", "week", "watch", "unwatch", "list", "help"):
             self.assertIn(f"cmd === '{cmd}'", js)
         self.assertIn("MAX_WATCH = 10", js)
 
@@ -71,6 +71,11 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(names, {"KV": "kv_namespace", "BOT_TOKEN": "secret_text",
                                  "WEBHOOK_SECRET": "secret_text", "SITE": "plain_text"})
         self.assertEqual(meta["main_module"], "bot.js")
+        cmds = [c for c, _d in deploy_bot.COMMANDS]
+        self.assertIn("week", cmds)
+        js = (ROOT / "worker/bot.js").read_text(encoding="utf-8")
+        for c in cmds:  # every advertised command is handled
+            self.assertIn(f"cmd === '{c}'", js)
 
     def test_bot_workflow_is_pinned_and_read_only(self):
         import re
