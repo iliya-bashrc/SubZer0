@@ -76,7 +76,46 @@ class ShellPolicyTests(unittest.TestCase):
                 self.assertTrue((out / f"{slug}.html").is_file(), slug)
             sitemap = (out / "sitemap.xml").read_text(encoding="utf-8")
             self.assertIn(f"<loc>{build_site.SITE_URL}cve/{cid}</loc>", sitemap)
-            self.assertEqual(sitemap.count("<url>"), len(pages) + 3)
+            hubs = [p for p in out.glob("*/*.html") if p.parent.name in ("vendor", "product", "week")] + [out / "vendors.html", out / "weekly.html"]
+            self.assertEqual(sitemap.count("<url>"), len(pages) + 3 + len(hubs))
+            self.assertIn("t.me/RootAccessClub", doc)  # Telegram call to action on every CVE page
+
+    def test_hub_pages_are_crawlable_and_routable(self):
+        import hub_pages
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "_site"
+            build_site.build(ROOT / "site", ROOT / "public" / "snapshot", out)
+            sitemap = (out / "sitemap.xml").read_text(encoding="utf-8")
+            app = (ROOT / "site" / "app.js").read_text(encoding="utf-8")
+            self.assertIn(hub_pages.STATIC_RE.pattern.replace("/", "\\/"), app)  # app and builder agree on hub paths
+            for name in ("vendors", "weekly"):
+                doc = (out / f"{name}.html").read_text(encoding="utf-8")
+                self.assertIn(f'data-static="{name}"', doc)
+                self.assertIn(f"<loc>{build_site.SITE_URL}{name}</loc>", sitemap)
+            weeks = sorted((out / "week").glob("*.html"))
+            self.assertTrue(weeks)
+            for page in weeks[:3] + sorted((out / "vendor").glob("*.html"))[:3] + sorted((out / "product").glob("*.html"))[:3]:
+                path = f"{page.parent.name}/{page.stem}"
+                self.assertRegex(path, hub_pages.STATIC_RE)
+                doc = page.read_text(encoding="utf-8")
+                self.assertIn(f'<link rel="canonical" href="{build_site.SITE_URL}{path}">', doc)
+                self.assertIn('"@type":"CollectionPage"', doc)
+                self.assertIn('class="hub-row', doc)
+                self.assertIn(f"<loc>{build_site.SITE_URL}{path}</loc>", sitemap)
+                self.assertNotRegex(doc, r"<script(?![^>]*\b(src=|type=\"application/ld\+json\"))[^>]*>")
+
+    def test_hub_grouping(self):
+        import hub_pages
+        from datetime import date
+        mk = lambda n, **kw: {"id": f"CVE-2026-{1000 + n}", "title": kw.get("title", "Bug"), "sev": "high", "score": 7.5, "epss": 0.1, "kev": False,
+                              "p": kw.get("p", 3), "why": "", "date": "2026-10-20", "pairs": kw.get("pairs", []), "weap": False, "poc": False}
+        items = [mk(i, title="WordPress plugin XSS") for i in range(3)] + [mk(10 + i, pairs=[("Acme Inc.", "Widget")]) for i in range(5)]
+        res = hub_pages.build(items, window_start="2026-09-25", today=date(2026, 10, 25))
+        paths = {p[0] for p in res["pages"]}
+        self.assertIn("product/wordpress", paths)
+        self.assertIn("vendor/acme", paths)
+        self.assertIn("week/2026-w43", paths)
+        self.assertIn(("vendor/acme", "Acme"), res["links"]["CVE-2026-1010"])
 
 
 if __name__ == "__main__":
