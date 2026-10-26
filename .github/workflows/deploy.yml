@@ -34,7 +34,8 @@ jobs:
         run: python3 scripts/verify_data_snapshot.py --root public/snapshot
 
       - name: Install share-card renderer (optional)
-        run: python3 -m pip install --user --break-system-packages --require-hashes --only-binary :all: -r requirements-cards.txt || echo "share cards skipped"
+        run: |
+          python3 -m pip install --user --break-system-packages --require-hashes --only-binary ':all:' -r requirements-cards.txt || echo "share cards skipped"
 
       - name: Assemble the site (shell + snapshot + RSS + JSON API)
         run: python3 scripts/build_site.py --out _site
