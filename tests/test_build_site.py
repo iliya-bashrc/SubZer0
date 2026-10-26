@@ -92,6 +92,13 @@ class ShellPolicyTests(unittest.TestCase):
                 doc = (out / f"{name}.html").read_text(encoding="utf-8")
                 self.assertIn(f'data-static="{name}"', doc)
                 self.assertIn(f"<loc>{build_site.SITE_URL}{name}</loc>", sitemap)
+            hubs = json.loads((out / "api" / "hubs.json").read_text(encoding="utf-8"))
+            self.assertTrue(hubs["topics"])
+            for t in hubs["topics"]:
+                self.assertTrue((out / f"{t['path']}.html").is_file(), t["path"])
+            self.assertTrue((out / f"{hubs['week']['path']}.html").is_file())
+            self.assertLessEqual(len(hubs["week"]["top"]), 5)
+            self.assertIn("api/hubs.json", app)
             weeks = sorted((out / "week").glob("*.html"))
             self.assertTrue(weeks)
             for page in weeks[:3] + sorted((out / "vendor").glob("*.html"))[:3] + sorted((out / "product").glob("*.html"))[:3]:

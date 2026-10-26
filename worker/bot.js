@@ -43,6 +43,7 @@ async function handle(update, env) {
   if (cmd === 'start' && CVE_RE.test(arg.replace(/_/g, '-'))) return cve(env, chat, arg.replace(/_/g, '-').match(CVE_RE)[0].toUpperCase(), priv);
   if (cmd === 'start' || cmd === 'help') return send(env, chat, help(env), priv ? appButton(env, 'Open SubZer0', '') : null);
   if (cmd === 'top') return top(env, chat, priv);
+  if (cmd === 'week' || cmd === 'weekly') return week(env, chat, priv);
   if (cmd === 'watch') return watch(env, chat, arg, priv);
   if (cmd === 'unwatch') return unwatch(env, chat, arg);
   if (cmd === 'list' || cmd === 'watchlist') return list(env, chat);
@@ -60,6 +61,7 @@ function help(env) {
     '',
     '/cve <code>CVE-2026-110447</code> — summary of one CVE (or just send the id)',
     '/top — what to patch right now',
+    '/week — this week\'s recap: the CVEs that mattered',
     '/watch <code>nginx</code> — DM me when a product you use gets a patch-now CVE',
     '/unwatch <code>nginx</code> · /list — manage your watchlist',
     '',
@@ -106,6 +108,28 @@ async function top(env, chat, priv) {
   return send(env, chat, text, appButton(env, 'See all in SubZer0', 'research?view=p1', priv));
 }
 
+async function hubs(env) {
+  try { const h = await site(env, 'api/hubs.json'); return h && Array.isArray(h.topics) ? h : null; } catch { return null; }
+}
+
+async function week(env, chat, priv) {
+  const h = await hubs(env), w = h && h.week;
+  if (!w) return send(env, chat, 'The weekly recap is not available right now. Try /top.');
+  const items = (w.top || []).map(i =>
+    `${SEV_DOT[i.sev] || '⚪️'} <a href="${esc(env.SITE + 'cve/' + i.id)}">${esc(i.id)}</a>${i.cvss ? ' · ' + Number(i.cvss).toFixed(1) : ''}${i.kev ? ' · KEV' : ''}\n   ${esc(clip(i.title, 70))}`);
+  const text = [`📅 <b>${esc(w.label)}</b> · ${esc(w.span)}`,
+    `<i>${Number(w.n || 0).toLocaleString('en-US')} CVEs · ${w.p1} patch now · ${w.kev} on CISA KEV · ${Number(w.crit || 0).toLocaleString('en-US')} critical</i>`,
+    '', '🎯 <b>Top this week</b>', ...items].join('\n');
+  return send(env, chat, text, appButton(env, 'Read the full recap', w.path, priv));
+}
+
+/* the vendor/product page that matches a watch keyword, if the site has one */
+async function topicFor(env, kw) {
+  const h = await hubs(env);
+  if (!h) return null;
+  return h.topics.find(t => t.term === kw || t.name.toLowerCase() === kw) || null;
+}
+
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9.+_\- ]/g, ' ').replace(/\s+/g, ' ').trim();
 
 async function getWatch(env, chat) {
@@ -121,7 +145,10 @@ async function watch(env, chat, arg, priv) {
   if (k.length >= MAX_WATCH) return send(env, chat, `You can watch up to ${MAX_WATCH} names. Remove one with /unwatch first.`);
   k.push(kw);
   await env.KV.put('w:' + chat, JSON.stringify({ k, t: Date.now() }));
-  return send(env, chat, `👁 Watching <b>${esc(kw)}</b>. When a CVE for it becomes <b>patch now</b>, you get a DM here.\nNow watching: ${k.map(esc).join(', ')}`);
+  const t = await topicFor(env, kw);
+  const page = t ? `\n\n📂 ${esc(t.name)} has its own page: ${Number(t.n).toLocaleString('en-US')} CVEs ranked by what to patch first.` : '';
+  return send(env, chat, `👁 Watching <b>${esc(kw)}</b>. When a CVE for it becomes <b>patch now</b>, you get a DM here.\nNow watching: ${k.map(esc).join(', ')}${page}`,
+    t ? appButton(env, `Open the ${clip(t.name, 30)} page`, t.path, priv) : null);
 }
 
 async function unwatch(env, chat, arg) {

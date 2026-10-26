@@ -278,6 +278,7 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
         items.append(hub_item(rec, row, prio, fx, archived=True))
     hubs = hub.build(items, window_start=str((manifest.get("window") or {}).get("start") or ""), today=datetime.now(timezone.utc).date())
     links = hubs["links"]
+    (out / "api" / "hubs.json").write_text(json.dumps(hub.summary(hubs), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     cards = share_cards.render_all(out, items, hubs) if share_cards else set()
     for path, title, desc, art, ld, lastmod, og in hubs["pages"]:
         (out / f"{path}.html").parent.mkdir(parents=True, exist_ok=True)

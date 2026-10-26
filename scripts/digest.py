@@ -180,7 +180,8 @@ def weekly_caption(d: dict, ctx: dict, early: list[str], week: int | None = None
             f'\u2022 <a href="{SITE_URL}cve/{r[0]}">{r[0]}</a> {html.escape(label(r, ctx, 50))}' for r in top))
     if early:
         body.append("\U0001F6A8 <b>Early warnings</b>: " + html.escape(", ".join(early[:4])))
-    foot = f"Full dossier \u2192 {SITE_URL}\n\n{SIGN}"
+    y, w, _ = datetime.now(timezone.utc).isocalendar()
+    foot = f"\U0001F4C5 Full weekly recap \u2192 {SITE_URL}week/{y}-w{w:02d}\n\n{SIGN}"
     # Drop list items until the caption fits Telegram's 1024-char limit (visible text, tags included to be safe).
     while True:
         text = "\n\n".join(head + body + [foot])

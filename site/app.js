@@ -258,6 +258,30 @@ function sinceLast(){let prev=LS.get('seen',null);const ids=rows.map(r=>r.id),ke
   return `<br><span style="color:var(--strip)">since your last visit: ${n} new, ${k} added to KEV</span>`}
 function miniList(list,meta){return list.length?list.map(r=>`<button class="mini" data-cve="${r.id}"><span class="id">${r.id}</span>${chip(r.s)}<span class="t">${r.T}</span><span class="m">${meta(r)}</span></button>`).join(''):'<div class="ms-empty" style="border:0;padding:18px 0">Nothing here right now.</div>'}
 const firstSeen=r=>{const t=r.I&&r.I.t||{};return [t.msf,t.nuclei].filter(x=>typeof x==='string').sort()[0]||''};
+/* vendor / product / weekly pages (api/hubs.json, built with the site; optional, so nothing breaks without it) */
+let HUBS=null;
+function loadHubs(){fetch(new URL('api/hubs.json',BASE).href).then(r=>r.ok?r.json():null).then(h=>{if(!h||!Array.isArray(h.topics))return;
+  HUBS=h;HUBS._re=h.topics.filter(t=>t.term&&t.term.length>=2).map(t=>({t,re:new RegExp('(^|[^a-z0-9])'+t.term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'([^a-z0-9]|$)')}));
+  renderHubs();if(document.getElementById('hubhint'))hubHint();
+  document.querySelectorAll('[data-hl]').forEach(el=>{const r=BYID.get(el.dataset.hl);if(r&&!el.childElementCount)el.innerHTML=hubLinksInner(r)})}).catch(()=>{})}
+const isoWeek=d=>{const t=new Date(String(d).slice(0,10)+'T00:00:00Z');if(isNaN(t))return'';t.setUTCDate(t.getUTCDate()+3-(t.getUTCDay()+6)%7);
+  const y=t.getUTCFullYear(),w=1+Math.floor((t-Date.UTC(y,0,1))/6048e5);return y+'-w'+String(w).padStart(2,'0')};
+function hubTopics(r){return HUBS?HUBS._re.filter(x=>x.re.test(r._t)).map(x=>x.t).sort((a,b)=>b.n-a.n).slice(0,4):[]}
+function hubLinks(r){return `<div class="hub-links" data-hl="${esc(r.id)}">${hubLinksInner(r)}</div>`}
+function hubLinksInner(r){if(!HUBS)return'';const ts=hubTopics(r),wk=isoWeek(r.d),w=HUBS.weeks.find(x=>x.key===wk);
+  const ls=ts.map(t=>`<a href="${esc(t.path)}">All ${esc(t.name)} CVEs <i>${fmt(t.n)}</i></a>`).concat(w?[`<a href="week/${esc(w.key)}">${esc(w.label.split(' (')[0])} recap</a>`]:[]);
+  return ls.length?`<span>Browse</span>${ls.join('')}`:''}
+function renderHubs(){const el=document.getElementById('hubs');if(!el||!HUBS)return;const w=HUBS.week;
+  const tp=HUBS.topics.filter(t=>t.path.startsWith('product/')).slice(0,14);
+  el.innerHTML=`<div class="hubs-grid">${w?`<a class="hub-week" href="${esc(w.path)}"><span class="chip ice">Weekly recap</span><b>${esc(w.label)}</b><small>${esc(w.span)}</small>
+      <div class="hw-stats"><span><b>${fmt(w.n)}</b>CVEs</span><span><b style="color:var(--crit)">${w.p1}</b>patch now</span><span><b style="color:var(--high)">${w.kev}</b>on KEV</span><span><b>${fmt(w.crit)}</b>critical</span></div>
+      <div class="hw-top">${w.top.slice(0,3).map(i=>`<div>${chip(i.sev==='unscored'?'none':i.sev)}<code>${esc(i.id)}</code><span>${esc(i.title)}</span></div>`).join('')}</div><span class="go">Read the recap →</span></a>`:''}
+    <div class="hub-browse"><div class="sec-h"><h2>Browse by product</h2><span class="meta">ranked pages for what you run</span></div>
+      <div class="hub-chips">${tp.map(t=>`<a href="${esc(t.path)}">${esc(t.name)}<i>${t.p1?`<em>${t.p1} P1</em> · `:''}${fmt(t.n)}</i></a>`).join('')}</div>
+      <div class="hub-more"><a href="vendors">All vendors &amp; products →</a><a href="weekly">Every weekly recap →</a></div></div></div>`}
+function hubHint(){const el=document.getElementById('hubhint');if(!el)return;const q=(F.q||'').trim().toLowerCase();let t=null;
+  if(HUBS&&q.length>=3&&!/[:<>=]/.test(q))t=HUBS.topics.find(x=>x.term===q||x.name.toLowerCase()===q)||HUBS.topics.find(x=>x.term&&x.term.startsWith(q)&&q.length>=4);
+  el.innerHTML=t?`<a class="hub-hint" href="${esc(t.path)}"><b>${esc(t.name)}</b> has its own page: ${fmt(t.n)} CVEs${t.p1?`, ${t.p1} patch now`:''}, ranked by what to patch first <span>Open →</span></a>`:''}
 const TGCTA='<a class="seo-cta tg-cta" href="https://t.me/RootAccessClub" target="_blank" rel="noopener"><b>🔔 Get patch-now alerts on Telegram</b><small>Exploited and weaponized CVEs as they land · @RootAccessClub</small><span class="go">Join →</span></a>';
 function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
@@ -352,6 +376,7 @@ function briefing(){
     <section><div class="sec-h"><h2>Just weaponized</h2><span class="meta">Metasploit · Nuclei</span></div>${miniList(W.slice().sort((a,b)=>firstSeen(b).localeCompare(firstSeen(a))||a.P[0]-b.P[0]).slice(0,5),r=>[r.m?'MSF':'',r.n?'NUCLEI':''].filter(Boolean).join(' · '))}<a class="more-l" href="research?view=weap" data-view="weap">all weaponized →</a></section>
     <section><div class="sec-h"><h2>No patch yet</h2><span class="meta">urgent, no fix in the refs</span></div>${miniList(rows.filter(r=>r.P[0]<=2&&!r.f&&r.L>=1).sort((a,b)=>a.P[0]-b.P[0]||b.L-a.L||(b.e||0)-(a.e||0)).slice(0,5),r=>'P'+r.P[0]+' · '+LADDER[r.L].toLowerCase())}<a class="more-l" href="research?view=nopatch" data-view="nopatch">all unpatched →</a></section>
   </div>`:''}
+  <section class="hubs" id="hubs"></section>
   <section class="mystack" id="mystack"></section>
   <section class="chart" id="chart"><div class="sec-h"><h2>What got published</h2><span class="meta">last 30 days by severity · ▬ exploited · tap a bar</span></div>
     <div class="ch-wrap"><div class="ch-y" aria-hidden="true"><span style="top:${10/200*100}%">${fmt(max)}</span><span style="top:${105/200*100}%">${fmt(Math.round(max/2))}</span><span style="top:100%">0</span></div>
@@ -364,7 +389,7 @@ function briefing(){
       ${D.live?`<div class="src src-live"><div class="n"><i></i>Early warning</div><div class="v">${fmt(D.live.n)}</div><div class="s">live · CVE.org + ${D.live.feedsOk} feeds · ${esc(D.live.at.slice(11,16))}</div></div>`:''}</div></section>
   ${credits()}
   </div>`;
-  requestAnimationFrame(()=>{glitch(document.getElementById('hc'),7);frost(document.getElementById('hfrost'),11)});renderMyStack();
+  requestAnimationFrame(()=>{glitch(document.getElementById('hc'),7);frost(document.getElementById('hfrost'),11)});renderMyStack();renderHubs();
   const p0=document.getElementById('p0');watchHeads(p0);initChart(days);fillGrid(p0.querySelector('.sources'));
   p0.querySelectorAll('#feed .feed-item.new .t').forEach(t=>typeIn(t,900));
   if(FX.once('hero')){decode(document.getElementById('heroN'),900);typeIn(document.getElementById('heroSha'),1100)}
@@ -439,7 +464,7 @@ function research(){
     <label class="r-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input id="q" placeholder="CVE ID, vendor, keyword… or kev:yes epss>0.5 vendor:apache" autocomplete="off" spellcheck="false"></label>
     <div class="qhint">try ${['kev:yes','msf:yes','buzz>20','epss>50','cvss>=9','ssvc:active','patch:no p:1','sev:critical -wordpress','gh:yes after:2026-10-15','is:watched'].map(x=>`<code data-q="${x}">${x}</code>`).join('')}</div>
-    <div id="stackbar"></div>
+    <div id="stackbar"></div><div id="hubhint"></div>
     <div class="filters" id="filters"></div>
     <table><colgroup><col style="width:78px"><col style="width:156px"><col><col style="width:110px"><col style="width:70px"><col style="width:120px"><col style="width:56px"><col style="width:76px"><col style="width:104px"></colgroup>
       <thead><tr><th data-s="P">Priority</th><th data-s="id">CVE</th><th>Title · product</th><th data-s="s">Severity</th><th data-s="c">CVSS</th><th data-s="e">EPSS</th><th>KEV</th><th data-s="x">Exploit</th><th data-s="d">Published</th></tr></thead>
@@ -474,6 +499,7 @@ function draw(){
    `<span class="f-sep"></span><button class="f" data-t="kev" aria-pressed="${F.kev}">CISA KEV</button><button class="f" data-t="poc" aria-pressed="${F.poc}">Public PoC</button><button class="f" data-t="epss" aria-pressed="${F.epss}">EPSS ≥ 10%</button>`;
   document.querySelectorAll('[data-sev]').forEach(b=>b.onclick=()=>{const s=b.dataset.sev;F.sev.has(s)?F.sev.delete(s):F.sev.add(s);SHOWN=200;draw()});
   document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{F[b.dataset.t]=!F[b.dataset.t];SHOWN=200;draw()});
+  hubHint();
   const so={x:(a,b)=>b.L-a.L||b.b-a.b||a.P[0]-b.P[0],b:(a,b)=>b.b-a.b||a.P[0]-b.P[0],P:(a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0),id:(a,b)=>b.id.localeCompare(a.id),s:(a,b)=>b.c-a.c,c:(a,b)=>b.c-a.c,e:(a,b)=>(b.e||0)-(a.e||0),d:(a,b)=>b.d.localeCompare(a.d)};
   const qp=parseQ(F.q),vp=VPRED[F.view]||VPRED.all;
   const list=LIST=rows.filter(r=>vp(r)&&(!F.sev.size||F.sev.has(r.s))&&(!F.kev||r.k)&&(!F.poc||r.x)&&(!F.epss||(r.e||0)>=.1)&&qp(r)).sort(F.view==='trend'&&F.sort==='P'?so.b:so[F.sort]||so.P);
@@ -509,7 +535,7 @@ function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec
     <div class="credit-name" data-fx="id">${id}</div>
     <div class="code" style="margin-top:8px">${esc(sub)||'&nbsp;'}</div>
     <p class="lead">${esc(rec?rec.title:r.t)}</p>
-    <div class="d-actions"><button class="btn primary" data-act="copy" data-id="${id}">Copy ID</button><button class="btn" data-act="share" data-id="${id}">Share link</button><button class="btn${ST.watch.has(id)?' on':''}" data-act="watch" data-id="${id}">${ST.watch.has(id)?'★ Watching':'☆ Watch'}</button><button class="btn" data-act="json" data-id="${id}">Export JSON</button><a class="btn" href="https://nvd.nist.gov/vuln/detail/${id}" target="_blank" rel="noopener noreferrer">NVD ↗</a></div>${TGCTA}</div>
+    <div class="d-actions"><button class="btn primary" data-act="copy" data-id="${id}">Copy ID</button><button class="btn" data-act="share" data-id="${id}">Share link</button><button class="btn${ST.watch.has(id)?' on':''}" data-act="watch" data-id="${id}">${ST.watch.has(id)?'★ Watching':'☆ Watch'}</button><button class="btn" data-act="json" data-id="${id}">Export JSON</button><a class="btn" href="https://nvd.nist.gov/vuln/detail/${id}" target="_blank" rel="noopener noreferrer">NVD ↗</a></div>${TGCTA}${hubLinks(r)}</div>
   <div class="d-metrics">
     <div class="d-metric"><span class="label">CVSS</span><div class="v" style="color:var(--${SEV[sev][0]==='none'?'ink3':SEV[sev][0]})">${score>0?score.toFixed(1):'—'}<small>/10</small></div><div class="s">${r.ca?'CISA ADP score · NVD has not scored it':vec?esc(vec.split('/')[0]):'base score'}</div></div>
     <div class="d-metric"><span class="label">EPSS</span><div class="v">${r.e!=null?(r.e*100).toFixed(1)+'<small>%</small>':'—'}</div><div class="s">${pct!=null?'higher than '+(pct*100).toFixed(1)+'% of CVEs':'not scored yet'}</div><div class="spark-wrap" data-spark="${id}"></div></div>
@@ -806,7 +832,7 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
     adopt(await loadAll(m));BOOT.step(`Indexing ${rows.length.toLocaleString('en-US')} CVEs`,.88)}catch(e){BOOT.fail();bootError(e);return}
   /* yield between the big render steps so the boot animation keeps moving on slow phones */
   const breathe=()=>new Promise(r=>setTimeout(r,0));
-  lastPoll=Date.now();await breathe();briefing();await breathe();research();await breathe();ensure(cur);live();
+  lastPoll=Date.now();await breathe();briefing();await breathe();research();await breathe();ensure(cur);live();loadHubs();
   BOOT.step('Ranking',.96);
   await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
