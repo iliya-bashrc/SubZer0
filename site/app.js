@@ -258,10 +258,11 @@ function sinceLast(){let prev=LS.get('seen',null);const ids=rows.map(r=>r.id),ke
   return `<br><span style="color:var(--strip)">since your last visit: ${n} new, ${k} added to KEV</span>`}
 function miniList(list,meta){return list.length?list.map(r=>`<button class="mini" data-cve="${r.id}"><span class="id">${r.id}</span>${chip(r.s)}<span class="t">${r.T}</span><span class="m">${meta(r)}</span></button>`).join(''):'<div class="ms-empty" style="border:0;padding:18px 0">Nothing here right now.</div>'}
 const firstSeen=r=>{const t=r.I&&r.I.t||{};return [t.msf,t.nuclei].filter(x=>typeof x==='string').sort()[0]||''};
+const TGCTA='<a class="seo-cta tg-cta" href="https://t.me/RootAccessClub" target="_blank" rel="noopener"><b>🔔 Get patch-now alerts on Telegram</b><small>Exploited and weaponized CVEs as they land · @RootAccessClub</small><span class="go">Join →</span></a>';
 function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
     <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
-      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="https://t.me/SubZer0Robot" ${x}>Bot</a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
+      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="vendors">Vendors</a><a href="weekly">Weekly</a><a href="https://t.me/SubZer0Robot" ${x}>Bot</a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
     <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
 const ago=iso=>{const t=Date.parse(iso);if(!t)return'';const m=Math.max(0,Math.round((Date.now()-t)/6e4));return m<1?'just now':m<60?m+'m ago':m<2880?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
 const lvTag=r=>r.lv?`<span class="lv" title="live record from ${esc(r.lv==='cve.org'?'CVE.org':r.lv==='ghsa'?'GitHub advisories':'CISA KEV')} — full enrichment arrives with the next snapshot">LIVE</span>`:'';
@@ -508,7 +509,7 @@ function dossierHTML(r,full,ep,inSheet){const id=r.id,rec=full&&full.rec,kev=rec
     <div class="credit-name" data-fx="id">${id}</div>
     <div class="code" style="margin-top:8px">${esc(sub)||'&nbsp;'}</div>
     <p class="lead">${esc(rec?rec.title:r.t)}</p>
-    <div class="d-actions"><button class="btn primary" data-act="copy" data-id="${id}">Copy ID</button><button class="btn" data-act="share" data-id="${id}">Share link</button><button class="btn${ST.watch.has(id)?' on':''}" data-act="watch" data-id="${id}">${ST.watch.has(id)?'★ Watching':'☆ Watch'}</button><button class="btn" data-act="json" data-id="${id}">Export JSON</button><a class="btn" href="https://nvd.nist.gov/vuln/detail/${id}" target="_blank" rel="noopener noreferrer">NVD ↗</a></div></div>
+    <div class="d-actions"><button class="btn primary" data-act="copy" data-id="${id}">Copy ID</button><button class="btn" data-act="share" data-id="${id}">Share link</button><button class="btn${ST.watch.has(id)?' on':''}" data-act="watch" data-id="${id}">${ST.watch.has(id)?'★ Watching':'☆ Watch'}</button><button class="btn" data-act="json" data-id="${id}">Export JSON</button><a class="btn" href="https://nvd.nist.gov/vuln/detail/${id}" target="_blank" rel="noopener noreferrer">NVD ↗</a></div>${TGCTA}</div>
   <div class="d-metrics">
     <div class="d-metric"><span class="label">CVSS</span><div class="v" style="color:var(--${SEV[sev][0]==='none'?'ink3':SEV[sev][0]})">${score>0?score.toFixed(1):'—'}<small>/10</small></div><div class="s">${r.ca?'CISA ADP score · NVD has not scored it':vec?esc(vec.split('/')[0]):'base score'}</div></div>
     <div class="d-metric"><span class="label">EPSS</span><div class="v">${r.e!=null?(r.e*100).toFixed(1)+'<small>%</small>':'—'}</div><div class="s">${pct!=null?'higher than '+(pct*100).toFixed(1)+'% of CVEs':'not scored yet'}</div><div class="spark-wrap" data-spark="${id}"></div></div>
@@ -566,8 +567,12 @@ function dossierTab(id){id=id||LS.get('last',null);if(!id||!BYID.has(id)){const 
 const sheet=document.getElementById('sheet'),back=document.getElementById('back');let sheetOpen=false,lastFocus=null;
 function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;syncBack();
   LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);{const t=(BYID.get(id)||(ARCH&&ARCH.id===id?ARCH:{})).t||'';document.title=id+(t?': '+(t.length>70?t.slice(0,69)+'…':t):' · SubZer0')};setTimeout(()=>sheet.focus({preventScroll:true}),50)}
-let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};
+/* static hub page shipped in the HTML (vendor/<x>, product/<x>, week/<yyyy-wNN>, vendors, weekly) */
+const STATIC_RE=/^(vendors|weekly|(vendor|product)\/[a-z0-9][a-z0-9-]{0,60}|week\/\d{4}-w\d{2})$/;
+const STATIC=(()=>{const a=document.querySelector('article.seo[data-static]');return a&&STATIC_RE.test(a.dataset.static||'')?{path:a.dataset.static,html:a.outerHTML,t:a.dataset.title||'SubZer0'}:null})();
+let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};if(STATIC)PAGES.static=STATIC.t.replace(/ · SubZer0$/,'');
 function pageHTML(kind){const close='<button class="d-close" id="closeSheet">← Back · Esc</button>';
+  if(kind==='static')return close+STATIC.html;
   if(kind==='keys')return `<div class="d-hero pg">${close}<span class="chip ice">Shortcuts</span><div class="credit-name" data-fx="id">Keyboard</div></div><div class="d-body"><dl class="keys">
     ${[['?','this list'],['← →','previous / next tab'],['1 – 4','jump to a tab'],['/  or  Ctrl K','search'],['Esc','close the panel'],['Drag sideways','switch tabs with the mouse, a finger, or a trackpad'],['↑ ↓ · Tab','terminal history and completion'],['Ctrl L','clear the terminal']].map(([k,d])=>`<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(d)}</dd>`).join('')}</dl></div>`;
   if(kind==='404'){let bad=NF_PATH;try{bad=decodeURIComponent(bad)}catch{}bad=bad.slice(0,80)||'?';
@@ -594,12 +599,12 @@ function pageHTML(kind){const close='<button class="d-close" id="closeSheet">←
 function openPage(kind,replace){if(!PAGES[kind])return;if(sheetOpen&&sheet.dataset.page===kind)return;const was=sheetOpen;lastFocus=was?lastFocus:document.activeElement;
   sheet.dataset.id='';sheet.dataset.page=kind;sheet.scrollTop=0;sheet.setAttribute('aria-label',PAGES[kind]);sheet.innerHTML=pageHTML(kind);paintDossier(sheet,true);watchHeads(sheet);
   decode(sheet.querySelector('[data-fx="id"]'),520);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;syncBack();
-  const u=kind==='about'?new URL('about',BASE).href:kind==='keys'?location.href:null;
+  const u=kind==='about'?new URL('about',BASE).href:kind==='static'?new URL(STATIC.path,BASE).href:kind==='keys'?location.href:null;
   if(u){replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u)}else if(!was)history.pushState({sheet:1},'',location.href);
-  document.title=PAGES[kind]+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
+  document.title=kind==='static'?STATIC.t:PAGES[kind]+' · SubZer0';setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;setTimeout(syncBack,0);if(sheet.contains(document.activeElement))document.activeElement.blur();sheet.classList.remove('on');back.classList.remove('on');sheet.style.transform='';
   if(fromPop!==true)history.back();setTimeout(()=>{if(!sheetOpen)history.replaceState(null,'',routeURL())},0);document.title=cur?TABS[cur]+' · SubZer0':'SubZer0 · CVE tracker: what to patch first (KEV, EPSS, exploits)';if(lastFocus&&lastFocus.focus)lastFocus.focus({preventScroll:true})}
-back.onclick=closeSheet;addEventListener('popstate',e=>{if(sheetOpen)closeSheet(true);else{const R=route();if(R.cve)openSheet(R.cve,true);else if(R.page){if(R.page==='404')NF_PATH=location.pathname.slice(BASE.pathname.length);openPage(R.page,true)}}});
+back.onclick=closeSheet;addEventListener('popstate',e=>{const S=route();if(S.page==='static'){openPage('static',true);return}if(sheetOpen)closeSheet(true);else{const R=route();if(R.cve)openSheet(R.cve,true);else if(R.page){if(R.page==='404')NF_PATH=location.pathname.slice(BASE.pathname.length);openPage(R.page,true)}}});
 addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(sheetOpen)closeSheet();else{const a=document.activeElement;if(a&&(a.id==='q'||a.id==='msIn'||a.id==='stIn'))a.blur()}});
 (function(){let x0=null,dx=0,lock=null,y0;
   sheet.addEventListener('touchstart',e=>{if(e.touches.length!==1||e.target.closest('input,textarea,select')||scrollsX(e.target)){x0=null;return}x0=e.touches[0].clientX;y0=e.touches[0].clientY;dx=0;lock=null},{passive:true});
@@ -616,6 +621,7 @@ document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(
     if(a.dataset.act==='json'){const f=REC.get(id);const r=BYID.get(id);const ix=r&&r.I?{exploit_maturity:LADDER[r.L],github_pocs:r.I.g,metasploit:r.I.m,nuclei:r.I.n,ssvc:r.I.s,chatter:r.I.b,first_seen:r.I.t,patch_linked:r.I.f}:{};
       download(id+'.json',JSON.stringify(f?{...f.rec,epss:r&&r.e,poc:!!(r&&r.x),...ix}:r?{id:r.id,title:r.t,severity:r.s,cvss:r.c,epss:r.e,kev:!!r.k,poc:!!r.x,...ix}:{id},null,2),'application/json')}
     return}
+  const h=e.target.closest('.hub a[href^="cve/"]');if(h&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&sheetOpen&&sheet.dataset.page==='static'){const id=h.getAttribute('href').slice(4);if(CVE_RE.test(id)&&(BYID.has(id))){e.preventDefault();history.pushState({sheet:1},'',location.href);openSheet(id,true);return}}
   const t=e.target.closest('[data-cve]');if(t&&CVE_RE.test(t.dataset.cve))openSheet(t.dataset.cve)});
 
 /* ---------- terminal ---------- */
@@ -762,7 +768,7 @@ function live(){tick();setInterval(tick,1000);document.addEventListener('visibil
 function bootError(e){document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:120px"><span class="chip crit">Integrity</span><div class="credit-name" style="font-size:36px;margin:16px 0 10px">Couldn't verify the data</div>SubZer0 won't show anything it can't check. ${esc(e.message)}<br><br><button class="btn primary" id="retry">Try again</button></div></div>`;document.getElementById('retry').onclick=()=>location.reload()}
 function route(){const rel=(location.pathname.startsWith(BASE.pathname)?location.pathname.slice(BASE.pathname.length):'').replace(/\.html$/,'');const m=rel.match(/^cve\/(CVE-\d{4}-\d{4,})\/?$/i);
   const clean=rel.replace(/\/$/,'').replace(/^index$/,''),tab=SLUG.indexOf(clean);
-  return {tab:Math.max(0,tab),cve:m?m[1].toUpperCase():null,page:clean==='about'?'about':!m&&tab<0?'404':null}}
+  return {tab:Math.max(0,tab),cve:m?m[1].toUpperCase():null,page:clean==='about'?'about':STATIC&&clean===STATIC.path?'static':!m&&tab<0?'404':null}}
 /* static archived dossier shipped in the page (CVEs that left the 30-day window) */
 const ARCH=(()=>{const a=document.querySelector('article.seo[data-archived]');return a&&CVE_RE.test(a.dataset.archived)?{id:a.dataset.archived,html:a.outerHTML,t:(a.querySelector('.seo-lede')||{}).textContent||''}:null})();
 /* ---------- boot screen: the wordmark fills as verified bytes arrive, then settles into the header ---------- */
@@ -805,7 +811,7 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
   await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
   if(R.cve){history.replaceState(null,'',routeURL());openSheet(R.cve)}
-  else if(R.page==='about'){history.replaceState(null,'',routeURL());openPage('about')}
+  else if(R.page==='about'||R.page==='static'){history.replaceState(null,'',routeURL());openPage(R.page)}
   else if(R.page==='404'){const bad=location.href;NF_PATH=location.pathname.slice(BASE.pathname.length);history.replaceState(null,'',routeURL());openPage('404');history.replaceState({sheet:1},'',bad)}
   addEventListener('resize',renderNav);document.fonts&&document.fonts.ready.then(renderNav);
   if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register(new URL('sw.js',BASE).href,{scope:BASE.pathname}).catch(()=>{});

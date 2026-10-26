@@ -18,8 +18,14 @@ from email.utils import format_datetime
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import hub_pages as hub
 import seo_pages as seo
 import verify_data_snapshot as verifier
+
+try:  # optional: per-page share cards need Pillow; without it pages keep the default og.png
+    import share_cards
+except ImportError:  # pragma: no cover
+    share_cards = None
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE_URL = "https://iliya-bashrc.github.io/SubZer0/"
@@ -196,6 +202,22 @@ def cve_api(rec: dict, row: list | None, prio, fx, archived_at: str | None = Non
     return out
 
 
+def hub_item(rec: dict, row: list | None, prio, fx: dict | None, archived: bool = False) -> dict:
+    """Compact view of one CVE for vendor/product/weekly pages and share cards."""
+    kev = rec.get("kev") if isinstance(rec.get("kev"), dict) else {}
+    pairs = [(a.get("vendor") or "", a.get("product") or "") for a in rec.get("affected") or [] if isinstance(a, dict)][:30]
+    if kev.get("vendor") or kev.get("product"):
+        pairs.append((kev.get("vendor") or "", kev.get("product") or ""))
+    if row and len(row) > 8 and row[8]:
+        pairs.append(("", str(row[8])))
+    fx = fx or {}
+    return {"id": rec["id"], "title": str(rec.get("title") or "")[:300], "sev": seo.severity(rec, fx).lower(),
+            "score": float(fx.get("c") or rec.get("score") or 0) or None,
+            "epss": row[5] if row and isinstance(row[5], (int, float)) else None,
+            "kev": bool(kev) or bool(row and row[4]), "p": prio[0] if prio else None, "why": prio[1] if prio else "",
+            "date": seo.dates(rec)[0], "wdate": max(seo.dates(rec)[0], str(kev.get("date_added") or "")[:10], str(rec.get("window_date") or "")[:10]), "pairs": pairs, "weap": bool(fx.get("weap")), "poc": bool(fx.get("poc")), "archived": archived}
+
+
 def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[list], ctx: dict, summary: dict, archive: Path) -> int:
     """Crawlable pages: home/tab routes with real titles, one HTML page per CVE, and sitemap.xml."""
     by_id = {r[0]: r for r in rows}
@@ -228,36 +250,69 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
     def put_api(doc: dict) -> None:
         (api_dir / f"{doc['id']}.json").write_text(json.dumps(doc, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     entries: list[tuple[str, str | None]] = [("", manifest.get("generated_at")), ("research", manifest.get("generated_at")), ("about", None)]
-    count = 0
+    import archive as arch  # local module; imported lazily because it imports this file
+    archived = arch.load(archive) if archive.exists() else {}
+    live: list[tuple[str, int]] = []  # (day, index) of every live record, read twice to keep memory flat
+    items: list[dict] = []
+    seen: set[str] = set()
     for day in manifest.get("days") or []:
         records = _read_verified(snapshot, day)
         for rec in records if isinstance(records, list) else []:
             cid = rec.get("id") if isinstance(rec, dict) else None
-            if not cid or not seo.CVE_RE.match(cid) or (cve_dir / f"{cid}.html").exists():
+            if not cid or not seo.CVE_RE.match(cid) or cid in seen:
                 continue
+            seen.add(cid)
             row = by_id.get(cid)
             fx = facts(row, ctx) if row else None
-            prio = priority_reason(row, ctx) if row else None
-            title, desc = seo.cve_meta(rec, row, prio, fx)
-            doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
-                             ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known)))
-            (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
-            put_api(cve_api(rec, row, prio, fx))
-            entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
-            count += 1
-    import archive as arch  # local module; imported lazily because it imports this file
-    archived = arch.load(archive) if archive.exists() else {}
+            items.append(hub_item(rec, row, priority_reason(row, ctx) if row else None, fx))
     known |= set(archived)
+    arch_rows = {}
     for cid, rec in sorted(archived.items()):
-        if (cve_dir / f"{cid}.html").exists() or not seo.CVE_RE.match(cid):
+        if cid in seen or not seo.CVE_RE.match(cid):
             continue
         sig = rec.get("signals") or {}
         row = [cid, rec.get("title"), rec.get("sev"), rec.get("score"), 1 if rec.get("kev") else 0, sig.get("epss"), None, None, ""]
         fx = {"c": rec.get("score") or 0, "poc": bool(sig.get("poc")), "weap": bool(sig.get("weap"))}
         prio = (int(sig["p"]), str(sig.get("why") or "")) if sig.get("p") in (1, 2, 3, 4) else None
+        arch_rows[cid] = (row, fx, prio)
+        items.append(hub_item(rec, row, prio, fx, archived=True))
+    hubs = hub.build(items, window_start=str((manifest.get("window") or {}).get("start") or ""), today=datetime.now(timezone.utc).date())
+    links = hubs["links"]
+    cards = share_cards.render_all(out, items, hubs) if share_cards else set()
+    for path, title, desc, art, ld, lastmod, og in hubs["pages"]:
+        (out / f"{path}.html").parent.mkdir(parents=True, exist_ok=True)
+        (out / f"{path}.html").write_text(seo.render(shell, site_url=SITE_URL, path=path, title=title, desc=desc, ld=ld, panel=("p0", art),
+                                                    image=f"og/{og}.jpg" if og in cards else None), encoding="utf-8")
+        entries.append((path, lastmod or manifest.get("generated_at")))
+    count = 0
+    seen.clear()
+    for day in manifest.get("days") or []:
+        records = _read_verified(snapshot, day)
+        for rec in records if isinstance(records, list) else []:
+            cid = rec.get("id") if isinstance(rec, dict) else None
+            if not cid or not seo.CVE_RE.match(cid) or cid in seen:
+                continue
+            seen.add(cid)
+            row = by_id.get(cid)
+            fx = facts(row, ctx) if row else None
+            prio = priority_reason(row, ctx) if row else None
+            title, desc = seo.cve_meta(rec, row, prio, fx)
+            doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
+                             ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known, links=links.get(cid))),
+                             image=f"og/{cid}.jpg" if cid in cards else None)
+            (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
+            put_api(cve_api(rec, row, prio, fx))
+            entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
+            count += 1
+    for cid, rec in sorted(archived.items()):
+        if cid not in arch_rows:
+            continue
+        row, fx, prio = arch_rows[cid]
         title, desc = seo.cve_meta(rec, row, prio, fx)
         doc = seo.render(shell, site_url=SITE_URL, path=f"cve/{cid}", title=title, desc=desc, og_type="article",
-                         ld=seo.cve_ld(SITE_URL, rec, desc), panel=("p0", seo.cve_article(rec, row, prio, fx, known, archived_at=rec.get("last_seen"))))
+                         ld=seo.cve_ld(SITE_URL, rec, desc),
+                         panel=("p0", seo.cve_article(rec, row, prio, fx, known, archived_at=rec.get("last_seen"), links=links.get(cid))),
+                         image=f"og/{cid}.jpg" if cid in cards else None)
         (cve_dir / f"{cid}.html").write_text(doc, encoding="utf-8")
         put_api(cve_api(rec, row, prio, fx, rec.get("last_seen")))
         entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))

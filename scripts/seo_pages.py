@@ -39,7 +39,8 @@ def _sub_meta(doc: str, attr: str, name: str, value: str) -> str:
 
 
 def render(shell: str, *, site_url: str, path: str, title: str, desc: str, ld: list | None = None,
-           panel: tuple[str, str] | None = None, og_type: str = "website", robots: str | None = None) -> str:
+           panel: tuple[str, str] | None = None, og_type: str = "website", robots: str | None = None,
+           image: str | None = None) -> str:
     url = site_url + path
     doc = re.sub(r"<title>.*?</title>", lambda _m: f"<title>{esc(title)}</title>", shell, count=1, flags=re.S)
     doc = _sub_meta(doc, "name", "description", desc)
@@ -52,6 +53,12 @@ def render(shell: str, *, site_url: str, path: str, title: str, desc: str, ld: l
     doc = _sub_meta(doc, "name", "twitter:description", desc)
     if robots:
         doc = _sub_meta(doc, "name", "robots", robots)
+    if image:  # per-page share card (og/<key>.jpg); the shell's og.png stays the default
+        doc = _sub_meta(doc, "property", "og:image", site_url + image)
+        doc = _sub_meta(doc, "name", "twitter:image", site_url + image)
+        doc = _sub_meta(doc, "property", "og:image:width", "1200")
+        doc = _sub_meta(doc, "property", "og:image:height", "630")
+        doc = _sub_meta(doc, "name", "twitter:card", "summary_large_image")
     head = f'<link rel="canonical" href="{esc(url)}">\n'
     for block in ld or []:
         data = json.dumps(block, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
@@ -111,7 +118,12 @@ def _facts_line(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: d
     return bits
 
 
-def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: dict | None, known: set, archived_at: str | None = None) -> str:
+CTA = ('<aside class="seo-cta"><a href="https://t.me/RootAccessClub" rel="noopener"><b>🔔 Get patch-now alerts on Telegram</b>'
+       '<small>Exploited and weaponized CVEs as they land · @RootAccessClub</small><span class="go">Join →</span></a></aside>')
+
+
+def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: dict | None, known: set, archived_at: str | None = None,
+                links: list[tuple[str, str]] | None = None) -> str:
     cid = rec["id"]
     title = rec.get("title") or cid
     desc = rec.get("desc") or title
@@ -126,6 +138,7 @@ def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: d
     if prio:
         out.append(f'<p class="seo-why"><b>Why {P_LABEL[prio[0]].split(" ")[0]}:</b> {esc(prio[1])}.</p>')
     out.append(f"<h2>Description</h2><p>{esc(desc)}</p>")
+    out.append(CTA)
     if kev:
         out.append("<h2>CISA Known Exploited Vulnerability</h2><p>"
                    f"Added {esc(kev.get('date_added'))}, remediation due {esc(kev.get('due_date'))}. "
@@ -148,6 +161,8 @@ def cve_article(rec: dict, row: list | None, prio: tuple[int, str] | None, fx: d
     rel = [c for c in rec.get("related_cves") or [] if isinstance(c, str) and c in known and c != cid][:12]
     if rel:
         out.append("<h2>Related CVEs</h2><ul>" + "".join(f'<li><a href="cve/{c}">{c}</a></li>' for c in rel) + "</ul>")
+    if links:
+        out.append('<h2>Browse more</h2><p class="seo-tags">' + "".join(f'<a href="{esc(h)}">{esc(n)}</a>' for h, n in links[:8]) + "</p>")
     pub, mod = dates(rec)
     meta = [f"Published {pub}" if pub else "", f"updated {mod}" if mod and mod != pub else "",
             f"sources: {', '.join(rec.get('sources') or [])}" if rec.get("sources") else ""]

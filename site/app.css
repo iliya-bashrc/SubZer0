@@ -558,3 +558,46 @@ html.tgapp .bottom-nav{padding-bottom:max(env(safe-area-inset-bottom),var(--tgb)
 }
 html.tgapp .grain{display:none}
 @media (max-width:380px){.d-metric .v{font-size:24px;overflow-wrap:anywhere}.d-metric{padding:16px 12px}}
+/* hub pages (vendor / product / weekly) + Telegram call to action */
+.hub{max-width:1040px}
+.seo ul.hub-list,.seo ul.hub-index{list-style:none;padding:0;margin:0}
+.hub-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:18px 0 6px}
+.hub-stats div{border:1px solid var(--line2);background:rgba(255,255,255,.02);padding:12px 14px}
+.hub-stats b{display:block;font:700 28px/1 var(--display);color:var(--ink)}
+.hub-stats div:nth-child(2) b{color:var(--crit)}.hub-stats div:nth-child(4) b{color:var(--high)}
+.hub-stats span{display:block;margin-top:6px;font:11px/1.2 var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)}
+.hub-list li{border-top:1px solid var(--line)}.hub-list li:last-child{border-bottom:1px solid var(--line)}
+.seo a.hub-row{display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:4px 12px;padding:11px 10px;color:var(--ink2);border-left:2px solid transparent}
+.seo a.hub-row:hover{text-decoration:none;background:rgba(143,211,244,.05);border-left-color:var(--ice)}
+.hub-row.p1{border-left-color:var(--crit)}
+.hub-row b{font:600 15px/1.2 var(--mono,monospace);color:var(--ink)}
+.hub-m{font:12px/1.3 var(--mono,monospace);color:var(--ink3);justify-self:end;text-align:right}
+.hub-t{grid-column:2/-1;font-size:14px;line-height:1.45;color:var(--ink2)}
+.hub-tags{display:flex;flex-wrap:wrap;gap:8px}
+.hub-tags>*{border:1px solid var(--line2);padding:5px 10px;font:12px/1.3 var(--mono,monospace);color:var(--ink)}
+.hub-tags i{font-style:normal;color:var(--ink3);margin-left:4px}
+.seo .hub-tags a{color:var(--ice)}.seo .hub-tags a:hover{text-decoration:none;border-color:var(--ice)}
+.hub-index{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(210px,100%),1fr));gap:8px}
+.hub-index.wide{grid-template-columns:minmax(0,1fr)}
+.seo .hub-index a{display:block;border:1px solid var(--line2);padding:12px 14px;height:100%}
+.seo .hub-index a:hover{text-decoration:none;border-color:var(--ice);background:rgba(143,211,244,.05)}
+.hub-index b{display:block;font:600 15px/1.25 var(--display);letter-spacing:.03em;color:var(--ink)}
+.hub-index span{display:block;margin-top:4px;font:12px/1.3 var(--mono,monospace);color:var(--ink3)}
+.hub-note{font:12px/1.5 var(--mono,monospace);color:var(--ink3);margin:6px 0 12px}
+.hub-pager{display:flex;justify-content:space-between;gap:10px;margin-top:32px;font:13px/1.3 var(--mono,monospace)}
+.hub-cta,.seo-cta{margin:28px 0}
+.seo-tags{display:flex;flex-wrap:wrap;gap:8px}.seo-tags a{border:1px solid var(--line2);padding:5px 10px;font:12px/1.3 var(--mono,monospace)}
+.hub-cta>span{display:block;margin-top:10px;font-size:13px;color:var(--ink3)}
+.hub-cta code{color:var(--ice)}
+.seo .hub-cta-main,.seo-cta>a,a.seo-cta{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 16px;padding:16px 18px;border:1px solid rgba(143,211,244,.35);
+  background:linear-gradient(90deg,rgba(143,211,244,.10),rgba(143,211,244,.02));color:var(--ink);text-decoration:none}
+.seo .hub-cta-main:hover,.seo-cta>a:hover,a.seo-cta:hover{text-decoration:none;border-color:var(--ice)}
+.hub-cta-main b,.seo-cta b{font:600 16px/1.3 var(--display);letter-spacing:.04em;color:var(--ink)}
+.hub-cta-main small,.seo-cta small{grid-column:1;font:12px/1.4 var(--mono,monospace);color:var(--ink3)}
+.hub-cta-main .go,.seo-cta .go{grid-column:2;grid-row:1/3;padding:8px 14px;background:var(--ice);color:#06222B;font:700 12px/1 var(--display);letter-spacing:.1em;text-transform:uppercase}
+.tg-cta{margin:18px 0 0}
+@media (max-width:760px){
+  .hub-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.hub-stats div:first-child{grid-column:1/-1}.hub-stats b{font-size:22px}
+  .seo a.hub-row{grid-template-columns:auto 1fr;padding:10px 6px}.hub-m{grid-column:1/-1;justify-self:start;text-align:left}.hub-t{grid-column:1/-1}
+  .seo .hub-cta-main,.seo-cta>a,a.seo-cta{grid-template-columns:1fr}.hub-cta-main .go,.seo-cta .go{grid-column:1;grid-row:auto;justify-self:start;margin-top:8px}
+}
