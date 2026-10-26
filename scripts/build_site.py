@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -215,7 +216,41 @@ def hub_item(rec: dict, row: list | None, prio, fx: dict | None, archived: bool 
             "score": float(fx.get("c") or rec.get("score") or 0) or None,
             "epss": row[5] if row and isinstance(row[5], (int, float)) else None,
             "kev": bool(kev) or bool(row and row[4]), "p": prio[0] if prio else None, "why": prio[1] if prio else "",
-            "date": seo.dates(rec)[0], "wdate": max(seo.dates(rec)[0], str(kev.get("date_added") or "")[:10], str(rec.get("window_date") or "")[:10]), "pairs": pairs, "weap": bool(fx.get("weap")), "poc": bool(fx.get("poc")), "archived": archived}
+            "date": seo.dates(rec)[0], "wdate": max(seo.dates(rec)[0], str(kev.get("date_added") or "")[:10], str(rec.get("window_date") or "")[:10]), "pairs": pairs, "weap": bool(fx.get("weap")), "poc": bool(fx.get("poc")), "archived": archived,
+            "cwe": [c for c in rec.get("cwe") or [] if isinstance(c, str) and re.fullmatch(r"CWE-\d{1,5}", c)][:6]}
+
+
+def llms_txt(manifest: dict, hubs: dict, count: int) -> str:
+    """Plain-text map of the site for AI assistants and answer engines (llmstxt.org)."""
+    t = manifest.get("totals") or {}
+    top = sorted([(f"product/{k}", v) for k, v in hubs["products"].items()] + [(f"vendor/{k}", v) for k, v in hubs["vendors"].items()],
+                 key=lambda kv: -len(kv[1]["items"]))[:15]
+    weak = list(hubs.get("weaknesses") or {})[:12]
+    lines = ["# SubZer0", "",
+             "> Free CVE tracker that ranks the last 30 days of vulnerabilities by what to patch first, using CISA KEV, "
+             "FIRST EPSS, public exploits (Exploit-DB, Metasploit, Nuclei) and CVSS. Data refreshes every 6 hours.", "",
+             f"Snapshot {str(manifest.get('generated_at') or '')[:16]} UTC: {t.get('cves') or 0:,} CVEs in the live window, "
+             f"{t.get('known_exploited') or 0} on CISA KEV, {count:,} CVE pages including the archive.", "",
+             "## Key pages", "",
+             f"- [CVE briefing]({SITE_URL}): what to patch today",
+             f"- [Research]({SITE_URL}research): search and filter every recent CVE",
+             f"- [Vendors and products]({SITE_URL}vendors): CVEs grouped by vendor and product",
+             f"- [Weekly recaps]({SITE_URL}weekly): the vulnerabilities that mattered each week",
+             f"- [Vulnerability types]({SITE_URL}weaknesses): common weaknesses (CWE) explained with live CVEs",
+             f"- [About]({SITE_URL}about): sources and ranking method", "",
+             "## Popular vendors and products", ""]
+    lines += [f"- [{v['name']}]({SITE_URL}{p}): {len(v['items']):,} CVEs" for p, v in top]
+    if weak:
+        lines += ["", "## Vulnerability types", ""]
+        lines += [f"- [{hub.CWE[c][0]} ({c})]({SITE_URL}weakness/{c.lower()})" for c in weak]
+    lines += ["", "## Data (JSON, free, no key)", "",
+              f"- [{SITE_URL}api/latest.json]({SITE_URL}api/latest.json): today's patch-now list and newest CVEs",
+              f"- {SITE_URL}api/cve/CVE-YYYY-NNNN.json: one CVE with CVSS, EPSS, KEV status, exploits and priority",
+              f"- [{SITE_URL}api/hubs.json]({SITE_URL}api/hubs.json): weekly recap and vendor/product index",
+              f"- [{SITE_URL}feed.xml]({SITE_URL}feed.xml): RSS feed of patch-now CVEs", "",
+              "## Optional", "",
+              "- [Telegram channel](https://t.me/RootAccessClub): daily alerts and weekly digest", ""]
+    return "\n".join(lines)
 
 
 def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[list], ctx: dict, summary: dict, archive: Path) -> int:
@@ -276,7 +311,8 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
         prio = (int(sig["p"]), str(sig.get("why") or "")) if sig.get("p") in (1, 2, 3, 4) else None
         arch_rows[cid] = (row, fx, prio)
         items.append(hub_item(rec, row, prio, fx, archived=True))
-    hubs = hub.build(items, window_start=str((manifest.get("window") or {}).get("start") or ""), today=datetime.now(timezone.utc).date())
+    hubs = hub.build(items, window_start=str((manifest.get("window") or {}).get("start") or ""), today=datetime.now(timezone.utc).date(),
+                     updated=str(manifest.get("generated_at") or ""))
     links = hubs["links"]
     (out / "api" / "hubs.json").write_text(json.dumps(hub.summary(hubs), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     cards = share_cards.render_all(out, items, hubs) if share_cards else set()
@@ -318,8 +354,15 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
         put_api(cve_api(rec, row, prio, fx, rec.get("last_seen")))
         entries.append((f"cve/{cid}", seo.dates(rec)[1] or None))
         count += 1
-    (out / "sitemap.xml").write_text(seo.sitemap(SITE_URL, entries), encoding="utf-8")
+    # one sitemap per page type (easier to read in Search Console), tied together by a sitemap index
+    pages = [e for e in entries if not e[0].startswith("cve/")]
+    cves = [e for e in entries if e[0].startswith("cve/")]
+    (out / "sitemap-pages.xml").write_text(seo.sitemap(SITE_URL, pages), encoding="utf-8")
+    (out / "sitemap-cves.xml").write_text(seo.sitemap(SITE_URL, cves), encoding="utf-8")
+    (out / "sitemap.xml").write_text(seo.sitemap_index(SITE_URL, [("sitemap-pages.xml", manifest.get("generated_at")),
+                                                                   ("sitemap-cves.xml", manifest.get("generated_at"))]), encoding="utf-8")
     (out / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}sitemap.xml\n", encoding="utf-8")
+    (out / "llms.txt").write_text(llms_txt(manifest, hubs, count), encoding="utf-8")
     return count
 
 

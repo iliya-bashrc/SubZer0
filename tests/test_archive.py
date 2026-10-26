@@ -40,7 +40,7 @@ class ArchiveTests(unittest.TestCase):
             build_site.build(ROOT / "site", ROOT / "public" / "snapshot", out, tmp / "a2")
             doc = (out / "cve" / "CVE-2001-99999.html").read_text(encoding="utf-8")
             self.assertIn('data-archived="CVE-2001-99999"', doc)
-            self.assertIn("cve/CVE-2001-99999</loc>", (out / "sitemap.xml").read_text(encoding="utf-8"))
+            self.assertIn("cve/CVE-2001-99999</loc>", (out / "sitemap-cves.xml").read_text(encoding="utf-8"))
 
     def test_verify_rejects_tampering_and_stray_files(self):
         with tempfile.TemporaryDirectory() as tmp:

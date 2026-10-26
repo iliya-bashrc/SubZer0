@@ -74,10 +74,18 @@ class ShellPolicyTests(unittest.TestCase):
             self.assertNotRegex(doc, r"<script(?![^>]*\b(src=|type=\"application/ld\+json\"))[^>]*>")
             for slug in ("research", "terminal", "dossier", "about"):
                 self.assertTrue((out / f"{slug}.html").is_file(), slug)
-            sitemap = (out / "sitemap.xml").read_text(encoding="utf-8")
-            self.assertIn(f"<loc>{build_site.SITE_URL}cve/{cid}</loc>", sitemap)
-            hubs = [p for p in out.glob("*/*.html") if p.parent.name in ("vendor", "product", "week")] + [out / "vendors.html", out / "weekly.html"]
-            self.assertEqual(sitemap.count("<url>"), len(pages) + 3 + len(hubs))
+            index = (out / "sitemap.xml").read_text(encoding="utf-8")
+            self.assertIn("<sitemapindex", index)
+            self.assertIn(f"<loc>{build_site.SITE_URL}sitemap-cves.xml</loc>", index)
+            cves = (out / "sitemap-cves.xml").read_text(encoding="utf-8")
+            self.assertIn(f"<loc>{build_site.SITE_URL}cve/{cid}</loc>", cves)
+            self.assertEqual(cves.count("<url>"), len(pages))
+            hubs = [p for p in out.glob("*/*.html") if p.parent.name in ("vendor", "product", "week", "weakness")] + [
+                out / f"{n}.html" for n in ("vendors", "weekly", "weaknesses")]
+            self.assertEqual((out / "sitemap-pages.xml").read_text(encoding="utf-8").count("<url>"), 3 + len(hubs))
+            llms = (out / "llms.txt").read_text(encoding="utf-8")
+            self.assertTrue(llms.startswith("# SubZer0"))
+            self.assertIn(f"{build_site.SITE_URL}api/latest.json", llms)
             self.assertIn("t.me/RootAccessClub", doc)  # Telegram call to action on every CVE page
 
     def test_hub_pages_are_crawlable_and_routable(self):
@@ -85,10 +93,10 @@ class ShellPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "_site"
             build_site.build(ROOT / "site", ROOT / "public" / "snapshot", out)
-            sitemap = (out / "sitemap.xml").read_text(encoding="utf-8")
+            sitemap = (out / "sitemap-pages.xml").read_text(encoding="utf-8")
             app = (ROOT / "site" / "app.js").read_text(encoding="utf-8")
             self.assertIn(hub_pages.STATIC_RE.pattern.replace("/", "\\/"), app)  # app and builder agree on hub paths
-            for name in ("vendors", "weekly"):
+            for name in ("vendors", "weekly", "weaknesses"):
                 doc = (out / f"{name}.html").read_text(encoding="utf-8")
                 self.assertIn(f'data-static="{name}"', doc)
                 self.assertIn(f"<loc>{build_site.SITE_URL}{name}</loc>", sitemap)
@@ -101,13 +109,19 @@ class ShellPolicyTests(unittest.TestCase):
             self.assertIn("api/hubs.json", app)
             weeks = sorted((out / "week").glob("*.html"))
             self.assertTrue(weeks)
-            for page in weeks[:3] + sorted((out / "vendor").glob("*.html"))[:3] + sorted((out / "product").glob("*.html"))[:3]:
+            weak = sorted((out / "weakness").glob("cwe-*.html"))
+            self.assertTrue(weak)
+            self.assertEqual({w["path"] for w in hubs["weaknesses"]}, {f"weakness/{p.stem}" for p in weak})
+            for page in weeks[:3] + sorted((out / "vendor").glob("*.html"))[:3] + sorted((out / "product").glob("*.html"))[:3] + weak[:3]:
                 path = f"{page.parent.name}/{page.stem}"
                 self.assertRegex(path, hub_pages.STATIC_RE)
                 doc = page.read_text(encoding="utf-8")
                 self.assertIn(f'<link rel="canonical" href="{build_site.SITE_URL}{path}">', doc)
                 self.assertIn('"@type":"CollectionPage"', doc)
                 self.assertIn('class="hub-row', doc)
+                if page.parent.name != "week" or "class=\"hub-faq\"" in doc:
+                    self.assertIn('"@type":"FAQPage"', doc)
+                    self.assertIn('class="hub-faq"', doc)
                 self.assertIn(f"<loc>{build_site.SITE_URL}{path}</loc>", sitemap)
                 self.assertNotRegex(doc, r"<script(?![^>]*\b(src=|type=\"application/ld\+json\"))[^>]*>")
 
@@ -123,6 +137,24 @@ class ShellPolicyTests(unittest.TestCase):
         self.assertIn("vendor/acme", paths)
         self.assertIn("week/2026-w43", paths)
         self.assertIn(("vendor/acme", "Acme"), res["links"]["CVE-2026-1010"])
+
+    def test_weakness_pages_need_enough_cves(self):
+        import hub_pages
+        from datetime import date
+        mk = lambda n, cwe: {"id": f"CVE-2026-{2000 + n}", "title": "Bug", "sev": "high", "score": 7.5, "epss": 0.2, "kev": n == 0, "p": 1 if n == 0 else 3,
+                             "why": "on CISA KEV" if n == 0 else "", "date": "2026-10-20", "pairs": [], "weap": False, "poc": False, "cwe": cwe}
+        items = [mk(i, ["CWE-79"]) for i in range(hub_pages.MIN_CWE)] + [mk(50 + i, ["CWE-89"]) for i in range(hub_pages.MIN_CWE - 1)]
+        res = hub_pages.build(items, window_start="2026-09-25", today=date(2026, 10, 25), updated="2026-10-25T06:00:00Z")
+        pages = {p[0]: p for p in res["pages"]}
+        self.assertIn("weakness/cwe-79", pages)
+        self.assertNotIn("weakness/cwe-89", pages)
+        self.assertIn("weaknesses", pages)
+        art, ld = pages["weakness/cwe-79"][3], pages["weakness/cwe-79"][4]
+        self.assertIn("How to prevent it", art)
+        self.assertIn("Updated <time", art)
+        self.assertTrue(any(x.get("@type") == "FAQPage" for x in ld))
+        self.assertIn(("weakness/cwe-79", hub_pages.CWE["CWE-79"][0]), res["links"]["CVE-2026-2000"])
+        self.assertEqual(hub_pages.summary(res)["weaknesses"][0]["path"], "weakness/cwe-79")
 
 
 if __name__ == "__main__":

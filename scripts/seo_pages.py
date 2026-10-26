@@ -208,6 +208,11 @@ def link_list(title: str, items: list[tuple[str, str, str]]) -> str:
     return f'<h2>{esc(title)}</h2><ul class="seo-list">{lis}</ul>'
 
 
+def sitemap_index(site_url: str, maps: list[tuple[str, str | None]]) -> str:
+    body = "".join(f"<sitemap><loc>{esc(site_url + p)}</loc>{f'<lastmod>{esc(m[:10])}</lastmod>' if m else ''}</sitemap>" for p, m in maps)
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{body}</sitemapindex>\n'
+
+
 def sitemap(site_url: str, entries: list[tuple[str, str | None]]) -> str:
     body = "".join(f"<url><loc>{esc(site_url + p)}</loc>{f'<lastmod>{esc(m[:10])}</lastmod>' if m else ''}</url>" for p, m in entries)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{body}</urlset>\n'

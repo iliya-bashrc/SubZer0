@@ -278,7 +278,7 @@ function renderHubs(){const el=document.getElementById('hubs');if(!el||!HUBS)ret
       <div class="hw-top">${w.top.slice(0,3).map(i=>`<div>${chip(i.sev==='unscored'?'none':i.sev)}<code>${esc(i.id)}</code><span>${esc(i.title)}</span></div>`).join('')}</div><span class="go">Read the recap →</span></a>`:''}
     <div class="hub-browse"><div class="sec-h"><h2>Browse by product</h2><span class="meta">ranked pages for what you run</span></div>
       <div class="hub-chips">${tp.map(t=>`<a href="${esc(t.path)}">${esc(t.name)}<i>${t.p1?`<em>${t.p1} P1</em> · `:''}${fmt(t.n)}</i></a>`).join('')}</div>
-      <div class="hub-more"><a href="vendors">All vendors &amp; products →</a><a href="weekly">Every weekly recap →</a></div></div></div>`}
+      <div class="hub-more"><a href="vendors">All vendors &amp; products →</a><a href="weekly">Every weekly recap →</a><a href="weaknesses">Vulnerability types →</a></div></div></div>`}
 function hubHint(){const el=document.getElementById('hubhint');if(!el)return;const q=(F.q||'').trim().toLowerCase();let t=null;
   if(HUBS&&q.length>=3&&!/[:<>=]/.test(q))t=HUBS.topics.find(x=>x.term===q||x.name.toLowerCase()===q)||HUBS.topics.find(x=>x.term&&x.term.startsWith(q)&&q.length>=4);
   el.innerHTML=t?`<a class="hub-hint" href="${esc(t.path)}"><b>${esc(t.name)}</b> has its own page: ${fmt(t.n)} CVEs${t.p1?`, ${t.p1} patch now`:''}, ranked by what to patch first <span>Open →</span></a>`:''}
@@ -286,7 +286,7 @@ const TGCTA='<a class="seo-cta tg-cta" href="https://t.me/RootAccessClub" target
 function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
     <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
-      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="vendors">Vendors</a><a href="weekly">Weekly</a><a href="https://t.me/SubZer0Robot" ${x}>Bot</a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
+      <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="vendors">Vendors</a><a href="weekly">Weekly</a><a href="weaknesses">Weaknesses</a><a href="https://t.me/SubZer0Robot" ${x}>Bot</a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
     <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
 const ago=iso=>{const t=Date.parse(iso);if(!t)return'';const m=Math.max(0,Math.round((Date.now()-t)/6e4));return m<1?'just now':m<60?m+'m ago':m<2880?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
 const lvTag=r=>r.lv?`<span class="lv" title="live record from ${esc(r.lv==='cve.org'?'CVE.org':r.lv==='ghsa'?'GitHub advisories':'CISA KEV')} — full enrichment arrives with the next snapshot">LIVE</span>`:'';
@@ -594,7 +594,7 @@ const sheet=document.getElementById('sheet'),back=document.getElementById('back'
 function openSheet(id,replace){if(!CVE_RE.test(id))return;const was=sheetOpen;if(!was)lastFocus=document.activeElement;sheet.dataset.id=id;sheet.dataset.page='';sheet.setAttribute('aria-label','Dossier');sheet.scrollTop=0;fillDossier(sheet,id,true);sheet.classList.add('on');back.classList.add('on');sheetOpen=true;syncBack();
   LS.set('last',id);const u=new URL('cve/'+id,BASE).href;replace||was?history.replaceState({sheet:1},'',u):history.pushState({sheet:1},'',u);{const t=(BYID.get(id)||(ARCH&&ARCH.id===id?ARCH:{})).t||'';document.title=id+(t?': '+(t.length>70?t.slice(0,69)+'…':t):' · SubZer0')};setTimeout(()=>sheet.focus({preventScroll:true}),50)}
 /* static hub page shipped in the HTML (vendor/<x>, product/<x>, week/<yyyy-wNN>, vendors, weekly) */
-const STATIC_RE=/^(vendors|weekly|(vendor|product)\/[a-z0-9][a-z0-9-]{0,60}|week\/\d{4}-w\d{2})$/;
+const STATIC_RE=/^(vendors|weekly|weaknesses|(vendor|product)\/[a-z0-9][a-z0-9-]{0,60}|week\/\d{4}-w\d{2}|weakness\/cwe-\d{1,5})$/;
 const STATIC=(()=>{const a=document.querySelector('article.seo[data-static]');return a&&STATIC_RE.test(a.dataset.static||'')?{path:a.dataset.static,html:a.outerHTML,t:a.dataset.title||'SubZer0'}:null})();
 let NF_PATH='';const PAGES={about:'About',keys:'Keyboard shortcuts','404':'Not found'};if(STATIC)PAGES.static=STATIC.t.replace(/ · SubZer0$/,'');
 function pageHTML(kind){const close='<button class="d-close" id="closeSheet">← Back · Esc</button>';
@@ -798,7 +798,7 @@ function route(){const rel=(location.pathname.startsWith(BASE.pathname)?location
 /* static archived dossier shipped in the page (CVEs that left the 30-day window) */
 const ARCH=(()=>{const a=document.querySelector('article.seo[data-archived]');return a&&CVE_RE.test(a.dataset.archived)?{id:a.dataset.archived,html:a.outerHTML,t:(a.querySelector('.seo-lede')||{}).textContent||''}:null})();
 /* ---------- boot screen: the wordmark fills as verified bytes arrive, then settles into the header ---------- */
-const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step(){},need(){},got(){},ok(){},done(){},fail(){}};if(!el)return nop;
+const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step(){},need(){},got(){},ok(){},done(){},fail(){},skip(){}};if(!el)return nop;
   el.classList.add('live');const de=document.documentElement,mark=document.getElementById('bootMark'),msg=document.getElementById('bootMsg'),pc=document.getElementById('bootPct');
   const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,t0=performance.now();
   let target=0,shown=0,need=0,have=0,live=true,fin=null,label='Loading',slow=setTimeout(()=>{label='Slow network…';say()},12000);
@@ -821,11 +821,14 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
     need(n){need=n||0;have=0;say(`Verifying 0.0/${mb(need)} MB`)},
     got(n){have+=n;if(need){set(.08+.76*Math.min(1,have/need));say(`Verifying ${mb(Math.min(have,need))}/${mb(need)} MB`)}},
     ok(){},
+    skip(){if(!el.isConnected)return;fin={p:Promise.resolve(),res(){},min:0};cleanup()},
     done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:RM?0:700};set(1);if(!live)finish();return p},
     fail(){if(!live&&!el.isConnected)return;el.classList.add('fade');setTimeout(cleanup,260)}}})();
 
 (async()=>{originGuard();renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
   document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;
+  /* hub pages are complete static HTML: show them right away instead of waiting for the data to verify */
+  const early=R.page==='static'&&!!STATIC;if(early){BOOT.skip();history.replaceState(null,'',routeURL());openPage('static')}
   BOOT.step('Connecting',.03);
   try{const m=await loadManifest();BOOT.step(`Snapshot ${String(m.generated_at).slice(0,16).replace('T',' ')} UTC`,.08);
     BOOT.need((m.search_index.bytes||0)+(m.poc_ids&&m.poc_ids.bytes||0)+(m.intel&&m.intel.bytes||0));
@@ -837,6 +840,7 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
   await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,1500))]);BOOT.done();
   requestAnimationFrame(()=>track.classList.remove('dragging'));
   if(R.cve){history.replaceState(null,'',routeURL());openSheet(R.cve)}
+  else if(early){}
   else if(R.page==='about'||R.page==='static'){history.replaceState(null,'',routeURL());openPage(R.page)}
   else if(R.page==='404'){const bad=location.href;NF_PATH=location.pathname.slice(BASE.pathname.length);history.replaceState(null,'',routeURL());openPage('404');history.replaceState({sheet:1},'',bad)}
   addEventListener('resize',renderNav);document.fonts&&document.fonts.ready.then(renderNav);
