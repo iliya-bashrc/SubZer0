@@ -71,11 +71,18 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(names, {"KV": "kv_namespace", "BOT_TOKEN": "secret_text",
                                  "WEBHOOK_SECRET": "secret_text", "SITE": "plain_text"})
         self.assertEqual(meta["main_module"], "bot.js")
+        admin = {b["name"]: b["text"] for b in deploy_bot.metadata("kvid", "123:abc", "4242")["bindings"] if b["type"] == "plain_text"}
+        self.assertEqual(admin["ADMIN_ID"], "4242")
+        self.assertNotIn("ADMIN_ID", {b["name"] for b in deploy_bot.metadata("kvid", "123:abc", "not-an-id")["bindings"]})
         cmds = [c for c, _d in deploy_bot.COMMANDS]
         self.assertIn("week", cmds)
         js = (ROOT / "worker/bot.js").read_text(encoding="utf-8")
         for c in cmds:  # every advertised command is handled
             self.assertIn(f"cmd === '{c}'", js)
+
+    def test_webhook_receives_buttons_and_inline_queries(self):
+        src = (ROOT / "scripts/deploy_bot.py").read_text(encoding="utf-8")
+        self.assertIn('"allowed_updates": ["message", "callback_query", "inline_query"]', src)
 
     def test_bot_workflow_is_pinned_and_read_only(self):
         import re
@@ -84,6 +91,61 @@ class DeployTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", wf)
         uses = re.findall(r"(?m)^\s+uses:\s+([^\s]+)", wf)
         self.assertTrue(uses and all(re.search(r"@[0-9a-f]{40}$", u) for u in uses), uses)
+
+
+class WorkerBehaviourTests(unittest.TestCase):
+    def test_worker_end_to_end_with_fake_telegram(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        r = subprocess.run([node, str(ROOT / "tests/bot_harness.mjs")], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertIn("bot harness ok", r.stdout)
+
+
+class ChannelButtonTests(unittest.TestCase):
+    def test_buttons_are_json_in_multipart_photo_posts(self):
+        import io
+        import json
+        import tempfile
+        from unittest import mock
+        import digest
+        seen = {}
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake(req, timeout=0):
+            seen["body"] = req.data
+            return Resp(b'{"ok": true}')
+        with tempfile.NamedTemporaryFile(suffix=".png") as f, mock.patch("urllib.request.urlopen", fake):
+            f.write(b"png")
+            f.flush()
+            self.assertTrue(digest.tg_call("sendPhoto", "t", {"chat_id": "1", "reply_markup": digest.week_buttons()}, photo=Path(f.name)))
+        part = seen["body"].split(b'name="reply_markup"\r\n\r\n')[1].split(b"\r\n")[0]
+        kb = json.loads(part)["inline_keyboard"]
+        self.assertEqual(kb[0][0]["style"], "primary")
+        self.assertIn("?start=watch", kb[1][0]["url"])
+        alert = nt.alert_buttons([row("CVE-2026-1111", "x")])["inline_keyboard"]
+        self.assertEqual(alert[0][0]["style"], "danger")
+
+    def test_blocked_users_are_dropped_from_watchlists(self):
+        import os
+        from unittest import mock
+        env = {"CLOUDFLARE_API_TOKEN": "t", "CLOUDFLARE_ACCOUNT_ID": "a" * 32}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(nt, "load_watches", return_value={"7": ["fortinet"], "8": ["fortinet"]}), \
+                mock.patch.object(nt, "send_dm", side_effect=[(False, 403), (True, 200)]), \
+                mock.patch.object(nt, "kv_namespace", return_value="ns"), \
+                mock.patch.object(nt, "drop_watch", return_value=True) as drop, mock.patch.object(nt.time, "sleep"):
+            nt.send_watch_dms([row("CVE-2026-1111", "Fortinet FortiOS bug", "Fortinet FortiOS")], {}, "tok", dry=False)
+        drop.assert_called_once_with("t", "a" * 32, "ns", "7")
 
 
 if __name__ == "__main__":

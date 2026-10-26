@@ -196,6 +196,7 @@ def cve_api(rec: dict, row: list | None, prio, fx, archived_at: str | None = Non
         "why": prio[1] if prio else "",
         "published": seo.dates(rec)[0],
         "products": product[:120],
+        "cwe": [c for c in rec.get("cwe") or [] if isinstance(c, str) and re.fullmatch(r"CWE-\d{1,5}", c)][:4],
         "url": f"{SITE_URL}cve/{rec['id']}",
     }
     if archived_at:

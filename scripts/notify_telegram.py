@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -76,6 +77,11 @@ def message(new: list[list], ctx: dict, limit: int = MAX_ITEMS) -> str:
     return "\n".join(lines)
 
 
+def alert_buttons(new: list[list]) -> dict:
+    first = [("\U0001F4C2 " + new[0][0], f"{SITE_URL}cve/{new[0][0]}", "danger")] if new else []
+    return digest.buttons(first + [("\U0001F3AF All patch-now", f"{SITE_URL}research?view=p1", "primary")], [digest.ALERTS_BTN])
+
+
 def caption(new: list[list], ctx: dict) -> str:
     """The alert text, trimmed to fit Telegram's 1024-character photo caption."""
     for limit in range(min(MAX_ITEMS, len(new)), 0, -1):
@@ -118,6 +124,45 @@ def _cf(token: str, path: str, raw: bool = False):
     with urllib.request.urlopen(req, timeout=20) as r:
         body = r.read(2_000_000)
     return body if raw else json.loads(body)
+
+
+def kv_namespace(token: str, account: str) -> str | None:
+    return next((n["id"] for n in _cf(token, f"/accounts/{account}/storage/kv/namespaces?per_page=100").get("result") or []
+                 if n.get("title") == KV_TITLE), None)
+
+
+def drop_watch(token: str, account: str, ns: str, chat: str) -> bool:
+    """Delete w:<chat> (the user blocked the bot or deleted the chat)."""
+    req = urllib.request.Request(f"{CF_API}/accounts/{account}/storage/kv/namespaces/{ns}/values/{urllib.parse.quote('w:' + chat)}",
+                                 method="DELETE", headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def send_dm(token: str, chat: str, text: str, markup: dict) -> tuple[bool, int]:
+    """sendMessage that reports the HTTP status (403 = blocked) and waits out one 429."""
+    body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True, "reply_markup": markup}).encode()
+    for attempt in range(2):
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return bool(json.load(r).get("ok")), 200
+        except urllib.error.HTTPError as exc:
+            try:
+                wait = int((json.load(exc).get("parameters") or {}).get("retry_after") or 0)
+            except Exception:
+                wait = 0
+            if exc.code == 429 and attempt == 0 and 0 < wait <= 30:
+                time.sleep(wait)
+                continue
+            return False, exc.code
+        except Exception:
+            return False, 0
+    return False, 429
 
 
 def load_watches(token: str, account: str) -> dict[str, list[str]]:
@@ -172,6 +217,13 @@ def watch_text(hits: list[tuple[list, str]], ctx: dict) -> str:
     return "\n".join(lines)
 
 
+def watch_buttons(hits: list[tuple[list, str]]) -> dict:
+    r = hits[0][0]
+    return {"inline_keyboard": [[{"text": f"\U0001F4C2 {r[0]}", "web_app": {"url": f"{SITE_URL}cve/{r[0]}"}, "style": "danger"}],
+                                [{"text": "\U0001F441 My watchlist", "callback_data": "l", "style": "success"},
+                                 {"text": "\U0001F3AF Patch now", "callback_data": "t:0"}]]}
+
+
 def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool) -> None:
     cf_token, account = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(), os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
     if not cf_token or not re.fullmatch(r"[0-9a-f]{32}", account):
@@ -182,16 +234,24 @@ def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool) -> None:
         print(f"Watchlists unavailable: {type(exc).__name__}")
         return
     hits = watch_matches(new, watches, ctx)
-    sent = 0
+    sent = dropped = 0
+    ns = None
     for chat, items in list(hits.items())[:MAX_DMS]:
         text = watch_text(items, ctx)
         if dry:
             print(f"[watch DM to {chat}]\n{text}")
             continue
-        if digest.tg_call("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}):
+        ok, code = send_dm(token, chat, text, watch_buttons(items))
+        if ok:
             sent += 1
+        elif code == 403 and not chat.startswith("-"):  # blocked: stop trying every 6 hours
+            try:
+                ns = ns or kv_namespace(cf_token, account)
+                dropped += bool(ns and drop_watch(cf_token, account, ns, chat))
+            except Exception:
+                pass
         time.sleep(0.05)
-    print(f"Watchlists: {len(watches)} users, {len(hits)} matched, {sent} DMs sent")
+    print(f"Watchlists: {len(watches)} users, {len(hits)} matched, {sent} DMs sent, {dropped} blocked removed")
 
 
 def main() -> int:
@@ -249,11 +309,12 @@ def main() -> int:
         return 0
     ok = False
     if card:
-        ok = digest.tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption(new, ctx), "parse_mode": "HTML"},
+        ok = digest.tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption(new, ctx), "parse_mode": "HTML",
+                                                 "reply_markup": alert_buttons(new)},
                             photo=card)
     if not ok:  # no banner (or the photo was rejected): plain text, exactly as before
         ok = digest.tg_call("sendMessage", token, {"chat_id": chat, "text": message(new, ctx), "parse_mode": "HTML",
-                                                   "disable_web_page_preview": True})
+                                                   "disable_web_page_preview": True, "reply_markup": alert_buttons(new)})
     print(f"Announced {len(new)} CVEs" if ok else "Telegram rejected the message")
     if args.sample <= 0:
         send_watch_dms(new, ctx, token, dry=False)

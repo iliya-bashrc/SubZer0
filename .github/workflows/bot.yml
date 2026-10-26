@@ -2,6 +2,7 @@ name: Deploy Telegram bot
 
 # Publishes worker/bot.js to the Cloudflare Worker "subzer0" and points @SubZer0Robot's webhook at it.
 # Needs secrets CLOUDFLARE_API_TOKEN (template "Edit Cloudflare Workers"), CLOUDFLARE_ACCOUNT_ID, TELEGRAM_BOT_TOKEN.
+# Optional TELEGRAM_ADMIN_ID (send /myid to the bot): enables /stats and error alerts by DM.
 on:
   workflow_dispatch:
   push:
@@ -30,4 +31,5 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
         run: python3 scripts/deploy_bot.py

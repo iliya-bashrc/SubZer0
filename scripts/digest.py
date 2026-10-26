@@ -269,6 +269,26 @@ def render_card(markup: str, out: Path) -> bool:
 
 
 # ------------------------------------------------------------------ telegram
+BOT_URL = "https://t.me/SubZer0Robot"
+
+
+def buttons(*rows: list[tuple[str, str, str]]) -> dict:
+    """Inline keyboard of URL buttons; style is "danger" (red), "success" (green), "primary" (blue) or "" (default)."""
+    return {"inline_keyboard": [[{"text": t, "url": u, **({"style": s} if s else {})} for t, u, s in row] for row in rows if row]}
+
+
+ALERTS_BTN = ("🔔 Alerts for your stack", f"{BOT_URL}?start=watch", "success")
+
+
+def week_buttons() -> dict:
+    y, w, _ = datetime.now(timezone.utc).isocalendar()
+    return buttons([("📅 Read the weekly recap", f"{SITE_URL}week/{y}-w{w:02d}", "primary")], [ALERTS_BTN])
+
+
+def daily_buttons() -> dict:
+    return buttons([("🎯 Patch-now list", f"{SITE_URL}research?view=p1", "danger")], [ALERTS_BTN])
+
+
 def tg_call(method: str, token: str, fields: dict, photo: Path | None = None) -> bool:
     url = f"https://api.telegram.org/bot{token}/{method}"
     if photo is None:
@@ -278,6 +298,7 @@ def tg_call(method: str, token: str, fields: dict, photo: Path | None = None) ->
         b = uuid.uuid4().hex
         chunks = []
         for k, v in fields.items():
+            v = json.dumps(v) if isinstance(v, (dict, list)) else v
             chunks.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
         chunks.append(f'--{b}\r\nContent-Disposition: form-data; name="photo"; filename="weekly.png"\r\n'
                       f"Content-Type: image/png\r\n\r\n".encode() + photo.read_bytes() + b"\r\n")
@@ -334,7 +355,7 @@ def main() -> int:
             print(text)
             return 0
         ok = tg_call("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML",
-                                            "disable_web_page_preview": True})
+                                            "disable_web_page_preview": True, "reply_markup": daily_buttons()})
         print("digest: daily posted" if ok else "digest: daily FAILED")
         return 0 if ok else 1
 
@@ -362,10 +383,10 @@ def main() -> int:
         print(f"digest: card {'rendered at ' + str(card) if have_card else 'not rendered'}")
         return 0
     if have_card:
-        ok = tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption, "parse_mode": "HTML"}, photo=card)
+        ok = tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption, "parse_mode": "HTML", "reply_markup": week_buttons()}, photo=card)
     else:
         ok = tg_call("sendMessage", token, {"chat_id": chat, "text": caption, "parse_mode": "HTML",
-                                            "disable_web_page_preview": True})
+                                            "disable_web_page_preview": True, "reply_markup": week_buttons()})
     print("digest: weekly posted" if ok else "digest: weekly FAILED")
     return 0 if ok else 1
 
