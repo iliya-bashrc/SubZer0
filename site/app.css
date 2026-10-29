@@ -349,6 +349,7 @@ sup{font-size:.6em;color:var(--ink3);margin-left:1px}
 .cr-links a{color:var(--ink2)}.cr-links a:hover{color:var(--ice)}
 .credits kbd,.keys kbd{font:500 11px var(--mono);padding:2px 6px;background:var(--film3);color:var(--ink2)}
 .cr-c{margin-top:12px;font:400 11px var(--mono);color:var(--ink3)}
+.cr-thx{font-size:11px;color:var(--ink3)}.credits .cr-thx a{color:var(--ink2)}
 .d-body .credits{margin-top:48px}
 .d-hero.pg{padding-top:84px}.d-hero.pg .lead{max-width:560px}
 .keys{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:14px 20px;font-size:14px}.keys dt{text-align:right}.keys dd{color:var(--ink2)}
@@ -512,7 +513,7 @@ html.booting .top .brand{visibility:hidden}
 @media (max-width:760px){.boot-mark{--s:1.6}}
 .seo-arch{border-left:2px solid var(--ice);padding:8px 14px;background:rgba(143,211,244,.06);color:var(--ink);font-size:14px}
 .sheet .seo{padding-top:72px}
-/* SubZer0 © 2026 @BugCod3 & @RootAccessClub — All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
+/* SubZer0 © 2026 @RootAccessClub — All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
 :root{--sz-origin:"iliya-bashrc.github.io/SubZer0"}
 .sz-copy{position:sticky;top:0;z-index:90;padding:9px 16px;background:var(--crit);color:#fff;font:600 13px var(--sans);text-align:center}
 .sz-copy a{color:#fff;text-decoration:underline}

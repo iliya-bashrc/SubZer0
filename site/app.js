@@ -9,7 +9,7 @@ const safeUrl=u=>{try{const x=new URL(u);return x.protocol==='https:'||x.protoco
 const CVE_RE=/^CVE-\d{4}-\d{4,}$/;
 /* dates come from feeds: keep only a clean ISO date/time so they are always safe to print */
 const isoD=v=>(String(v??'').match(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?/)||[''])[0];
-/* Provenance. SubZer0 © 2026 @BugCod3 & @RootAccessClub — source-available, All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
+/* Provenance. SubZer0 © 2026 @RootAccessClub — source-available, All Rights Reserved. Official build: https://iliya-bashrc.github.io/SubZer0/ */
 const SZ_ORIGIN=atob('aWxpeWEtYmFzaHJjLmdpdGh1Yi5pbw=='),SZ_HOME='https://'+SZ_ORIGIN+'/SubZer0/',SZ_BUILD='sz0-ib-'+(0x5a0e).toString(36);
 const OFFICIAL=[SZ_ORIGIN,'localhost','127.0.0.1',''].includes(location.hostname);
 /* Privacy-friendly page counts (GoatCounter: no cookies, no personal data). Only on the official site, one
@@ -70,7 +70,7 @@ function originGuard(){document.documentElement.style.setProperty('--sz-build',`
   const b=document.createElement('div');b.id='szCopy';b.className='sz-copy';b.setAttribute('role','alert');
   b.innerHTML=`Unofficial copy of SubZer0 — data here may be stale or altered. Original: <a href="${SZ_HOME}" rel="noopener">${esc(SZ_HOME.replace('https://',''))}</a>`;
   document.body.prepend(b)}
-try{console.log('%cSubZer0%c  © 2026 @BugCod3 & @RootAccessClub · '+SZ_HOME+'\nSource-available, All Rights Reserved — copying or re-hosting without permission is not allowed.','font:700 18px monospace;color:#7fd4ff','font:12px monospace;color:inherit')}catch{}
+try{console.log('%cSubZer0%c  © 2026 @RootAccessClub · '+SZ_HOME+'\nSource-available, All Rights Reserved — copying or re-hosting without permission is not allowed.','font:700 18px monospace;color:#7fd4ff','font:12px monospace;color:inherit')}catch{}
 const SEV={critical:['crit','Critical'],high:['high','High'],medium:['med','Medium'],low:['low','Low'],none:['none','Unscored'],unknown:['none','Unscored']};
 const chip=s=>`<span class="chip ${SEV[s][0]}">${SEV[s][1]}</span>`;
 /* Priority rules. Mirrored in scripts/build_site.py (priority_reason) — keep them in sync. */
@@ -296,7 +296,7 @@ function hubHint(){const el=document.getElementById('hubhint');if(!el)return;con
 const TGCTA='<a class="seo-cta tg-cta" href="https://t.me/RootAccessClub" target="_blank" rel="noopener"><b>🔔 Get patch-now alerts on Telegram</b><small>Exploited and weaponized CVEs as they land · @RootAccessClub</small><span class="go">Join →</span></a>';
 function credits(){const y=Math.max(2026,new Date().getUTCFullYear()),x='target="_blank" rel="noopener noreferrer"';
   return `<footer class="credits" aria-label="Credits">
-    <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>by <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> &amp; <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span></div>
+    <div class="cr-row"><div class="cr-by"><span class="cr-h">SubZer0</span><span>made by <a href="https://t.me/RootAccessClub" ${x}>@RootAccessClub</a></span><span class="cr-thx">thanks to <a href="https://t.me/BugCod3" ${x}>@BugCod3</a> for the help</span></div>
       <nav class="cr-links" aria-label="Footer"><a href="about" data-page="about">About</a><a href="#" data-page="keys">Shortcuts <kbd>?</kbd></a><a href="vendors">Vendors</a><a href="weekly">Weekly</a><a href="weaknesses">Weaknesses</a><a href="https://t.me/SubZer0Robot" ${x}>Bot</a><a href="feed.xml" ${x}>RSS</a><a href="api/latest.json" ${x}>API</a><a href="https://github.com/iliya-bashrc/SubZer0" ${x}>GitHub</a></nav></div>
     <div class="cr-c">© ${y} SubZer0 · for learning and defense only · GitHub PoCs are untrusted code</div></footer>`}
 const ago=iso=>{const t=Date.parse(iso);if(!t)return'';const m=Math.max(0,Math.round((Date.now()-t)/6e4));return m<1?'just now':m<60?m+'m ago':m<2880?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
@@ -725,7 +725,7 @@ async function boot(){document.getElementById('to').innerHTML='';busy=true;docum
     ...(D.live?[`<div class="ln"><span class="${D.live.em.some(e=>e.level==='p0')?'t-warn">[ WARN ]':'t-ok">[  OK  ]'}</span> Early warning <span class="t-dim">${D.live.em.length} signals · ${D.live.n} live CVEs · type ./early</span></div>`]:[]),
     `<div class="ln"><span class="t-ok">[  OK  ]</span> Started live watcher <span class="t-dim">polling every 60s</span></div>`],110);
   print(`<pre class="banner" aria-label="SubZer0">${BANNER}</pre>`);sizeBanner();
-  await lines([`<div class="ln t-dim">made by <span class="t-ice">@BugCod3</span> and <span class="t-ice">@RootAccessClub</span>. for learning, not for breaking things.</div>`,
+  await lines([`<div class="ln t-dim">made by <span class="t-ice">@RootAccessClub</span>. thanks to <span class="t-ice">@BugCod3</span> for the help. for learning, not for breaking things.</div>`,
     `<div class="ln">lost? type <span class="t-ice">help</span>.</div>`,`<div class="ln"> </div>`],60);
   busy=false;document.getElementById('tin').classList.remove('busy');if(queue.length){const [a,b]=queue.shift();exec(a,b)}}
 const sevc=s=>SEV[s][0]==='none'?'ink3':SEV[s][0];
@@ -736,7 +736,7 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
   const kv=(a,b)=>`<span class="t-ice">${a}</span><span>${b}</span>`;
   if(k==='./info'){print(`<div class="neo"><pre class="banner">${ZERO}</pre><div class="tgrid">
     <span class="t-ice" style="grid-column:1/-1">user@subzer0</span><span class="t-dim" style="grid-column:1/-1">────────────</span>
-    ${kv('OS','SubZer0 OS 2.0 LTS')}${kv('Shell','sz-sh 0.1')}${kv('Window','30 days · rolling')}${kv('CVEs',D.totals.cves.toLocaleString())}${kv('Feeds','NVD · GHSA · KEV · EPSS · Exploit-DB')}${D.intel?kv('Intel','SSVC · PoC-in-GitHub · MSF · Nuclei · chatter'):''}${kv('Refresh','6h · live diff 60s')}${kv('Creators','@BugCod3 · @RootAccessClub')}${kv('Use','learning only')}
+    ${kv('OS','SubZer0 OS 2.0 LTS')}${kv('Shell','sz-sh 0.1')}${kv('Window','30 days · rolling')}${kv('CVEs',D.totals.cves.toLocaleString())}${kv('Feeds','NVD · GHSA · KEV · EPSS · Exploit-DB')}${D.intel?kv('Intel','SSVC · PoC-in-GitHub · MSF · Nuclei · chatter'):''}${kv('Refresh','6h · live diff 60s')}${kv('Made by','@RootAccessClub')}${kv('Thanks','@BugCod3')}${kv('Use','learning only')}
     <span style="grid-column:1/-1" class="swatch">${['crit','high','med','low','info','ice','strip','ink'].map(v=>`<i style="background:var(--${v})"></i>`).join('')}</span></div></div>`);}
   else if(k==='./help'||k==='help'){await lines([`<div class="ln t-dim">commands:</div>`,`<div class="tgrid">${CMDS.map(([x,d])=>`<span class="t-ice">${x}</span><span class="t-dim">${d}</span>`).join('')}</div>`,`<div class="tgrid" style="margin-top:8px">${[['cve <id>','details for one CVE'],['search <query>','same syntax as the search box'],['watch <id>','add to your watchlist'],['watchlist','what you are watching'],['stack add <name>','tell it what you run'],['export csv|json','download the current data'],['search msf:yes','weaponized in Metasploit'],['search buzz>20 patch:no','loud and unpatched']].map(([a,b])=>`<span class="t-ice">${esc(a)}</span><span class="t-dim">${b}</span>`).join('')}</div><div class="ln t-dim">also: whoami · ls · date · uname -a · history · banner</div>`])}
   else if(k==='./latest'){print(`<div class="ln t-dim">pulling the latest…</div>`);if(!reduce)await wait(260);

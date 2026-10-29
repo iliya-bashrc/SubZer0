@@ -236,15 +236,11 @@ python -m unittest discover -s tests                         # tests
 
 <div align="center">
 
-<img src="docs/assets/collab.svg" alt="RootAccessClub × BugCod3" width="100%">
+<a href="https://t.me/RootAccessClub"><img src="docs/assets/channel-rootaccessclub.svg" alt="Join @RootAccessClub on Telegram" width="60%"></a>
 
-<br><br>
+<sub>Made and maintained by <b>@RootAccessClub</b>. New CVE drops, write-ups and the occasional rant.</sub>
 
-<a href="https://t.me/RootAccessClub"><img src="docs/assets/channel-rootaccessclub.svg" alt="Join @RootAccessClub on Telegram" width="48%"></a>
-&nbsp;
-<a href="https://t.me/BugCod3"><img src="docs/assets/channel-bugcod3.svg" alt="Join @BugCod3 on Telegram" width="48%"></a>
-
-<sub>Built and maintained by <b>@RootAccessClub</b> × <b>@BugCod3</b>. New CVE drops, write-ups and the occasional rant.</sub>
+<sub>Thanks to <a href="https://t.me/BugCod3">@BugCod3</a> for the help along the way.</sub>
 
 </div>
 
@@ -280,5 +276,5 @@ SubZer0 is built for **education and defensive research**. Don't use any informa
 
 <div align="center">
 <br>
-<sub>© 2026 @BugCod3 & @RootAccessClub — All Rights Reserved · <a href="LICENSE">Proprietary License</a></sub>
+<sub>© 2026 @RootAccessClub — All Rights Reserved · <a href="LICENSE">Proprietary License</a></sub>
 </div>
