@@ -49,3 +49,9 @@ jobs:
           node --check site/sw.js
           python scripts/build_site.py --out "$RUNNER_TEMP/_site"
           test -f "$RUNNER_TEMP/_site/404.html" && test -f "$RUNNER_TEMP/_site/feed.xml" && test -f "$RUNNER_TEMP/_site/snapshot/manifest.json"
+
+      - name: Size budgets (what a first visit downloads)
+        run: python scripts/check_budgets.py --site "$RUNNER_TEMP/_site"
+
+      - name: Slow-phone speed check (headless Chrome, 1.6 Mbps / 150 ms / 4x CPU)
+        run: python scripts/speed_check.py --site "$RUNNER_TEMP/_site" --chrome google-chrome --budget 6
