@@ -498,6 +498,7 @@ function research(){
 const VPRED={all:()=>true,p1:r=>r.P[0]===1,trend:r=>r.b>0,weap:r=>!!r.w,nopatch:r=>r.P[0]<=2&&!r.f&&r.L>=1,stack:r=>inStack(r),watch:r=>ST.watch.has(r.id)};
 const xcell=r=>r.L===3?'<span class="lv l3" title="exploited in the wild">ITW</span>':r.L===2?`<span class="lv l2" title="${r.m?'Metasploit module':''}${r.m&&r.n?' + ':''}${r.n?'Nuclei template':''}">${r.m?'MSF':'NUC'}</span>`:r.L===1?'<span class="poc">POC</span>':'<span class="muted">—</span>';
 const buzzTag=r=>r.b>0?`<span class="buzz" title="chatter score ${r.b}/100">▲ ${r.b}</span>`:'';
+const NARROW=matchMedia('(max-width:820px)');NARROW.addEventListener('change',()=>{if(document.getElementById('tb'))draw()});
 function draw(){if(!document.getElementById('views'))return;
   const VW=[['all','All',rows.length],['p1','Patch now',rows.filter(r=>r.P[0]===1).length],...(D.intel?[['trend','Trending',rows.filter(VPRED.trend).length],['weap','Weaponized',rows.filter(VPRED.weap).length],['nopatch','No patch yet',rows.filter(VPRED.nopatch).length]]:[]),['stack','My stack',rows.filter(inStack).length],['watch','Watchlist',rows.filter(r=>ST.watch.has(r.id)).length]];
   document.getElementById('views').innerHTML=VW.map(([k,l,n])=>`<button data-v="${k}" aria-pressed="${F.view===k}">${l}<small>${n}</small></button>`).join('');
@@ -517,12 +518,15 @@ function draw(){if(!document.getElementById('views'))return;
   const list=LIST=rows.filter(r=>vp(r)&&(!F.sev.size||F.sev.has(r.s))&&(!F.kev||r.k)&&(!F.poc||r.x)&&(!F.epss||(r.e||0)>=.1)&&qp(r)).sort(F.view==='trend'&&F.sort==='P'?so.b:so[F.sort]||so.P);
   document.querySelectorAll('th[data-s]').forEach(th=>th.classList.toggle('sorted',th.dataset.s===F.sort));{const ss=document.getElementById('sortSel');if(ss&&ss.value!==F.sort)ss.value=F.sort}
   const shown=list.slice(0,SHOWN);
-  document.getElementById('tb').innerHTML=shown.map(r=>`<tr data-cve="${r.id}"><td><span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></td><td class="t-id">${r.id}${ST.watch.has(r.id)?'<span class="star" title="watching">★</span>':''}</td>
+  /* Only the layout on screen gets built: phones see cards, wider screens the table. Building both doubled the DOM. */
+  const nar=NARROW.matches;
+  document.getElementById(nar?'tb':'cards').innerHTML='';
+  if(!nar)document.getElementById('tb').innerHTML=shown.map(r=>`<tr data-cve="${r.id}"><td><span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span></td><td class="t-id">${r.id}${ST.watch.has(r.id)?'<span class="star" title="watching">★</span>':''}</td>
     <td><div class="t-title">${r.T}</div><div class="code t-prod">${r.p?r.Pr:'—'}${inStack(r)?'<span class="mine">your stack</span>':''}${buzzTag(r)}</div></td><td>${chip(r.s)}</td>
     <td class="num" style="font-size:16px;font-weight:600">${r.c>0?r.c.toFixed(1)+(r.ca?'<sup title="NVD has not scored it; CISA ADP score">*</sup>':''):'<span class="muted">—</span>'}</td>
     <td><div class="epss">${r.e!=null?(r.e*100).toFixed(2)+'%':'<span class="muted">—</span>'}<span class="bar"><i style="width:${(r.e||0)*100}%"></i></span></div></td>
     <td>${r.k?'<span class="kev">KEV</span>':'<span class="muted">—</span>'}</td><td>${xcell(r)}</td><td class="mono muted">${r.d}</td></tr>`).join('');
-  document.getElementById('cards').innerHTML=shown.map(r=>`<button class="card" data-cve="${r.id}"><div class="row">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span>${r.k?'<span class="kev">KEV</span>':''}${r.L===2?xcell(r):r.x?'<span class="poc">POC</span>':''}${buzzTag(r)}<span class="mono muted" style="margin-left:auto;font-size:12px">${r.d.slice(5)}</span></div>
+  if(nar)document.getElementById('cards').innerHTML=shown.map(r=>`<button class="card" data-cve="${r.id}"><div class="row">${chip(r.s)}<span class="chip ${r.P[0]===1?'crit':r.P[0]===2?'high':'none'}">P${r.P[0]}</span>${r.k?'<span class="kev">KEV</span>':''}${r.L===2?xcell(r):r.x?'<span class="poc">POC</span>':''}${buzzTag(r)}<span class="mono muted" style="margin-left:auto;font-size:12px">${r.d.slice(5)}</span></div>
     <div class="t-id" style="margin-top:10px">${r.id}${ST.watch.has(r.id)?'<span class="star">★</span>':''}${inStack(r)?'<span class="mine">your stack</span>':''}</div><div class="t-title">${r.T}</div><div class="m"><span>CVSS ${r.c>0?r.c.toFixed(1)+(r.ca?'*':''):'—'}</span><span>EPSS ${r.e!=null?(r.e*100).toFixed(1)+'%':'—'}</span></div></button>`).join('');
   document.getElementById('cnt').textContent=`showing ${fmt(shown.length)} of ${fmt(list.length)} matches · ${fmt(rows.length)} CVEs in the window`;
   const mb=document.getElementById('more');mb.hidden=list.length<=SHOWN;mb.textContent=`Show ${fmt(Math.min(200,list.length-SHOWN))} more`;
