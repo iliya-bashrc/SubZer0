@@ -1,0 +1,25 @@
+name: Apply app.js patch (one-off)
+on:
+  push:
+    branches: [fast-briefing]
+    paths: [".github/patches/app.patch"]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fast-briefing
+      - name: Apply and verify
+        run: |
+          git apply .github/patches/app.patch
+          echo "1f9dd096c38b89d5c25a4143f35bc42a6e34fe5de63638444772e6f19a0a5b47  site/app.js" | sha256sum -c -
+          node --check site/app.js
+          git rm -q .github/patches/app.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/app.js
+          git commit -m "Fast first paint: Briefing renders from the small signed briefing, full index verified in the background"
+          git push origin HEAD:fast-briefing
