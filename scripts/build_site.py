@@ -19,6 +19,7 @@ from email.utils import format_datetime
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import briefing as brief
 import hub_pages as hub
 import seo_pages as seo
 import verify_data_snapshot as verifier
@@ -167,8 +168,11 @@ def build(site: Path, snapshot: Path, out: Path, archive: Path | None = None) ->
     (out / "api").mkdir(exist_ok=True)
     (out / "api" / "latest.json").write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (out / "feed.xml").write_text(rss(summary), encoding="utf-8")
+    brief_bytes = brief.write(out, manifest, rows, ctx, _read_verified(snapshot, manifest.get("intel")), facts, priority)
+    if brief_bytes > brief.MAX_BYTES:
+        raise SystemExit(f"brief/briefing.json is {brief_bytes:,} bytes, over the {brief.MAX_BYTES:,} budget")
     pages = write_seo(out, shell, snapshot, manifest, rows, ctx, summary, archive if archive is not None else ROOT / "public" / "archive")
-    print(f"Built {out}: {len(rows)} CVEs, {len(summary['patch_now'])} in the patch-now feed, {pages} static CVE pages")
+    print(f"Built {out}: {len(rows)} CVEs, {len(summary['patch_now'])} in the patch-now feed, {pages} static CVE pages, briefing {brief_bytes:,} bytes")
 
 
 def cve_api(rec: dict, row: list | None, prio, fx, archived_at: str | None = None) -> dict:
