@@ -821,24 +821,34 @@ async function fullLoad(m){const b=LITE;try{const x=await loadAll(m);const bad=b
     LITE=null;adopt(x);research();rerender();ensure(cur);lastPoll=Date.now();
     if(focused){const qi=document.getElementById('q');if(qi){qi.focus();qi.setSelectionRange(qi.value.length,qi.value.length)}}}
   catch(e){LITE=null;bootError(e);const f=document.getElementById('fullMsg');if(f)f.innerHTML=`<span style="color:var(--crit)">Couldn't verify the full index (${esc(e.message)}).</span>`}}
+/* page-shaped placeholder shown while the verified data is on its way (no fake numbers, nothing clickable) */
+function skeleton(){const b=(w,h,c='')=>`<i class="sk${c}" style="width:${w};height:${h}px"></i>`;
+  return `<div class="wrap skel" aria-hidden="true"><div class="sk-hero">${b('120px',22,' chip')}${b('min(520px,80%)',64)}${b('min(640px,92%)',16)}${b('min(460px,70%)',16)}<div class="code sk-note">fetching manifest · checking sha256…</div></div>
+    <div class="stats">${Array.from({length:6},()=>`<div class="stat">${b('84px',18,' chip')}${b('70%',34)}${b('55%',12)}</div>`).join('')}</div>
+    <div class="cols"><section>${b('140px',14)}${Array.from({length:5},()=>`<div class="sk-row">${b('34px',30)}<div>${b('62%',14)}${b('88%',12)}</div>${b('80px',12)}</div>`).join('')}</section>
+      <section>${b('110px',14)}${Array.from({length:5},()=>`<div class="sk-row f">${b('100%',14)}${b('76%',12)}</div>`).join('')}</section></div></div>`}
 /* ---------- boot screen: the wordmark fills as verified bytes arrive, then settles into the header ---------- */
 const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step(){},need(){},got(){},ok(){},done(){},fail(){},skip(){}};if(!el)return nop;
   el.classList.add('live');const de=document.documentElement,mark=document.getElementById('bootMark'),msg=document.getElementById('bootMsg'),pc=document.getElementById('bootPct');
   const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,t0=performance.now();
-  let target=0,shown=0,need=0,have=0,live=true,fin=null,label='Loading',slow=setTimeout(()=>{label='Slow network…';say()},12000);
+  let target=0,shown=0,need=0,have=0,live=true,fin=null,gone=false,label='Loading',slow=setTimeout(()=>{label='Slow network…';say()},12000);
+  /* never hold the page hostage: if the data takes a while (or this browser has seen SubZer0 before), step aside and let
+     the skeleton in #p0 show the page shape until the verified data is painted */
+  const SEEN=(()=>{try{return localStorage.getItem('sz_seen')==='1'}catch{return false}})();
+  const away=setTimeout(()=>{if(fin||!live)return;gone=true;live=false;clearTimeout(slow);el.classList.add('fade');setTimeout(cleanup,260)},SEEN?350:900);
   const mb=n=>(n/1048576).toFixed(1);
   function say(t){if(t!=null)label=t;if(msg.textContent!==label)msg.textContent=label}
   function set(p){target=Math.max(target,Math.min(1,p))}
   let lt=performance.now();function paint(now){now=now||performance.now();const dt=Math.min(250,now-lt);lt=now;shown+=(target-shown)*(RM?1:1-Math.exp(-dt/(fin?60:180)));if(Math.abs(target-shown)<.002)shown=target;
     el.style.setProperty('--p',shown.toFixed(4));pc.textContent=Math.round(shown*100)+'%';
     if(fin&&shown>=.999&&now-t0>=fin.min)return finish();if(live)requestAnimationFrame(paint)}
-  function cleanup(){live=false;clearTimeout(slow);de.classList.remove('booting');el.remove()}
-  function finish(){live=false;clearTimeout(slow);say('Ready');
+  function cleanup(){live=false;clearTimeout(slow);clearTimeout(away);de.classList.remove('booting');el.remove();try{localStorage.setItem('sz_seen','1')}catch{}}
+  function finish(){live=false;clearTimeout(slow);clearTimeout(away);if(gone||!el.isConnected){fin.res();return}say('Ready');
     const dst=document.querySelector('.top .brand'),r0=mark.getBoundingClientRect(),r1=dst&&dst.getBoundingClientRect();
     if(RM||!r1||!r1.width||!mark.animate){el.classList.add('fade');setTimeout(()=>{cleanup();fin.res()},RM?60:260);return}
     const k=r1.height/r0.height,dx=r1.left-r0.left,dy=r1.top-r0.top;el.classList.add('out');
-    const an=mark.animate([{transform:'none'},{transform:`translate(${dx}px,${dy}px) scale(${k})`}],{duration:560,delay:120,easing:'cubic-bezier(.65,0,.2,1)',fill:'forwards'});
-    let done=false;const end=()=>{if(done)return;done=true;cleanup();fin.res()};an.onfinish=end;setTimeout(end,1100)}
+    const an=mark.animate([{transform:'none'},{transform:`translate(${dx}px,${dy}px) scale(${k})`}],{duration:420,delay:0,easing:'cubic-bezier(.65,0,.2,1)',fill:'forwards'});
+    let done=false;const end=()=>{if(done)return;done=true;cleanup();fin.res()};an.onfinish=end;setTimeout(end,800)}
   requestAnimationFrame(paint);de.classList.add('booting');
   return {on:()=>live&&!fin,
     step(t,p){say(t);set(p)},
@@ -846,11 +856,11 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
     got(n){have+=n;if(need){set(.08+.76*Math.min(1,have/need));say(`Verifying ${mb(Math.min(have,need))}/${mb(need)} MB`)}},
     ok(){},
     skip(){if(!el.isConnected)return;fin={p:Promise.resolve(),res(){},min:0};cleanup()},
-    done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:RM?0:700};set(1);if(!live)finish();return p},
+    done(){if(fin)return fin.p;let res;const p=new Promise(r=>res=r);fin={p,res,min:0};set(1);if(!live)finish();return p},
     fail(){if(!live&&!el.isConnected)return;el.classList.add('fade');setTimeout(cleanup,260)}}})();
 
 (async()=>{originGuard();renderNav();const R=route();track.classList.add('dragging');go(R.cve?1:R.tab);
-  document.getElementById('p0').innerHTML=`<div class="wrap"><div class="empty" style="padding-top:140px"><div class="code">fetching manifest · checking sha256…</div></div></div>`;
+  document.getElementById('p0').innerHTML=skeleton();
   /* hub pages are complete static HTML: show them right away instead of waiting for the data to verify */
   const early=R.page==='static'&&!!STATIC;if(early){BOOT.skip();history.replaceState(null,'',routeURL());openPage('static')}
   BOOT.step('Connecting',.03);let m;
@@ -864,7 +874,7 @@ const BOOT=(()=>{const el=document.getElementById('boot'),nop={on:()=>false,step
   const breathe=()=>new Promise(r=>setTimeout(r,0));
   lastPoll=Date.now();await breathe();briefing();await breathe();if(LITE)researchWait();else research();await breathe();ensure(cur);live();loadHubs();
   BOOT.step('Ranking',.96);
-  await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,LITE?600:1500))]);BOOT.done();
+  await Promise.race([document.fonts?document.fonts.ready:null,new Promise(r=>setTimeout(r,LITE?250:800))]);BOOT.done();
   if(LITE)fullLoad(m);
   requestAnimationFrame(()=>track.classList.remove('dragging'));
   if(R.cve){history.replaceState(null,'',routeURL());openSheet(R.cve)}
