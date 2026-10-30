@@ -240,7 +240,15 @@ python -m unittest discover -s tests                         # tests
 
 <sub>Made and maintained by <b>@RootAccessClub</b>. New CVE drops, write-ups and the occasional rant.</sub>
 
-<sub>Thanks to <a href="https://t.me/BugCod3">@BugCod3</a> for the help along the way.</sub>
+</div>
+
+### 🙏 Special thanks
+
+<div align="center">
+
+<a href="https://t.me/BugCod3"><img src="docs/assets/channel-bugcod3.svg" alt="@BugCod3 on Telegram" width="48%"></a>
+
+<sub>Big thanks to my friend <b>@BugCod3</b> for the help, ideas and testing along the way. Go check out his channel.</sub>
 
 </div>
 
