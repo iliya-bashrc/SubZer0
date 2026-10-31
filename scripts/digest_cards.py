@@ -60,7 +60,7 @@ def _chrome(d: dict) -> str:
     return (f'<div class="brand"><i></i><b>SubZer0</b><span>WEEKLY</span></div>'
             f'<div class="wk"><i></i>WEEK {d["week"]} \u00b7 {esc(d["span"]).upper()}</div>'
             f'<div class="foot"><span>for defenders, patch first</span>'
-            f'<span><b>iliya-bashrc.github.io/SubZer0</b> \u00b7 @SubZer0Robot</span></div>')
+            f'<span><b>t.me/RootAccessClub</b> \u00b7 iliya-bashrc.github.io/SubZer0</span></div>')
 
 
 def _stats(items: list[tuple[str, str, str]]) -> str:
@@ -297,7 +297,7 @@ def _alert_chrome(a: dict) -> str:
     return (f'<div class="brand"><i style="background:{CRIT}"></i><b>SubZer0</b><span>ALERT</span></div>'
             f'<div class="wk"><i style="background:{CRIT};box-shadow:0 0 12px {CRIT}"></i>{esc(a["stamp"]).upper()}</div>'
             f'<div class="foot"><span>for defenders, patch first</span>'
-            f'<span><b>iliya-bashrc.github.io/SubZer0</b> \u00b7 @SubZer0Robot</span></div>')
+            f'<span><b>t.me/RootAccessClub</b> \u00b7 iliya-bashrc.github.io/SubZer0</span></div>')
 
 
 def _sev(score: float) -> str:
