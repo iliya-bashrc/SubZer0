@@ -77,9 +77,20 @@ def message(new: list[list], ctx: dict, limit: int = MAX_ITEMS) -> str:
     return "\n".join(lines)
 
 
+def check_button(new: list[list]) -> tuple[str, str, str] | None:
+    """"Am I affected?" for the top CVE's product: opens the site's version check with the name filled in."""
+    for r in new[:1]:
+        product = re.sub(r"\s+", " ", str(r[8] if len(r) > 8 and r[8] else "")).strip()[:40]
+        if product:
+            return ("\U0001F9EA Check your version", f"{SITE_URL}?check={urllib.parse.quote(product)}", "")
+    return None
+
+
 def alert_buttons(new: list[list]) -> dict:
     first = [("\U0001F4C2 " + new[0][0], f"{SITE_URL}cve/{new[0][0]}", "danger")] if new else []
-    return digest.buttons(first + [("\U0001F3AF All patch-now", f"{SITE_URL}research?view=p1", "primary")], [digest.ALERTS_BTN])
+    chk = check_button(new)
+    return digest.buttons(first + [("\U0001F3AF All patch-now", f"{SITE_URL}research?view=p1", "primary")],
+                          [chk] if chk else [], [digest.ALERTS_BTN])
 
 
 def caption(new: list[list], ctx: dict) -> str:
