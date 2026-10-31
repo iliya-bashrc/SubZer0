@@ -34,6 +34,40 @@ const app = (env, text, path, priv, style) => b(text, priv ? { web_app: { url: e
 const share = (url, text) => `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`;
 const kb = rows => ({ inline_keyboard: rows.filter(r => r && r.length) });
 
+/* vcheck:start — shared by site/app.js and worker/bot.js (tests/test_versions.py keeps the copies identical). */
+const VPRE={dev:0,snapshot:0,alpha:1,a:1,beta:2,b:2,preview:3,pre:3,rc:4,cr:4};
+const vtok=v=>(String(v).trim().toLowerCase().replace(/^v(?=\d)/,'').match(/\d+|[a-z]+/g)||[]).map(t=>/^\d+$/.test(t)?+t:t);
+function vcmp(a,b){const x=vtok(a),y=vtok(b);let i=0;
+  for(;i<x.length&&i<y.length;i++){const p=x[i],q=y[i];if(p===q)continue;const np=typeof p==='number',nq=typeof q==='number';
+    if(np&&nq)return p<q?-1:1;if(np)return q in VPRE?1:-1;if(nq)return p in VPRE?-1:1;
+    const rp=p in VPRE?VPRE[p]:9,rq=q in VPRE?VPRE[q]:9;if(rp!==rq)return rp<rq?-1:1;return p<q?-1:1}
+  const longer=x.length>y.length,rest=(longer?x:y).slice(i),sg=longer?1:-1;if(!rest.length)return 0;
+  if(typeof rest[0]==='string')return rest[0] in VPRE?-sg:sg;return rest.some(t=>t!==0)?sg:0}
+const vfix=e=>e[5]||(e[3]&&e[4]===0?e[3]:'');
+function vhit(v,e){const lo=e[1],li=e[2],hi=e[3],hx=e[4];if(hx===-1)return false;
+  if(lo){const c=vcmp(v,lo);if(c<0||(c===0&&!li))return false}if(hi){const c=vcmp(v,hi);if(c>0||(c===0&&!hx))return false}return true}
+const VER_RE=/^v?[0-9][0-9a-z.\-_+~]*$/i;
+const vnorm=s=>String(s||'').toLowerCase().replace(/_/g,' ').replace(/[^a-z0-9.+ ]/g,' ').replace(/\s+/g,' ').trim();
+/* "nginx 1.24.0" -> {words:['nginx'],version:'1.24.0',shards:['n']} */
+function vparse(q){let t=vnorm(String(q||'').replace(/@/g,' ')).split(' ').filter(Boolean).filter(w=>w!=='version'&&w!=='ver');
+  let version='';if(t.length>1&&VER_RE.test(t[t.length-1])&&(/[.\-]/.test(t[t.length-1])||/^\d+$/.test(t[t.length-1])))version=t.pop().replace(/^v/,'');
+  const shards=[...new Set(t.map(w=>/^[a-z]/.test(w)?w[0]:'0'))].slice(0,4);return{words:t,version,shards}}
+/* shards: {shardName: shardJSON}. Returns ranked products with affected CVEs for the version (or every range when no version). */
+function vcheck(q,shards,max){const P=vparse(q);max=max||6;if(!P.words.length)return{...P,products:[]};const cands=[];
+  for(const s of P.shards){const S=shards[s];if(!S)continue;for(const key in S.p){const [ven,pro]=key.split('|'),words=(ven+' '+pro).split(' ');
+    if(!P.words.every(w=>words.some(x=>x.startsWith(w))))continue;const j=P.words.join(' ');
+    const score=(pro===j||(ven+' '+pro)===j?4:pro.startsWith(j)?3:words.includes(P.words[0])?2:1)*1000-words.length*10+Math.min(9,S.p[key].length/20);
+    cands.push({key,ven,pro,score,S})}}
+  const seen=new Set();cands.sort((a,b)=>b.score-a.score);
+  const products=cands.filter(c=>!seen.has(c.key)&&seen.add(c.key)).slice(0,max).map(({key,ven,pro,S})=>{const by=new Map();let unknown=0,ranged=0;
+    for(const e of S.p[key]){const m=S.c[e[0]];if(e[4]===-1){unknown++;continue}ranged++;
+      if(P.version&&!vhit(P.version,e))continue;const o=by.get(m[0]);if(!o)by.set(m[0],{id:m[0],sev:m[1],p:m[2],kev:!!m[3],cvss:m[4],title:m[5],ranges:[e],fix:vfix(e)});else{o.ranges.push(e);const f=vfix(e);if(f&&(!o.fix||vcmp(f,o.fix)>0))o.fix=f}}
+    const list=[...by.values()].sort((a,b)=>a.p-b.p||b.kev-a.kev||b.cvss-a.cvss);let fix='';for(const c of list)if(c.fix&&(!fix||vcmp(c.fix,fix)>0))fix=c.fix;
+    return{key,vendor:ven,product:pro,affected:list,unknown,ranged,fix}});
+  return{...P,products}}
+const vrange=e=>e[4]===-1?'version not given':e[1]&&e[3]&&e[1]===e[3]&&e[2]&&e[4]?'= '+e[1]:[e[1]?(e[2]?'≥ ':'> ')+e[1]:'',e[3]?(e[4]?'≤ ':'< ')+e[3]:''].filter(Boolean).join(', ');
+/* vcheck:end */
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -112,6 +146,7 @@ async function handle(update, env) {
   if (cmd === 'unwatch') return unwatch(env, chat, arg);
   if (cmd === 'list' || cmd === 'watchlist' || cmd === 'settings') return send(env, chat, await listView(env, chat));
   if (cmd === 'search' || cmd === 'find') return send(env, chat, await searchView(env, arg, priv));
+  if (cmd === 'check' || cmd === 'affected') return send(env, chat, await checkView(env, arg, priv));
   if (cmd === 'myid') return send(env, chat, { text: `Your chat id: <code>${esc(chat)}</code>` });
   if (cmd === 'stats') return send(env, chat, await statsView(env, chat));
   if (cmd === 'cve' || (!m && CVE_RE.test(text))) {
@@ -119,6 +154,7 @@ async function handle(update, env) {
     if (!id) return send(env, chat, { text: 'Send a CVE id, e.g. <code>/cve CVE-2026-110447</code>' });
     return reply(env, chat, await cveView(env, id.toUpperCase(), priv));
   }
+  if (!m && /\./.test(vparse(text).version)) return send(env, chat, await checkView(env, text, priv)); // "nginx 1.24.0" = version check
   if (!m) return send(env, chat, await searchView(env, text, priv)); // plain words in a DM = search
 }
 
@@ -153,6 +189,7 @@ async function onTap(q, env) {
     await answer(op === 'S' ? (rest === 'crit' ? '🔴 Patch-now + new critical CVEs' : '🎯 Patch-now CVEs only') : (rest === 'daily' ? '🗓 One summary a day' : '⚡ Right away'));
     return edit(env, msg, await listView(env, chat));
   }
+  if (op === 'q') { await answer(); return send(env, chat, await searchView(env, rest, priv)); }
   if (op === 's') return answer('Just send a name like nginx, wordpress or xss — or a CVE id.', true);
   await answer();
   const view = op === 't' ? await topView(env, Number(rest) || 0, priv) : op === 'wk' ? await weekView(env, priv)
@@ -184,6 +221,7 @@ function helpView(env, priv) {
     text: ['<b>SubZer0 Sentinel</b> · CVE briefing in your chat', '',
       '/top — what to patch right now', '/week — this week\'s recap', '/cve <code>CVE-2026-110447</code> — one CVE (or just send the id)',
       '/search <code>nginx</code> — vendor, product or weakness (or just send a word)',
+      '/check <code>chrome 150.0.7</code> — is the version you run affected? (or just send name + version)',
       '/watch <code>nginx</code> — DM me when it gets a patch-now CVE', '/settings — your watchlist: critical too? instant or daily?', '',
       `In any chat: type <code>@${BOT} CVE-2026-…</code> to share a CVE card.`, `Live alerts: @RootAccessClub · Site: ${env.SITE}`].join('\n'),
     markup: kb([[cb('≡ Menu', 'm', 'primary')]]),
@@ -294,6 +332,48 @@ async function searchView(env, q, priv) {
     markup: kb([...topics.map(t => [app(env, `📂 ${clip(t.name, 28)}`, t.path, priv, 'primary')]), ...weak.map(w => [link(`📖 ${clip(w.name, 30)}`, env.SITE + w.path)]),
       canWatch ? [cb(`👁 Watch ${clip(best ? best.name : kw, 22)}`, 'a:' + (best && best.term ? best.term : kw), 'success')] : null, [cb('≡ Menu', 'm')]]),
   };
+}
+
+/* ---------- "is my version affected?" ---------- */
+const VCACHE = new Map(); // shard -> { t, doc }: parsed once per isolate for 10 minutes
+async function vshard(env, name) {
+  const hit = VCACHE.get(name);
+  if (hit && Date.now() - hit.t < 600000) return hit.doc;
+  const doc = await safe(env, `api/versions/${name}.json`);
+  if (doc && doc.p) { VCACHE.set(name, { t: Date.now(), doc }); if (VCACHE.size > 40) VCACHE.delete(VCACHE.keys().next().value); }
+  return doc && doc.p ? doc : null;
+}
+async function checkView(env, q, priv) {
+  q = String(q || '').trim().slice(0, 80);
+  const P = vparse(q);
+  if (!P.words.length) return { text: '🧪 Send a product and the version you run, e.g. <code>/check chrome 150.0.7</code>.' };
+  const shards = {};
+  for (const s of P.shards) { const d = await vshard(env, s); if (d) shards[s] = d; }
+  const R = vcheck(q, shards, 2), name = p => (p.product.startsWith(p.vendor) || !p.vendor ? '' : p.vendor + ' ') + p.product;
+  const full = link('🌐 Full result', `${env.SITE}?check=${encodeURIComponent(q)}`);
+  if (!R.products.length) {
+    return { text: `🧪 No version data for <b>${esc(P.words.join(' '))}</b> in the last 30 days.\nThat is not the same as safe. Try /search ${esc(P.words[0])}.`,
+      markup: kb([[cb(`🔎 Search ${clip(P.words.join(' '), 24)}`, 'q:' + P.words.join(' ').slice(0, 40), 'primary')], [cb('≡ Menu', 'm')]]) };
+  }
+  const lines = [], pick = [];
+  for (const p of R.products) {
+    const a = p.affected, p1 = a.filter(c => c.p === 1).length, kev = a.filter(c => c.kev).length;
+    lines.push(`🧪 <b>${esc(name(p))}</b>${R.version ? ` <code>${esc(R.version)}</code>` : ''}`);
+    if (!R.version) lines.push(`📋 ${n(a.length)} CVEs with version ranges. Add your version: <code>/check ${esc(p.product)} 1.2.3</code>`);
+    else if (a.length) {
+      lines.push(`🔴 <b>Affected by ${n(a.length)} CVE${a.length === 1 ? '' : 's'}</b>${p1 ? ` · 🎯 ${p1} patch now` : ''}${kev ? ` · ⚠️ ${kev} exploited (KEV)` : ''}`);
+      if (p.fix) lines.push(`⬆️ Upgrade to <code>${esc(p.fix)}</code> or later`);
+    } else lines.push(`✅ No known CVEs for this version · ${n(p.ranged)} ranges checked`);
+    for (const c of a.slice(0, pick.length ? 2 : 4)) {
+      if (pick.length >= 5) break;
+      pick.push(c.id);
+      lines.push(`${NUM[pick.length - 1]} <code>${esc(c.id)}</code> ${SEV_DOT[c.sev] || '⚪'} P${c.p}${c.kev ? ' · KEV' : ''} · ${esc(vrange(c.ranges[0]))}`);
+    }
+    if (p.unknown) lines.push(`<i>+${p.unknown} more name it without a version, check those by hand.</i>`);
+    lines.push('');
+  }
+  lines.push('<i>NVD + GitHub advisory version ranges, last 30 days. No match is not a guarantee.</i>');
+  return { text: lines.join('\n'), markup: kb([pick.map((id, i) => cb(NUM[i], 'c:' + id)), [full], [cb('≡ Menu', 'm')]]) };
 }
 
 const SENS = { p1: 'a patch-now CVE', crit: 'a patch-now or a new critical CVE' };

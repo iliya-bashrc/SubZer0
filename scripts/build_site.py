@@ -291,6 +291,8 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
         (api_dir / f"{doc['id']}.json").write_text(json.dumps(doc, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     entries: list[tuple[str, str | None]] = [("", manifest.get("generated_at")), ("research", manifest.get("generated_at")), ("about", None)]
     import archive as arch  # local module; imported lazily because it imports this file
+    import versions as vers
+    vb = vers.Builder()
     archived = arch.load(archive) if archive.exists() else {}
     live: list[tuple[str, int]] = []  # (day, index) of every live record, read twice to keep memory flat
     items: list[dict] = []
@@ -304,7 +306,9 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
             seen.add(cid)
             row = by_id.get(cid)
             fx = facts(row, ctx) if row else None
-            items.append(hub_item(rec, row, priority_reason(row, ctx) if row else None, fx))
+            pr = priority_reason(row, ctx) if row else None
+            items.append(hub_item(rec, row, pr, fx))
+            vb.add(rec, row, pr, fx)
     known |= set(archived)
     arch_rows = {}
     for cid, rec in sorted(archived.items()):
@@ -319,6 +323,7 @@ def write_seo(out: Path, shell: str, snapshot: Path, manifest: dict, rows: list[
     hubs = hub.build(items, window_start=str((manifest.get("window") or {}).get("start") or ""), today=datetime.now(timezone.utc).date(),
                      updated=str(manifest.get("generated_at") or ""))
     links = hubs["links"]
+    vb.write(out)
     (out / "api" / "hubs.json").write_text(json.dumps(hub.summary(hubs), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     cards = share_cards.render_all(out, items, hubs) if share_cards else set()
     for path, title, desc, art, ld, lastmod, og in hubs["pages"]:

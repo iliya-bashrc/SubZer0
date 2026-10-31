@@ -653,3 +653,21 @@ a.hub-hint:hover{border-color:var(--ice)}
 .skel .sk-row.f{grid-template-columns:1fr;gap:8px}
 @keyframes skShine{0%{background-position:100% 0}100%{background-position:0 0}}
 @media (prefers-reduced-motion:reduce){.skel .sk{animation:none}}
+/* ===== am I affected? ===== */
+.vchk{margin-top:48px}
+.vc-form{display:flex;gap:10px;margin-top:16px}
+.vc-form input{flex:1;min-width:0;height:44px;padding:0 14px;background:var(--film);border:1px solid var(--line2);outline:0;color:var(--ink);font:400 14px var(--mono)}
+.vc-form input:focus{border-color:var(--ice)}.vc-form .btn{height:44px;flex:none}
+.vc-ex{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;font:400 12px var(--mono);color:var(--ink3)}
+.vc-ex button{padding:4px 9px;border:1px solid var(--line2);color:var(--ink2);font:inherit}.vc-ex button:hover{border-color:var(--ice);color:var(--ice)}
+.vc-wait,.vc-none{margin-top:16px;color:var(--ink2);font-size:14px}.vc-none a{color:var(--ice)}
+.vc-p{margin-top:20px;padding:16px 18px;border:1px solid var(--line)}
+.vc-name{font:600 18px var(--display);text-transform:capitalize}.vc-name .code{text-transform:none;color:var(--ink2);font-size:14px}
+.vc-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.vc-fix,.vc-hint{font-size:13px;color:var(--ink2)}.vc-fix b{color:var(--ice);font-family:var(--mono)}
+.vc-list{margin-top:12px;border-top:1px solid var(--line)}
+.vc-item{display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:4px 12px;width:100%;text-align:left;padding:10px 0;border-bottom:1px solid var(--line)}
+.vc-item:hover{background:var(--film)}.vc-tags{display:flex;gap:6px}.vc-item .id{font:600 14px var(--display)}
+.vc-r{color:var(--ink3);font-size:12px;justify-self:end}.vc-item .t{grid-column:1/-1;font-size:13px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vc-note,.vc-foot{margin-top:10px;font-size:11px;color:var(--ink3)}
+@media (max-width:820px){.vc-item{grid-template-columns:auto 1fr}.vc-r{grid-column:1/-1;justify-self:start}}

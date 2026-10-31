@@ -387,6 +387,7 @@ function briefing(){
     <section><div class="sec-h"><h2>Just weaponized</h2><span class="meta">Metasploit · Nuclei</span></div>${miniList(W.slice().sort((a,b)=>firstSeen(b).localeCompare(firstSeen(a))||a.P[0]-b.P[0]).slice(0,5),r=>[r.m?'MSF':'',r.n?'NUCLEI':''].filter(Boolean).join(' · '))}<a class="more-l" href="research?view=weap" data-view="weap">all weaponized →</a></section>
     <section><div class="sec-h"><h2>No patch yet</h2><span class="meta">urgent, no fix in the refs</span></div>${miniList(rows.filter(r=>r.P[0]<=2&&!r.f&&r.L>=1).sort((a,b)=>a.P[0]-b.P[0]||b.L-a.L||(b.e||0)-(a.e||0)).slice(0,5),r=>'P'+r.P[0]+' · '+LADDER[r.L].toLowerCase())}<a class="more-l" href="research?view=nopatch" data-view="nopatch">all unpatched →</a></section>
   </div>`:''}
+  <section class="vchk" id="vchk"></section>
   <section class="hubs" id="hubs"></section>
   <section class="mystack" id="mystack"></section>
   <section class="chart" id="chart"><div class="sec-h"><h2>What got published</h2><span class="meta">last 30 days by severity · ▬ exploited · tap a bar</span></div>
@@ -400,11 +401,79 @@ function briefing(){
       ${D.live?`<div class="src src-live"><div class="n"><i></i>Early warning</div><div class="v">${fmt(D.live.n)}</div><div class="s">live · CVE.org + ${D.live.feedsOk} feeds · ${esc(D.live.at.slice(11,16))}</div></div>`:''}</div></section>
   ${credits()}
   </div>`;
-  requestAnimationFrame(()=>{glitch(document.getElementById('hc'),7);frost(document.getElementById('hfrost'),11)});renderMyStack();renderHubs();
+  requestAnimationFrame(()=>{glitch(document.getElementById('hc'),7);frost(document.getElementById('hfrost'),11)});renderMyStack();renderHubs();renderVchk();
   const p0=document.getElementById('p0');watchHeads(p0);initChart(days);fillGrid(p0.querySelector('.sources'));
   p0.querySelectorAll('#feed .feed-item.new .t').forEach(t=>typeIn(t,900));
   if(FX.once('hero')){decode(document.getElementById('heroN'),900);typeIn(document.getElementById('heroSha'),1100)}
 }
+/* vcheck:start — shared by site/app.js and worker/bot.js (tests/test_versions.py keeps the copies identical). */
+const VPRE={dev:0,snapshot:0,alpha:1,a:1,beta:2,b:2,preview:3,pre:3,rc:4,cr:4};
+const vtok=v=>(String(v).trim().toLowerCase().replace(/^v(?=\d)/,'').match(/\d+|[a-z]+/g)||[]).map(t=>/^\d+$/.test(t)?+t:t);
+function vcmp(a,b){const x=vtok(a),y=vtok(b);let i=0;
+  for(;i<x.length&&i<y.length;i++){const p=x[i],q=y[i];if(p===q)continue;const np=typeof p==='number',nq=typeof q==='number';
+    if(np&&nq)return p<q?-1:1;if(np)return q in VPRE?1:-1;if(nq)return p in VPRE?-1:1;
+    const rp=p in VPRE?VPRE[p]:9,rq=q in VPRE?VPRE[q]:9;if(rp!==rq)return rp<rq?-1:1;return p<q?-1:1}
+  const longer=x.length>y.length,rest=(longer?x:y).slice(i),sg=longer?1:-1;if(!rest.length)return 0;
+  if(typeof rest[0]==='string')return rest[0] in VPRE?-sg:sg;return rest.some(t=>t!==0)?sg:0}
+const vfix=e=>e[5]||(e[3]&&e[4]===0?e[3]:'');
+function vhit(v,e){const lo=e[1],li=e[2],hi=e[3],hx=e[4];if(hx===-1)return false;
+  if(lo){const c=vcmp(v,lo);if(c<0||(c===0&&!li))return false}if(hi){const c=vcmp(v,hi);if(c>0||(c===0&&!hx))return false}return true}
+const VER_RE=/^v?[0-9][0-9a-z.\-_+~]*$/i;
+const vnorm=s=>String(s||'').toLowerCase().replace(/_/g,' ').replace(/[^a-z0-9.+ ]/g,' ').replace(/\s+/g,' ').trim();
+/* "nginx 1.24.0" -> {words:['nginx'],version:'1.24.0',shards:['n']} */
+function vparse(q){let t=vnorm(String(q||'').replace(/@/g,' ')).split(' ').filter(Boolean).filter(w=>w!=='version'&&w!=='ver');
+  let version='';if(t.length>1&&VER_RE.test(t[t.length-1])&&(/[.\-]/.test(t[t.length-1])||/^\d+$/.test(t[t.length-1])))version=t.pop().replace(/^v/,'');
+  const shards=[...new Set(t.map(w=>/^[a-z]/.test(w)?w[0]:'0'))].slice(0,4);return{words:t,version,shards}}
+/* shards: {shardName: shardJSON}. Returns ranked products with affected CVEs for the version (or every range when no version). */
+function vcheck(q,shards,max){const P=vparse(q);max=max||6;if(!P.words.length)return{...P,products:[]};const cands=[];
+  for(const s of P.shards){const S=shards[s];if(!S)continue;for(const key in S.p){const [ven,pro]=key.split('|'),words=(ven+' '+pro).split(' ');
+    if(!P.words.every(w=>words.some(x=>x.startsWith(w))))continue;const j=P.words.join(' ');
+    const score=(pro===j||(ven+' '+pro)===j?4:pro.startsWith(j)?3:words.includes(P.words[0])?2:1)*1000-words.length*10+Math.min(9,S.p[key].length/20);
+    cands.push({key,ven,pro,score,S})}}
+  const seen=new Set();cands.sort((a,b)=>b.score-a.score);
+  const products=cands.filter(c=>!seen.has(c.key)&&seen.add(c.key)).slice(0,max).map(({key,ven,pro,S})=>{const by=new Map();let unknown=0,ranged=0;
+    for(const e of S.p[key]){const m=S.c[e[0]];if(e[4]===-1){unknown++;continue}ranged++;
+      if(P.version&&!vhit(P.version,e))continue;const o=by.get(m[0]);if(!o)by.set(m[0],{id:m[0],sev:m[1],p:m[2],kev:!!m[3],cvss:m[4],title:m[5],ranges:[e],fix:vfix(e)});else{o.ranges.push(e);const f=vfix(e);if(f&&(!o.fix||vcmp(f,o.fix)>0))o.fix=f}}
+    const list=[...by.values()].sort((a,b)=>a.p-b.p||b.kev-a.kev||b.cvss-a.cvss);let fix='';for(const c of list)if(c.fix&&(!fix||vcmp(c.fix,fix)>0))fix=c.fix;
+    return{key,vendor:ven,product:pro,affected:list,unknown,ranged,fix}});
+  return{...P,products}}
+const vrange=e=>e[4]===-1?'version not given':e[1]&&e[3]&&e[1]===e[3]&&e[2]&&e[4]?'= '+e[1]:[e[1]?(e[2]?'≥ ':'> ')+e[1]:'',e[3]?(e[4]?'≤ ':'< ')+e[3]:''].filter(Boolean).join(', ');
+/* vcheck:end */
+/* ---------- am I affected? (version check against NVD / GitHub version ranges) ---------- */
+const VSH=new Map();let VIDX=null,VQ=(()=>{try{return(new URLSearchParams(location.search).get('check')||'').slice(0,80)}catch{return''}})(),VJUMP=!!VQ;
+const vurl=p=>new URL('api/versions/'+p,BASE).href;
+const vget=u=>fetch(u,{credentials:'omit'}).then(r=>r.ok?r.json():null).catch(()=>null);
+function vidx(){if(!VIDX)VIDX=vget(vurl('index.json'));return VIDX}
+async function vshards(names){const ix=await vidx(),have=new Set(ix&&ix.shards||[]),out={};
+  await Promise.all(names.filter(n=>have.has(n)).map(async n=>{if(!VSH.has(n))VSH.set(n,vget(vurl(n+'.json')));const s=await VSH.get(n);if(s&&s.p)out[n]=s}));return out}
+async function vrun(q){const P=vparse(q);return vcheck(q,await vshards(P.shards),3)}
+const vchip=s=>chip(SEV[s]?s:'unknown');
+const vname=p=>(p.product.startsWith(p.vendor)||!p.vendor?'':p.vendor+' ')+p.product;
+function renderVchk(){const el=document.getElementById('vchk');if(!el)return;
+  el.innerHTML=`<div class="sec-h"><h2>Am I affected?</h2><span class="meta">product + the version you run</span></div>
+  <form class="vc-form" id="vcF" role="search"><input id="vcIn" placeholder="e.g. chrome 150.0.7 or macos 27.0" maxlength="80" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Product and version" value="${esc(VQ)}"><button class="btn primary" type="submit">Check</button></form>
+  <div class="vc-ex" id="vcEx"></div><div id="vcOut" aria-live="polite"></div>`;
+  const i=el.querySelector('#vcIn');el.querySelector('#vcF').onsubmit=e=>{e.preventDefault();i.blur();runVchk(i.value)};
+  vidx().then(ix=>{const x=el.querySelector('#vcEx');if(!x||!ix||!Array.isArray(ix.ex)||!ix.ex.length)return;
+    x.innerHTML='<span>try</span>'+ix.ex.slice(0,3).map(q=>`<button type="button" data-vq="${esc(q)}">${esc(q)}</button>`).join('');
+    x.querySelectorAll('[data-vq]').forEach(b=>b.onclick=()=>{i.value=b.dataset.vq;runVchk(b.dataset.vq)})});
+  if(VQ)runVchk(VQ)}
+async function runVchk(q){q=String(q||'').trim().slice(0,80);VQ=q;const o=document.getElementById('vcOut');if(!o)return;
+  try{const u=new URL(location.href);q?u.searchParams.set('check',q):u.searchParams.delete('check');if(cur===0)history.replaceState(null,'',u.href)}catch{}
+  if(!q){o.innerHTML='';return}o.innerHTML='<div class="code vc-wait">checking version ranges…</div>';
+  const R=await vrun(q);if(VQ!==q)return;o.innerHTML=vchkHTML(R);
+  if(VJUMP){VJUMP=false;document.getElementById('vchk').scrollIntoView({block:'start'})}}
+function vchkHTML(R){const w=R.words.join(' ');
+  if(!w)return `<div class="vc-none">Type a product name and a version, like <b>chrome 150.0.7</b>.</div>`;
+  if(!R.products.length)return `<div class="vc-none">No version data for <b>${esc(w)}</b> in the last 30 days. That is not the same as safe: <a href="research?q=${encodeURIComponent(w)}" data-vsearch="${esc(w)}">search every CVE that mentions it →</a></div>`;
+  return R.products.map(p=>{const name=esc(vname(p)),a=p.affected,n=a.length,p1=a.filter(c=>c.p===1).length,kev=a.filter(c=>c.kev).length;let head;
+    if(!R.version)head=`<span class="chip ice">${fmt(n)} CVE${n===1?'':'s'} with version ranges</span><span class="vc-hint">add the version you run after the name to check it</span>`;
+    else if(n)head=`<span class="chip crit">Affected · ${fmt(n)} CVE${n===1?'':'s'}</span>${p1?`<span class="chip crit">${p1} patch now</span>`:''}${kev?`<span class="kev">${kev} KEV</span>`:''}${p.fix?`<span class="vc-fix">upgrade to <b>${esc(p.fix)}</b> or later</span>`:''}`;
+    else head=`<span class="chip low">No known CVEs for ${esc(R.version)}</span><span class="vc-hint">${fmt(p.ranged)} version range${p.ranged===1?'':'s'} checked</span>`;
+    const list=a.slice(0,5).map(c=>`<button class="vc-item" data-cve="${esc(c.id)}"><span class="vc-tags">${vchip(c.sev)}<span class="chip ${c.p===1?'crit':c.p===2?'high':'none'}">P${c.p}</span>${c.kev?'<span class="kev">KEV</span>':''}</span><span class="id">${esc(c.id)}</span><span class="vc-r code">${esc(vrange(c.ranges[0]))}</span><span class="t">${esc(c.title)}</span></button>`).join('');
+    return `<div class="vc-p"><div class="vc-name">${name}${R.version?` <span class="code">${esc(R.version)}</span>`:''}</div><div class="vc-head">${head}</div>${list?`<div class="vc-list">${list}</div>`:''}${n>5?`<a class="more-l" href="research?q=${encodeURIComponent(p.product)}" data-vsearch="${esc(p.product)}">all ${fmt(n)} in Research →</a>`:''}${p.unknown?`<div class="vc-note code">+${p.unknown} CVE${p.unknown===1?'':'s'} name this product without a version. Check those by hand.</div>`:''}</div>`}).join('')+
+  `<div class="vc-foot code">Matched against NVD and GitHub advisory version ranges, last 30 days. No match is not a guarantee.</div>`}
+document.addEventListener('click',e=>{const v=e.target.closest('[data-vsearch]');if(!v)return;e.preventDefault();F.view='all';F.q=v.dataset.vsearch;const qi=document.getElementById('q');if(qi)qi.value=F.q;SHOWN=200;go(1);draw()});
 function renderMyStack(){const el=document.getElementById('mystack');if(!el)return;
   if(!ST.stack.length){el.innerHTML=`<div class="sec-h"><h2>Your stack</h2><span class="meta">stays in this browser</span></div><div class="ms-empty" style="margin-top:16px"><span>Tell SubZer0 what you run and it'll keep those CVEs right here.</span><input id="msIn" placeholder="wordpress, fortinet, nginx… then enter" maxlength="120"></div>`;
     const i=document.getElementById('msIn');i.onkeydown=e=>{if(e.key==='Enter'){i.value.split(',').forEach(stackAdd)}};return}
@@ -738,7 +807,7 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
     <span class="t-ice" style="grid-column:1/-1">user@subzer0</span><span class="t-dim" style="grid-column:1/-1">────────────</span>
     ${kv('OS','SubZer0 OS 2.0 LTS')}${kv('Shell','sz-sh 0.1')}${kv('Window','30 days · rolling')}${kv('CVEs',D.totals.cves.toLocaleString())}${kv('Feeds','NVD · GHSA · KEV · EPSS · Exploit-DB')}${D.intel?kv('Intel','SSVC · PoC-in-GitHub · MSF · Nuclei · chatter'):''}${kv('Refresh','6h · live diff 60s')}${kv('Made by','@RootAccessClub')}${kv('Thanks','@BugCod3')}${kv('Use','learning only')}
     <span style="grid-column:1/-1" class="swatch">${['crit','high','med','low','info','ice','strip','ink'].map(v=>`<i style="background:var(--${v})"></i>`).join('')}</span></div></div>`);}
-  else if(k==='./help'||k==='help'){await lines([`<div class="ln t-dim">commands:</div>`,`<div class="tgrid">${CMDS.map(([x,d])=>`<span class="t-ice">${x}</span><span class="t-dim">${d}</span>`).join('')}</div>`,`<div class="tgrid" style="margin-top:8px">${[['cve <id>','details for one CVE'],['search <query>','same syntax as the search box'],['watch <id>','add to your watchlist'],['watchlist','what you are watching'],['stack add <name>','tell it what you run'],['export csv|json','download the current data'],['search msf:yes','weaponized in Metasploit'],['search buzz>20 patch:no','loud and unpatched']].map(([a,b])=>`<span class="t-ice">${esc(a)}</span><span class="t-dim">${b}</span>`).join('')}</div><div class="ln t-dim">also: whoami · ls · date · uname -a · history · banner</div>`])}
+  else if(k==='./help'||k==='help'){await lines([`<div class="ln t-dim">commands:</div>`,`<div class="tgrid">${CMDS.map(([x,d])=>`<span class="t-ice">${x}</span><span class="t-dim">${d}</span>`).join('')}</div>`,`<div class="tgrid" style="margin-top:8px">${[['cve <id>','details for one CVE'],['search <query>','same syntax as the search box'],['check <product> <ver>','is my version affected?'],['watch <id>','add to your watchlist'],['watchlist','what you are watching'],['stack add <name>','tell it what you run'],['export csv|json','download the current data'],['search msf:yes','weaponized in Metasploit'],['search buzz>20 patch:no','loud and unpatched']].map(([a,b])=>`<span class="t-ice">${esc(a)}</span><span class="t-dim">${b}</span>`).join('')}</div><div class="ln t-dim">also: whoami · ls · date · uname -a · history · banner</div>`])}
   else if(k==='./latest'){print(`<div class="ln t-dim">pulling the latest…</div>`);if(!reduce)await wait(260);
     const g=`<div class="tgrid c3" id="lg3"><span class="t-dim">ID</span><span class="t-dim">SEVERITY</span><span class="t-dim">SUMMARY</span></div>`;print(g);const G=[...document.querySelectorAll('#lg3')].pop();G.removeAttribute('id');
     for(const r of rows.slice(0,6)){G.insertAdjacentHTML('beforeend',`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span style="color:var(--${sevc(r.s)})">${SEV[r.s][1].toUpperCase()}</span><span class="t-dim">${esc(r.t)}</span></div>`);document.getElementById('to').scrollTop=1e9;if(!reduce)await wait(45)}
@@ -760,6 +829,9 @@ async function run(raw){let c=raw.trim().replace(/\s+/g,' ');const lc=c.toLowerC
     if(!id)print(`<div class="ln">usage: cve <span class="t-dim">CVE-YYYY-NNNN</span></div>`);
     else if(!r)print(`<div class="ln t-err">${esc(id)}: not in this snapshot</div>`);
     else print(`<div class="tgrid">${kv('id',`<span data-cve="${r.id}" style="cursor:pointer;text-decoration:underline">${r.id}</span>`)}${kv('severity',`<span style="color:var(--${sevc(r.s)})">${SEV[r.s][1]}</span>${r.c>0?' '+(+r.c).toFixed(1):''}`)}${kv('priority','P'+r.P[0]+' '+esc(r.P[1]))}${kv('epss',r.e!=null?(r.e*100).toFixed(2)+'%':'n/a')}${kv('kev',r.k?'<span class="t-err">yes</span>':'no')}${kv('poc',r.x?'<span class="t-warn">public</span>':'none')}${kv('maturity',`<span class="${r.L>=2?'t-err':r.L?'t-warn':''}">${LADDER[r.L].toLowerCase()}</span>${r.m?' · msf '+r.m:''}${r.n?' · nuclei '+r.n:''}${r.g?' · github '+r.g:''}`)}${r.b?kv('buzz',r.b+'/100'):''}${kv('patch',r.f?'linked':'<span class="t-warn">none linked</span>')}${kv('published',r.d)}${kv('summary',`<span class="t-dim" style="white-space:normal">${esc(r.t)}</span>`)}${kv('watching',ST.watch.has(r.id)?'★ yes':'no <span class="t-dim">(watch '+r.id+')</span>')}</div>`)}
+  else if(/^check(\s|$)/.test(lc)){const q=c.replace(/^\S+\s*/,'');if(!q){print(`<div class="ln">usage: check <span class="t-dim">chrome 150.0.7</span></div>`)}else{print(`<div class="ln t-dim">checking version ranges…</div>`);const R=await vrun(q);
+    if(!R.products.length)print(`<div class="ln t-warn">no version data for ${esc(R.words.join(' '))} in this window. not the same as safe.</div>`);
+    else R.products.forEach(p=>{const a=p.affected;print(`<div class="ln">${esc(vname(p))} ${esc(R.version||'')} → ${!R.version?`<span class="t-ice">${a.length} CVEs with ranges</span>`:a.length?`<span class="t-err">AFFECTED by ${a.length}</span>${p.fix?` <span class="t-dim">· upgrade to</span> ${esc(p.fix)}+`:''}`:'<span class="t-ok">no known CVEs</span>'}</div>`+a.slice(0,5).map(c=>`<div class="ln"><span class="t-dim">  ·</span> <span data-cve="${esc(c.id)}" style="cursor:pointer;text-decoration:underline">${esc(c.id)}</span> <span style="color:var(--${c.p===1?'crit':c.p===2?'high':'ink3'})">P${c.p}</span> <span class="t-dim">${esc(vrange(c.ranges[0]))}</span></div>`).join(''))})}}
   else if(/^(search|grep)(\s|$)/.test(lc)){const q=c.replace(/^\S+\s*/,'');if(!q){print(`<div class="ln">usage: search <span class="t-dim">kev:yes epss>0.5 vendor:apache</span></div>`)}else{const m=rows.filter(parseQ(q)).sort((a,b)=>a.P[0]-b.P[0]||(b.e||0)-(a.e||0));
     print(`<div class="tgrid c3"><span class="t-dim">ID</span><span class="t-dim">PRIO</span><span class="t-dim">SUMMARY</span>${m.slice(0,10).map(r=>`<div class="tr" data-cve="${r.id}"><span>${r.id}</span><span style="color:var(--${r.P[0]===1?'crit':r.P[0]===2?'high':'ink3'})">P${r.P[0]}</span><span class="t-dim">${esc(r.t)}</span></div>`).join('')}</div><div class="ln t-dim">${m.length} match${m.length===1?'':'es'}${m.length>10?', showing 10':''}</div>`)}}
   else if(/^(un)?watch(\s|$)/.test(lc)){const id=(c.split(' ')[1]||'').toUpperCase();const un=lc.startsWith('un');

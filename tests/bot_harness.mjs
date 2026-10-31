@@ -21,6 +21,8 @@ const hubs = { week: { key: '2026-w43', path: 'week/2026-w43', label: 'Week 43, 
 const cve = { id: 'CVE-2026-1000', title: 'WordPress bug', desc: 'A bug.', severity: 'critical', cvss: 9.8, epss: 0.5, kev: true, public_exploit: true,
   weaponized: false, priority: 1, why: 'on CISA KEV', published: '2026-10-20', products: 'WordPress Core', cwe: ['CWE-79'], url: `${SITE}cve/CVE-2026-1000` };
 
+const vshardN = { v: 1, c: [['CVE-2026-2001', 'critical', 1, 1, 9.8, 'nginx heap overflow'], ['CVE-2026-2002', 'high', 3, 0, 7.5, 'nginx leak']],
+  p: { 'f5|nginx': [[0, '', 1, '1.25.3', 0, ''], [1, '1.20.0', 1, '1.22.1', 1, ''], [1, '', 1, '', -1, '']] } };
 let calls = [], siteDown = false, tgStatus = 200;
 globalThis.fetch = async (url, opt = {}) => {
   url = String(url);
@@ -31,7 +33,7 @@ globalThis.fetch = async (url, opt = {}) => {
   if (siteDown) return new Response('', { status: 503 });
   const path = url.slice(SITE.length);
   if (opt.method === 'HEAD') return new Response('', { status: path === 'og/CVE-2026-1000.jpg' ? 200 : 404 });
-  const doc = { 'api/latest.json': latest, 'api/hubs.json': hubs, 'api/cve/CVE-2026-1000.json': cve }[path];
+  const doc = { 'api/latest.json': latest, 'api/hubs.json': hubs, 'api/cve/CVE-2026-1000.json': cve, 'api/versions/n.json': vshardN }[path];
   return doc ? new Response(JSON.stringify(doc), { status: 200 }) : new Response('', { status: 404 });
 };
 const store = new Map();
@@ -156,4 +158,20 @@ assert.equal(total, 21);
 // every callback_data fits Telegram's 64-byte limit
 c = await run(dm('/watch ' + 'a'.repeat(40)));
 for (const x of [...buttons(c[0])]) if (x.callback_data) assert.ok(Buffer.byteLength(x.callback_data) <= 64);
+// version check: /check and plain "name x.y.z" messages
+c = await run(dm('/check nginx 1.21.0'));
+assert.match(c[0].body.text, /Affected by 2 CVEs/);
+assert.match(c[0].body.text, /Upgrade to <code>1\.25\.3<\/code>/);
+assert.match(c[0].body.text, /1 more name it without a version/);
+assert.ok(buttons(c[0]).some(x => x.callback_data === 'c:CVE-2026-2001'));
+assert.ok(buttons(c[0]).some(x => x.url && x.url.endsWith('?check=nginx%201.21.0')));
+c = await run(dm('nginx 1.24.0'));
+assert.match(c[0].body.text, /Affected by 1 CVE\b/);
+c = await run(dm('nginx 1.26.0'));
+assert.match(c[0].body.text, /No known CVEs for this version/);
+c = await run(dm('/check nosuchthing 1.0'));
+assert.match(c[0].body.text, /No version data/);
+for (const x of [...buttons(c[0])]) if (x.callback_data) assert.ok(Buffer.byteLength(x.callback_data) <= 64);
+c = await run(dm('nginx'));
+assert.ok(!/Affected/.test(c[0].body.text)); // plain word without version is still a search
 console.log('bot harness ok');
