@@ -1,0 +1,36 @@
+name: apply-widget-patch
+on:
+  push:
+    branches: [widget-channel]
+    paths: ['.github/patches/widget.patch']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: widget-channel
+      - run: |
+          git apply .github/patches/widget.patch
+          cat > /tmp/sums <<'S'
+          9c583b7c1cf128da27f4d797b361ac0f57de18ff53fbf8e9410c6ae6e79c2eb4  site/app.js
+          6bf9bf2363b23f5e5dbfcc33a0b3a226e48b57618b670072bfee8ac23bc3c0e8  site/app.css
+          cd1242b96d801c783e21de77ce12382c95a404945840272a8076df2089867dec  site/widget.html
+          da2518bb1d09dfc711b79ac29778b04bba6f4c57b9bdc122157bfd2712dd2c3a  site/widget.css
+          1b89d243178ff51d45eeaebf17664dd589ece1c2381c495048becbf68d1c95f8  site/widget.js
+          b9068c8d56ddb5445e0e6ae7c70792aa9102a213f1e2509d4e317aa350794122  site/embed.js
+          a325411084cf0766c69a9143bdeff97364a957402994723fb00f082d33cbd638  scripts/digest_cards.py
+          de858093de092c598933404edac518b4ba9ebc9828f3f5f1ff37e513b225a616  scripts/notify_telegram.py
+          6d3acbd4a420612bbc75b13067a225c4467ccf7f47d8f5eb5fed89687f8b0f7f  tests/test_widget.py
+          S
+          sed -i 's/^ *//' /tmp/sums
+          sha256sum -c /tmp/sums
+          node --check site/app.js
+          git rm -q .github/patches/widget.patch
+          git config user.name "iliya-bashrc"
+          git config user.email "iliya-bashrc@users.noreply.github.com"
+          git add -A site scripts tests
+          git commit -m "Embeddable widget by @RootAccessClub, channel handle on cards, version-check button on alerts"
+          git push origin HEAD:widget-channel
