@@ -4,7 +4,8 @@
  * Handles messages, button taps (callback_query) and inline mode (@SubZer0Robot CVE-… in any chat).
  * Data comes from the published site only (api/latest.json, api/cve/<id>.json, api/hubs.json), so the bot
  * never disagrees with the website. Watchlists live in KV under "w:<chat id>"; the 6-hourly snapshot job
- * (scripts/notify_telegram.py) reads them and DMs matches.
+ * (scripts/notify_telegram.py) reads them and DMs matches. Groups: admins manage a group watchlist (same "w:<chat>"),
+ * and "g:<chat>" marks a group that wants the morning brief (scripts/digest.py forwards the daily channel post there).
  *
  * Bindings: KV (namespace), BOT_TOKEN (secret), WEBHOOK_SECRET (secret), SITE (plain text), ADMIN_ID (optional).
  */
@@ -118,6 +119,7 @@ async function remember(env, chat) {
 async function handle(update, env) {
   if (update.callback_query) return onTap(update.callback_query, env);
   if (update.inline_query) return onInline(update.inline_query, env);
+  if (update.my_chat_member) return onMember(update.my_chat_member, env);
   const msg = update.message;
   if (!msg || !msg.chat || typeof msg.text !== 'string') return;
   const chat = msg.chat.id, priv = msg.chat.type === 'private';
@@ -134,17 +136,21 @@ async function handle(update, env) {
     const a = arg.replace(/_/g, '-');
     if (CVE_RE.test(a)) return reply(env, chat, await cveView(env, a.match(CVE_RE)[0].toUpperCase(), priv));
     if (/^watch-.+/i.test(a)) return watch(env, chat, arg.slice(6).replace(/_/g, ' '), priv);
-    if (a === 'watch') return send(env, chat, await listView(env, chat));
+    if (a === 'watch') return send(env, chat, await listView(env, chat, priv));
     if (a === 'top') return send(env, chat, await topView(env, 0, priv));
     if (a === 'week') return send(env, chat, await weekView(env, priv));
+    if (a === 'brief' && !priv) return; // "Add to a group" link: the welcome message already covers it
   }
   if (cmd === 'start' || cmd === 'menu') return send(env, chat, await menuView(env, priv));
   if (cmd === 'help') return send(env, chat, helpView(env, priv));
   if (cmd === 'top') return send(env, chat, await topView(env, 0, priv));
   if (cmd === 'week' || cmd === 'weekly') return send(env, chat, await weekView(env, priv));
+  if (cmd === 'daily' || cmd === 'morning' || cmd === 'brief') return daily(env, msg, arg);
+  if ((cmd === 'watch' || cmd === 'unwatch') && !priv && norm(arg) && !(await isAdmin(env, msg.chat.id, msg.from, msg.sender_chat)))
+    return send(env, chat, { text: 'Only group admins can change the group watchlist. Anyone can see it: /list' });
   if (cmd === 'watch') return watch(env, chat, arg, priv);
-  if (cmd === 'unwatch') return unwatch(env, chat, arg);
-  if (cmd === 'list' || cmd === 'watchlist' || cmd === 'settings') return send(env, chat, await listView(env, chat));
+  if (cmd === 'unwatch') return unwatch(env, chat, arg, priv);
+  if (cmd === 'list' || cmd === 'watchlist' || cmd === 'settings') return send(env, chat, await listView(env, chat, priv));
   if (cmd === 'search' || cmd === 'find') return send(env, chat, await searchView(env, arg, priv));
   if (cmd === 'check' || cmd === 'affected') return send(env, chat, await checkView(env, arg, priv));
   if (cmd === 'myid') return send(env, chat, { text: `Your chat id: <code>${esc(chat)}</code>` });
@@ -158,7 +164,8 @@ async function handle(update, env) {
   if (!m) return send(env, chat, await searchView(env, text, priv)); // plain words in a DM = search
 }
 
-/* button taps: t:<page> top list · c:<id> CVE card · wk week · l list · m menu · a:/A:<kw> watch · r:<kw> unwatch · s search tip */
+/* button taps: t:<page> top list · c:<id> CVE card · wk week · l list · m menu · a:/A:<kw> watch · r:<kw> unwatch · s search tip
+ * g group brief view · G:on/G:off morning brief (groups) · in groups every change (a A r S M G) is for admins only */
 async function onTap(q, env) {
   const data = String(q.data || ''), msg = q.message, chat = msg && msg.chat && msg.chat.id;
   const answer = (text, alert) => tg(env, 'answerCallbackQuery', { callback_query_id: q.id, ...(text ? { text, show_alert: !!alert } : {}) });
@@ -167,11 +174,17 @@ async function onTap(q, env) {
   const priv = msg.chat.type === 'private';
   const [op, rest = ''] = [data.slice(0, data.indexOf(':') < 0 ? data.length : data.indexOf(':')), data.includes(':') ? data.slice(data.indexOf(':') + 1) : ''];
   if (op === 'noop') return answer();
+  if (!priv && 'aArSMG'.includes(op) && op && !(await isAdmin(env, chat, q.from))) return answer('Only group admins can change this.', true);
+  if (op === 'G' && !priv && (rest === 'on' || rest === 'off')) {
+    await setBrief(env, chat, rest === 'on', msg.chat.title);
+    await answer(rest === 'on' ? '☀️ Morning brief on' : 'Morning brief off');
+    return edit(env, msg, await briefView(env, chat));
+  }
   if (op === 'c' && CVE_RE.test(rest)) { await answer(); return reply(env, chat, await cveView(env, rest.toUpperCase(), priv)); }
   if (op === 'a' || op === 'A') {
-    const r = await addWatch(env, chat, rest, priv);
+    const r = await addWatch(env, chat, rest);
     await answer(r.toast, !r.ok);
-    if (op === 'A' && r.ok) return edit(env, msg, await listView(env, chat));
+    if (op === 'A' && r.ok) return edit(env, msg, await listView(env, chat, priv));
     return;
   }
   if (op === 'r') {
@@ -179,21 +192,21 @@ async function onTap(q, env) {
     doc.k = doc.k.filter(x => x !== rest);
     await saveDoc(env, chat, doc);
     await answer(`Removed ${rest}`);
-    return edit(env, msg, await listView(env, chat));
+    return edit(env, msg, await listView(env, chat, priv));
   }
   if ((op === 'S' && (rest === 'p1' || rest === 'crit')) || (op === 'M' && (rest === 'now' || rest === 'daily'))) {
     const doc = await getDoc(env, chat);
-    if (!doc.k.length) { await answer('Add a name first: /watch nginx', true); return edit(env, msg, await listView(env, chat)); }
+    if (!doc.k.length) { await answer('Add a name first: /watch nginx', true); return edit(env, msg, await listView(env, chat, priv)); }
     if (op === 'S') doc.s = rest; else doc.m = rest;
     await saveDoc(env, chat, doc);
     await answer(op === 'S' ? (rest === 'crit' ? '🔴 Patch-now + new critical CVEs' : '🎯 Patch-now CVEs only') : (rest === 'daily' ? '🗓 One summary a day' : '⚡ Right away'));
-    return edit(env, msg, await listView(env, chat));
+    return edit(env, msg, await listView(env, chat, priv));
   }
   if (op === 'q') { await answer(); return send(env, chat, await searchView(env, rest, priv)); }
   if (op === 's') return answer('Just send a name like nginx, wordpress or xss — or a CVE id.', true);
   await answer();
   const view = op === 't' ? await topView(env, Number(rest) || 0, priv) : op === 'wk' ? await weekView(env, priv)
-    : op === 'l' ? await listView(env, chat) : await menuView(env, priv);
+    : op === 'l' ? await listView(env, chat, priv) : op === 'g' && !priv ? await briefView(env, chat) : await menuView(env, priv);
   return msg.photo ? send(env, chat, view) : edit(env, msg, view);
 }
 
@@ -223,7 +236,8 @@ function helpView(env, priv) {
       '/search <code>nginx</code> — vendor, product or weakness (or just send a word)',
       '/check <code>chrome 150.0.7</code> — is the version you run affected? (or just send name + version)',
       '/watch <code>nginx</code> — DM me when it gets a patch-now CVE', '/settings — your watchlist: critical too? instant or daily?', '',
-      `In any chat: type <code>@${BOT} CVE-2026-…</code> to share a CVE card.`, `Live alerts: @RootAccessClub · Site: ${env.SITE}`].join('\n'),
+      ...(priv ? [] : ['', '<b>In this group</b>', '/daily — ☀️ morning brief on/off (admins)', '/watch <code>nginx</code> — group watchlist (admins), /list to see it']),
+      `In any chat: type <code>@${BOT} CVE-2026-…</code> to share a CVE card.`, `Add me to a group for a ☀️ morning brief: /daily`, `Live alerts: @RootAccessClub · Site: ${env.SITE}`].join('\n'),
     markup: kb([[cb('≡ Menu', 'm', 'primary')]]),
   };
 }
@@ -238,7 +252,7 @@ async function menuView(env, priv) {
   return {
     text,
     markup: kb([[cb('🎯 Patch now', 't:0', 'danger'), cb('📅 This week', 'wk', 'primary')],
-      priv ? [cb('👁 My watchlist', 'l', 'success'), cb('🔎 Search', 's')] : [cb('🔎 Search', 's')],
+      priv ? [cb('👁 My watchlist', 'l', 'success'), cb('🔎 Search', 's')] : [cb('☀️ Morning brief', 'g', 'success'), cb('👁 Group watchlist', 'l')],
       [link('📣 Channel', CHANNEL), app(env, '🌐 Open SubZer0', '', priv)]]),
   };
 }
@@ -377,13 +391,14 @@ async function checkView(env, q, priv) {
 }
 
 const SENS = { p1: 'a patch-now CVE', crit: 'a patch-now or a new critical CVE' };
-async function listView(env, chat) {
+async function listView(env, chat, priv = true) {
   const doc = await getDoc(env, chat), k = doc.k;
   if (k.length) {
     const on = (label, val, cur) => (val === cur ? '✓ ' : '') + label;
-    return { text: [`👁 <b>Your watchlist</b> · ${k.length}/${MAX_WATCH}`, ...k.map(x => '• ' + esc(x)), '',
-      `🔔 You get ${doc.m === 'daily' ? '<b>one summary a day</b> (around 09:45 Tehran / 06:15 UTC)' : '<b>a DM right away</b>'} when one of these gets <b>${SENS[doc.s]}</b>.`,
-      'Change it below. Tap ✕ to remove a name, or send <code>/watch name</code> to add.'].join('\n'),
+    const who = priv ? 'You get' : 'This group gets', how = priv ? 'a DM right away' : 'a message right away';
+    return { text: [`👁 <b>${priv ? 'Your' : 'Group'} watchlist</b> · ${k.length}/${MAX_WATCH}`, ...k.map(x => '• ' + esc(x)), '',
+      `🔔 ${who} ${doc.m === 'daily' ? '<b>one summary a day</b> (around 09:45 Tehran / 06:15 UTC)' : `<b>${how}</b>`} when one of these gets <b>${SENS[doc.s]}</b>.`,
+      `Change it below${priv ? '' : ' (admins)'}. Tap ✕ to remove a name, or send <code>/watch name</code> to add.`].join('\n'),
       markup: kb([...k.map(x => [cb(`✕ ${clip(x, 30)}`, 'r:' + x, 'danger')]),
         [cb(on('🎯 Patch now only', 'p1', doc.s), 'S:p1', doc.s === 'p1' ? 'success' : undefined), cb(on('🔴 + Critical', 'crit', doc.s), 'S:crit', doc.s === 'crit' ? 'success' : undefined)],
         [cb(on('⚡ Instant', 'now', doc.m), 'M:now', doc.m === 'now' ? 'success' : undefined), cb(on('🗓 Daily summary', 'daily', doc.m), 'M:daily', doc.m === 'daily' ? 'success' : undefined)],
@@ -391,7 +406,8 @@ async function listView(env, chat) {
   }
   const h = await hubs(env);
   const pop = h ? h.topics.filter(t => t.term && t.term.length >= 3 && t.term.length <= 40).sort((x, y) => y.n - x.n).slice(0, 6) : [];
-  return { text: '👁 <b>Your watchlist is empty</b>\nPick what you run, or send <code>/watch nginx</code>. You get a DM only when it gets a patch-now CVE.',
+  return { text: priv ? '👁 <b>Your watchlist is empty</b>\nPick what you run, or send <code>/watch nginx</code>. You get a DM only when it gets a patch-now CVE.'
+    : '👁 <b>The group watchlist is empty</b>\nAdmins: pick what your team runs, or send <code>/watch nginx</code>. The group gets a message only when it gets a patch-now CVE.',
     markup: kb([...[0, 2, 4].map(i => pop.slice(i, i + 2).map(t => cb(`＋ ${clip(t.name, 20)}`, 'A:' + t.term, 'success'))), [cb('≡ Menu', 'm')]]) };
 }
 
@@ -401,7 +417,8 @@ async function statsView(env, chat) {
   const day = new Date().toISOString().slice(0, 10);
   const d = await safe(env, 'api/latest.json');
   const age = d && d.generated_at ? ((Date.now() - Date.parse(d.generated_at)) / 3600000).toFixed(1) : '?';
-  return { text: ['📊 <b>SubZer0 bot</b>', `Users: <b>${n(await count('u:'))}</b>`, `Watchlists: <b>${n(await count('w:'))}</b>`,
+  return { text: ['📊 <b>SubZer0 bot</b>', `Users: <b>${n(await count('u:'))}</b>`, `Watchlists: <b>${n(await count('w:'))}</b> (groups: ${n(await count('w:-'))})`,
+    `Groups with the morning brief: <b>${n(await count('g:'))}</b>`,
     `Errors today: <b>${Number(await env.KV.get('e:' + day)) || 0}</b>`, `Data age: <b>${age} h</b>${Number(age) > 8 ? ' ⚠️ refresh may be stuck' : ''}`].join('\n') };
 }
 
@@ -418,8 +435,7 @@ async function saveDoc(env, chat, doc) {
   else { await env.KV.delete('w:' + chat); await env.KV.delete('q:' + chat); }
 }
 async function saveWatch(env, chat, k) { const doc = await getDoc(env, chat); doc.k = k; return saveDoc(env, chat, doc); }
-async function addWatch(env, chat, arg, priv) {
-  if (!priv) return { ok: false, toast: 'Watchlists work in a private chat with @' + BOT };
+async function addWatch(env, chat, arg) {
   const kw = norm(arg);
   if (kw.length < 3 || kw.length > 40) return { ok: false, toast: 'Use 3–40 characters: a vendor or product name.' };
   const k = await getWatch(env, chat);
@@ -431,25 +447,76 @@ async function addWatch(env, chat, arg, priv) {
 }
 
 async function watch(env, chat, arg, priv) {
-  if (!priv) return send(env, chat, { text: `Watchlists work in a private chat: open @${BOT} and send /watch there.`, markup: kb([[link('Open @' + BOT, `https://t.me/${BOT}?start=watch`, 'success')]]) });
-  if (!norm(arg)) return send(env, chat, await listView(env, chat));
-  const r = await addWatch(env, chat, arg, priv);
+  if (!norm(arg)) return send(env, chat, await listView(env, chat, priv));
+  const r = await addWatch(env, chat, arg);
   if (!r.ok) return send(env, chat, { text: esc(r.toast) });
   const t = topicIn(await hubs(env), r.kw);
   const page = t ? `\n\n📂 ${esc(t.name)} has its own page: ${n(t.n)} CVEs ranked by what to patch first.` : '';
   return send(env, chat, {
-    text: `👁 ${r.added ? 'Watching' : 'Already watching'} <b>${esc(r.kw)}</b>. You get a DM here when it gets ${SENS[(await getDoc(env, chat)).s]} (change it in /settings).\nNow watching: ${r.k.map(esc).join(', ')}${page}`,
-    markup: kb([t ? [app(env, `📂 Open the ${clip(t.name, 26)} page`, t.path, priv, 'primary')] : null, [cb('👁 My watchlist', 'l', 'success'), cb('≡ Menu', 'm')]]),
+    text: `👁 ${r.added ? 'Watching' : 'Already watching'} <b>${esc(r.kw)}</b>. ${priv ? 'You get a DM here' : 'This group gets a message'} when it gets ${SENS[(await getDoc(env, chat)).s]} (change it in /settings).\nNow watching: ${r.k.map(esc).join(', ')}${page}`,
+    markup: kb([t ? [app(env, `📂 Open the ${clip(t.name, 26)} page`, t.path, priv, 'primary')] : null, [cb(priv ? '👁 My watchlist' : '👁 Group watchlist', 'l', 'success'), cb('≡ Menu', 'm')]]),
   });
 }
 
-async function unwatch(env, chat, arg) {
+async function unwatch(env, chat, arg, priv = true) {
   const kw = norm(arg), k = await getWatch(env, chat);
-  if (!kw) return send(env, chat, await listView(env, chat));
+  if (!kw) return send(env, chat, await listView(env, chat, priv));
   const next = kw === 'all' ? [] : k.filter(x => x !== kw);
   if (next.length === k.length && kw !== 'all') return send(env, chat, { text: `<b>${esc(kw)}</b> is not on your list.`, markup: kb([[cb('👁 My watchlist', 'l', 'success')]]) });
   await saveWatch(env, chat, next);
   return send(env, chat, { text: next.length ? `Removed. Still watching: ${next.map(esc).join(', ')}` : 'Watchlist cleared.', markup: kb([[cb('👁 My watchlist', 'l', 'success')]]) });
+}
+
+/* ---------- groups: welcome on add, admin check, ☀️ morning brief (g:<chat>) ---------- */
+const admins = new Map();
+async function isAdmin(env, chat, from, senderChat) {
+  if (senderChat && senderChat.id === chat) return true; // anonymous group admin
+  if (!from || !from.id) return false;
+  const key = chat + ':' + from.id, hit = admins.get(key);
+  if (hit && Date.now() - hit.t < 60000) return hit.ok;
+  const r = await tg(env, 'getChatMember', { chat_id: chat, user_id: from.id });
+  const ok = !!(r.ok && r.result && (r.result.status === 'creator' || r.result.status === 'administrator'));
+  if (admins.size > 2000) admins.clear();
+  admins.set(key, { t: Date.now(), ok });
+  return ok;
+}
+async function setBrief(env, chat, on, title) {
+  if (on) await env.KV.put('g:' + chat, JSON.stringify({ t: Date.now(), title: clip(title, 60) }));
+  else await env.KV.delete('g:' + chat);
+}
+async function briefView(env, chat) {
+  const on = !!(await env.KV.get('g:' + chat));
+  return { text: [`☀️ <b>Morning brief</b> · ${on ? 'on ✓' : 'off'}`, '',
+    'One short post here around <b>10:00 Tehran (06:30 UTC)</b>: what got actively exploited and what to patch now.',
+    'Quiet days are skipped, so it never spams the group.', '', on ? 'Admins can turn it off below or with <code>/daily off</code>.' : 'Admins: turn it on below or send <code>/daily on</code>.'].join('\n'),
+    markup: kb([[on ? cb('🔕 Turn off', 'G:off') : cb('☀️ Turn on the morning brief', 'G:on', 'success')], [cb('👁 Group watchlist', 'l'), cb('🎯 Patch now', 't:0', 'danger')]]) };
+}
+async function daily(env, msg, arg) {
+  const chat = msg.chat.id;
+  if (msg.chat.type === 'private') return send(env, chat, { text: '☀️ The morning brief is for groups: add me to your team\'s group and send /daily there.\nFor yourself: /watch a product and pick 🗓 Daily summary in /settings.',
+    markup: kb([[link('➕ Add to a group', `https://t.me/${BOT}?startgroup=brief`, 'success')], [cb('👁 My watchlist', 'l')]]) });
+  const a = norm(arg);
+  if (a === 'on' || a === 'off') {
+    if (!(await isAdmin(env, chat, msg.from, msg.sender_chat))) return send(env, chat, { text: 'Only group admins can turn the morning brief on or off.' });
+    await setBrief(env, chat, a === 'on', msg.chat.title);
+  }
+  return send(env, chat, await briefView(env, chat));
+}
+async function onMember(u, env) {
+  const chat = u.chat && u.chat.id, type = u.chat && u.chat.type;
+  if (!chat || (type !== 'group' && type !== 'supergroup')) return;
+  const was = (u.old_chat_member || {}).status, now = (u.new_chat_member || {}).status;
+  if (now === 'left' || now === 'kicked') { // removed: forget the group
+    for (const k of ['g:', 'w:', 'q:']) { try { await env.KV.delete(k + chat); } catch { /* best effort */ } }
+    return;
+  }
+  if ((now === 'member' || now === 'administrator') && (was === 'left' || was === 'kicked' || !was)) {
+    return send(env, chat, { text: ['👋 <b>SubZer0 Sentinel is here</b>', '<i>What to patch first, ranked by real exploitation.</i>', '',
+      '☀️ <b>Morning brief</b>: one short post a day with what to patch (admins: tap below or /daily on).',
+      '👁 <b>Group watchlist</b>: admins send <code>/watch nginx</code>, the group hears about patch-now CVEs.',
+      '🔎 Anyone: /top · /check <code>openssl 3.0.1</code> · /cve <code>CVE-…</code>', '', 'Live alerts: @RootAccessClub'].join('\n'),
+      markup: kb([[cb('☀️ Turn on the morning brief', 'G:on', 'success')], [cb('🎯 Patch now', 't:0', 'danger'), link('📣 Channel', CHANNEL)]]) });
+  }
 }
 
 /* ---------- inline mode: @SubZer0Robot CVE-2026-… in any chat ---------- */
@@ -481,7 +548,7 @@ async function tg(env, method, body, retry = true) {
   const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (r.ok) return { ok: true };
+  if (r.ok) { if (method !== 'getChatMember') return { ok: true }; try { return { ok: true, result: (await r.json()).result }; } catch { return { ok: false }; } }
   let j = {};
   try { j = await r.json(); } catch { /* not json */ }
   const wait = j.parameters && j.parameters.retry_after;
@@ -494,7 +561,7 @@ async function send(env, chat, view) {
   const body = { chat_id: chat, text: view.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } };
   if (view.markup) body.reply_markup = view.markup;
   const r = await tg(env, 'sendMessage', body);
-  if (!r.ok && r.status === 403 && chat > 0) { try { await env.KV.delete('w:' + chat); } catch { /* best effort */ } } // user blocked the bot
+  if (!r.ok && r.status === 403) { try { await env.KV.delete('w:' + chat); if (chat < 0) await env.KV.delete('g:' + chat); } catch { /* best effort */ } } // blocked / removed
   return r;
 }
 
@@ -515,4 +582,4 @@ async function edit(env, msg, view) {
   return r;
 }
 
-export const _test = { handle, norm, helpView, limited, topicIn, hits };
+export const _test = { handle, norm, helpView, limited, topicIn, hits, admins };

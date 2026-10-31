@@ -53,6 +53,9 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           THEME: ${{ inputs.theme || 'auto' }}
           SEND_TO: ${{ inputs.send_to || '' }}
+          # read-only use: list the groups that turned on the ☀️ morning brief (g:<chat> in the bot's KV)
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           case "$MODE" in auto|daily|weekly) ;; *) echo "bad mode"; exit 1;; esac
           case "$THEME" in auto|all|spotlight|bignumber|terminal|radar|heatmap|frost) ;; *) echo "bad theme"; exit 1;; esac

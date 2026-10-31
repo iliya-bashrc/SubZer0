@@ -27,7 +27,9 @@ let calls = [], siteDown = false, tgStatus = 200;
 globalThis.fetch = async (url, opt = {}) => {
   url = String(url);
   if (url.startsWith('https://api.telegram.org/')) {
-    calls.push({ method: url.split('/').pop(), body: JSON.parse(opt.body) });
+    const method = url.split('/').pop(), body = JSON.parse(opt.body);
+    calls.push({ method, body });
+    if (method === 'getChatMember') return new Response(JSON.stringify({ ok: true, result: { status: body.user_id === 1 ? 'administrator' : 'member' } }), { status: 200 });
     return new Response(JSON.stringify(tgStatus === 200 ? { ok: true } : { ok: false, description: 'Forbidden: bot was blocked by the user' }), { status: tgStatus });
   }
   if (siteDown) return new Response('', { status: 503 });
@@ -118,8 +120,51 @@ c = await run({ message: { chat: { id: -100, type: 'supergroup' }, text: 'hello'
 assert.equal(c.length, 0);
 c = await run({ message: { chat: { id: -100, type: 'supergroup' }, text: '/top' } });
 assert.ok(buttons(c[0]).every(x => !x.web_app));
-c = await run({ message: { chat: { id: -100, type: 'supergroup' }, text: '/watch nginx' } });
-assert.match(c[0].body.text, /private chat/);
+const gm = (text, from = 2) => ({ message: { chat: { id: -100, type: 'supergroup', title: 'Sec team' }, from: { id: from }, text } });
+const gtap = (data, from = 2) => ({ callback_query: { id: 'q', data, from: { id: from }, message: { message_id: 5, chat: { id: -100, type: 'supergroup' }, text: 'x' } } });
+c = await run(gm('/watch nginx'));
+assert.match(c.at(-1).body.text, /Only group admins/);
+assert.ok(!store.has('w:-100'));
+c = await run(gm('/watch@SubZer0Robot nginx', 1)); // admin: group watchlist
+assert.match(c.at(-1).body.text, /This group gets a message/);
+assert.deepEqual(JSON.parse(store.get('w:-100')).k, ['nginx']);
+assert.ok(c.every(x => !buttons(x).some(y => y.web_app)));
+c = await run(gm('/list'));
+assert.match(c[0].body.text, /Group watchlist/);
+c = await run(gtap('r:nginx'));
+assert.equal(c[c.length - 1].method, 'answerCallbackQuery');
+assert.match(c.at(-1).body.text, /Only group admins/);
+assert.ok(store.has('w:-100'));
+// morning brief: members can look, only admins switch it
+c = await run(gm('/daily on'));
+assert.match(c.at(-1).body.text, /Only group admins/);
+assert.ok(!store.has('g:-100'));
+_test.admins.clear();
+c = await run(gm('/daily on', 1));
+assert.match(c.at(-1).body.text, /Morning brief<\/b> · on/);
+assert.equal(JSON.parse(store.get('g:-100')).title, 'Sec team');
+c = await run(gtap('G:off', 1));
+assert.ok(!store.has('g:-100'));
+assert.equal(c.at(-1).method, 'editMessageText');
+c = await run(gtap('G:on', 1));
+assert.ok(store.has('g:-100'));
+c = await run({ message: { chat: { id: -100, type: 'supergroup' }, sender_chat: { id: -100 }, text: '/daily off' } }); // anonymous admin
+assert.ok(!store.has('g:-100'));
+c = await run(dm('/daily'));
+assert.ok(buttons(c[0]).some(x => x.url && x.url.includes('startgroup=')));
+// added to a group: welcome with a brief button; removed: group forgotten
+const member = (was, now) => ({ my_chat_member: { chat: { id: -100, type: 'supergroup' }, old_chat_member: { status: was }, new_chat_member: { status: now } } });
+c = await run(member('left', 'member'));
+assert.match(c[0].body.text, /SubZer0 Sentinel is here/);
+assert.ok(buttons(c[0]).some(x => x.callback_data === 'G:on'));
+store.set('g:-100', '{}');
+c = await run(member('member', 'kicked'));
+assert.equal(c.length, 0);
+assert.ok(!store.has('g:-100') && !store.has('w:-100'));
+c = await run({ my_chat_member: { chat: { id: 7, type: 'private' }, old_chat_member: { status: 'member' }, new_chat_member: { status: 'kicked' } } });
+assert.equal(c.length, 0);
+c = await run(gm('/help'));
+assert.match(c[0].body.text, /In this group/);
 
 // inline mode
 c = await run({ inline_query: { id: 'i', query: 'CVE-2026-1000' } });
