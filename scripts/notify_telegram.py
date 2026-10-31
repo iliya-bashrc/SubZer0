@@ -262,10 +262,11 @@ def watch_matches(new: list[list], watches: dict[str, list[str]], ctx: dict) -> 
     return out
 
 
-def watch_text(hits: list[tuple[list, str]], ctx: dict, daily: bool = False) -> str:
+def watch_text(hits: list[tuple[list, str]], ctx: dict, daily: bool = False, group: bool = False) -> str:
     n = len(hits)
-    head = (f"\U0001F5D3 <b>Your daily watchlist summary</b> \u00b7 {n} CVE{'s' if n != 1 else ''}" if daily else
-            f"\U0001F441 <b>Your watchlist</b> \u00b7 {n} new {'to patch now' if all(priority(r, ctx) == 1 for r, _ in hits) else 'alerts'}")
+    who = "Group" if group else "Your"
+    head = (f"\U0001F5D3 <b>{who} daily watchlist summary</b> \u00b7 {n} CVE{'s' if n != 1 else ''}" if daily else
+            f"\U0001F441 <b>{who} watchlist</b> \u00b7 {n} new {'to patch now' if all(priority(r, ctx) == 1 for r, _ in hits) else 'alerts'}")
     lines = [head]
     for r, kw in hits[:8]:
         tag = "\U0001F3AF patch now" if priority(r, ctx) == 1 else "\U0001F534 new critical"
@@ -277,10 +278,12 @@ def watch_text(hits: list[tuple[list, str]], ctx: dict, daily: bool = False) -> 
     return "\n".join(lines)
 
 
-def watch_buttons(hits: list[tuple[list, str]]) -> dict:
+def watch_buttons(hits: list[tuple[list, str]], group: bool = False) -> dict:
+    """Mini App (web_app) buttons only work in private chats; groups get a plain link."""
     r = hits[0][0]
-    return {"inline_keyboard": [[{"text": f"\U0001F4C2 {r[0]}", "web_app": {"url": f"{SITE_URL}cve/{r[0]}"}, "style": "danger"}],
-                                [{"text": "\U0001F441 My watchlist", "callback_data": "l", "style": "success"},
+    open_btn = {"url": f"{SITE_URL}cve/{r[0]}"} if group else {"web_app": {"url": f"{SITE_URL}cve/{r[0]}"}}
+    return {"inline_keyboard": [[{"text": f"\U0001F4C2 {r[0]}", **open_btn, "style": "danger"}],
+                                [{"text": "\U0001F441 Group watchlist" if group else "\U0001F441 My watchlist", "callback_data": "l", "style": "success"},
                                  {"text": "\U0001F3AF Patch now", "callback_data": "t:0"}]]}
 
 
@@ -318,7 +321,7 @@ def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool, crit: list
         if dry:
             print(f"[watch DM to {chat}]\n{text}")
             return True
-        ok, code = send_dm(token, chat, text, watch_buttons(items))
+        ok, code = send_dm(token, chat, text, watch_buttons(items, chat.startswith("-")))
         if ok:
             sent += 1
         elif code == 403 and not chat.startswith("-"):  # blocked: stop trying every 6 hours
@@ -331,7 +334,7 @@ def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool, crit: list
 
     for chat, items in list(hits.items())[:MAX_DMS]:
         if chat not in daily:
-            deliver(chat, watch_text(items, ctx), items)
+            deliver(chat, watch_text(items, ctx, group=chat.startswith("-")), items)
     if daily:
         try:
             ns_id = namespace()
@@ -346,7 +349,7 @@ def send_watch_dms(new: list[list], ctx: dict, token: str, dry: bool, crit: list
                 queue = queue[-MAX_QUEUE:]
                 if due:
                     items = [(by_id[i], kw) for i, kw in queue if i in by_id]
-                    if not items or deliver(chat, watch_text(items, ctx, daily=True), items):
+                    if not items or deliver(chat, watch_text(items, ctx, daily=True, group=chat.startswith("-")), items):
                         if raw and not dry:
                             kv_delete(cf_token, account, ns_id, "q:" + chat)
                         continue

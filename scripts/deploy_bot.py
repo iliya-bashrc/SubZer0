@@ -29,6 +29,7 @@ COMMANDS = [
     ("unwatch", "Remove a name from your watchlist"),
     ("list", "Show your watchlist"),
     ("settings", "Alerts: critical too? instant or daily?"),
+    ("daily", "Groups: morning brief on/off"),
     ("help", "How to use SubZer0 Sentinel"),
 ]
 
@@ -125,7 +126,7 @@ def main() -> int:
     print("Worker URL:", url)
 
     tg = f"https://api.telegram.org/bot{bot}"
-    hook = {"url": url + "/tg", "secret_token": webhook_secret(bot), "allowed_updates": ["message", "callback_query", "inline_query"],
+    hook = {"url": url + "/tg", "secret_token": webhook_secret(bot), "allowed_updates": ["message", "callback_query", "inline_query", "my_chat_member"],
             "drop_pending_updates": True, "max_connections": 20}
     r = call(f"{tg}/setWebhook", None, "POST", json.dumps(hook).encode())
     print("setWebhook:", r.get("description") or r.get("ok"))

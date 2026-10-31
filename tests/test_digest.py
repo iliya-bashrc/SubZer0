@@ -38,6 +38,25 @@ class DigestTests(unittest.TestCase):
         self.assertIn("Arista VeloCloud Orchestrator", text)
         self.assertNotIn("CVE-2026-0099", text)
 
+    def test_daily_post_is_forwarded_to_brief_groups(self):
+        calls = []
+
+        def fake(method, token, fields, photo=None, status=None):
+            calls.append((method, fields["chat_id"]))
+            if fields["chat_id"] == "-3":  # bot was removed from this group
+                status.append(403)
+                return None
+            if fields["chat_id"] == "-2" and method == "forwardMessage":  # forwarding refused: send a copy
+                status.append(400)
+                return None
+            return {"message_id": 9}
+        with mock.patch.object(digest.time, "sleep"):
+            sent = digest.share_with_groups("t", "@RootAccessClub", 77, "<b>daily</b>", groups=["-1", "-2", "-3"], call=fake)
+        self.assertEqual(sent, 2)
+        self.assertEqual(calls, [("forwardMessage", "-1"), ("forwardMessage", "-2"), ("sendMessage", "-2"), ("forwardMessage", "-3")])
+        with mock.patch.dict(digest.os.environ, {"CLOUDFLARE_API_TOKEN": "", "CLOUDFLARE_ACCOUNT_ID": ""}):
+            self.assertEqual(digest.share_with_groups("t", "@c", 1, "x", call=fake), 0)  # Cloudflare not set up: no-op
+
     def test_quiet_day_posts_nothing(self):
         quiet = [row("CVE-2026-0007", "medium", 5.0), row("CVE-2026-0008", "high", 7.2)]
         d = digest.build_digest(quiet, {"poc": set(), "intel": {}}, "daily", NOW)

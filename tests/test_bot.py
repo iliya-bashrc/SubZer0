@@ -49,6 +49,19 @@ class CveApiTests(unittest.TestCase):
         self.assertTrue(out["url"].endswith("cve/CVE-2026-1111"))
 
 
+class GroupAlertTests(unittest.TestCase):
+    def test_group_alerts_use_links_not_mini_app_buttons(self):
+        import notify_telegram as nt
+        row = ["CVE-2026-1", "Bug"] + [None] * 12
+        dm = nt.watch_buttons([(row, "nginx")])
+        grp = nt.watch_buttons([(row, "nginx")], group=True)
+        self.assertIn("web_app", dm["inline_keyboard"][0][0])
+        first = grp["inline_keyboard"][0][0]
+        self.assertNotIn("web_app", first)
+        self.assertTrue(first["url"].endswith("cve/CVE-2026-1"))
+        self.assertIn("Group", grp["inline_keyboard"][1][0]["text"])
+
+
 class WorkerTests(unittest.TestCase):
     def test_worker_checks_webhook_secret_and_limits_watchlists(self):
         js = (ROOT / "worker/bot.js").read_text(encoding="utf-8")
@@ -82,7 +95,7 @@ class DeployTests(unittest.TestCase):
 
     def test_webhook_receives_buttons_and_inline_queries(self):
         src = (ROOT / "scripts/deploy_bot.py").read_text(encoding="utf-8")
-        self.assertIn('"allowed_updates": ["message", "callback_query", "inline_query"]', src)
+        self.assertIn('"allowed_updates": ["message", "callback_query", "inline_query", "my_chat_member"]', src)
 
     def test_bot_workflow_is_pinned_and_read_only(self):
         import re

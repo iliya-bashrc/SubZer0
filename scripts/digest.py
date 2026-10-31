@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -290,6 +291,11 @@ def daily_buttons() -> dict:
 
 
 def tg_call(method: str, token: str, fields: dict, photo: Path | None = None) -> bool:
+    return tg_result(method, token, fields, photo) is not None
+
+
+def tg_result(method: str, token: str, fields: dict, photo: Path | None = None, status: list | None = None) -> dict | None:
+    """Telegram call returning the result (None on failure); status, when given, receives the HTTP error code."""
     url = f"https://api.telegram.org/bot{token}/{method}"
     if photo is None:
         body = json.dumps(fields).encode()
@@ -307,16 +313,69 @@ def tg_call(method: str, token: str, fields: dict, photo: Path | None = None) ->
         headers = {"Content-Type": f"multipart/form-data; boundary={b}"}
     try:
         with urllib.request.urlopen(urllib.request.Request(url, data=body, headers=headers, method="POST"), timeout=60) as r:
-            return bool(json.load(r).get("ok"))
+            j = json.load(r)
+            return (j.get("result") or {}) if j.get("ok") else None
     except urllib.error.HTTPError as exc:
+        if status is not None:
+            status.append(exc.code)
         try:
             print("digest: telegram error:", json.load(exc).get("description"), file=sys.stderr)
         except Exception:
             print(f"digest: telegram HTTP {exc.code}", file=sys.stderr)
-        return False
+        return None
     except Exception as exc:
         print(f"digest: telegram failed ({type(exc).__name__})", file=sys.stderr)
-        return False
+        return None
+
+
+# ------------------------------------------------------------------ ☀️ morning brief for groups
+MAX_GROUPS = 500
+
+
+def brief_groups(cf_token: str, account: str) -> tuple[str | None, list[str]]:
+    """Groups that turned the brief on in the bot (/daily on) are stored in KV as g:<chat id>."""
+    import notify_telegram as nt  # lazy: notify_telegram imports this module
+    ns = nt.kv_namespace(cf_token, account)
+    if not ns:
+        return None, []
+    out, cursor = [], ""
+    for _ in range(10):
+        page = nt._cf(cf_token, f"/accounts/{account}/storage/kv/namespaces/{ns}/keys?prefix=g:&limit=1000" + (f"&cursor={cursor}" if cursor else ""))
+        out += [k["name"][2:] for k in page.get("result") or [] if re.fullmatch(r"g:-\d{1,20}", str(k.get("name")))]
+        cursor = (page.get("result_info") or {}).get("cursor") or ""
+        if not cursor:
+            break
+    return ns, out[:MAX_GROUPS]
+
+
+def share_with_groups(token: str, channel: str, message_id, text: str, groups=None, call=None) -> int:
+    """Forward the daily channel post to every subscribed group ("Forwarded from" links back to the channel);
+    fall back to a copy when forwarding is refused. Groups that removed the bot (403) are forgotten."""
+    call = call or tg_result
+    cf_token, account = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(), os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    ns = None
+    if groups is None:
+        if not cf_token or not re.fullmatch(r"[0-9a-f]{32}", account):
+            return 0
+        try:
+            ns, groups = brief_groups(cf_token, account)
+        except Exception as exc:
+            print(f"digest: groups unavailable ({type(exc).__name__})")
+            return 0
+    sent = gone = 0
+    for g in groups:
+        status: list = []
+        ok = message_id and call("forwardMessage", token, {"chat_id": g, "from_chat_id": channel, "message_id": message_id}, None, status) is not None
+        if not ok and 403 not in status:
+            ok = call("sendMessage", token, {"chat_id": g, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True,
+                                             "reply_markup": daily_buttons()}, None, status) is not None
+        sent += ok
+        if not ok and 403 in status and ns:
+            import notify_telegram as nt
+            gone += nt.kv_delete(cf_token, account, ns, "g:" + g)
+        time.sleep(0.05)
+    print(f"digest: morning brief sent to {sent}/{len(groups)} groups, {gone} removed")
+    return sent
 
 
 def main() -> int:
@@ -354,10 +413,12 @@ def main() -> int:
         if dry:
             print(text)
             return 0
-        ok = tg_call("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML",
-                                            "disable_web_page_preview": True, "reply_markup": daily_buttons()})
-        print("digest: daily posted" if ok else "digest: daily FAILED")
-        return 0 if ok else 1
+        res = tg_result("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML",
+                                               "disable_web_page_preview": True, "reply_markup": daily_buttons()})
+        print("digest: daily posted" if res is not None else "digest: daily FAILED")
+        if res is not None and not args.chat.strip():  # the real channel post, not a private preview
+            share_with_groups(token, chat, res.get("message_id"), text)
+        return 0 if res is not None else 1
 
     early = early_names(edoc)
     data = card_data(d, ctx, manifest, edoc)
