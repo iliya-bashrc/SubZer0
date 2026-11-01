@@ -55,7 +55,7 @@ DESCRIPTION = ("What to patch first, in your chat. SubZer0 ranks every new CVE b
 SHORT = "CVE alerts ranked by what to patch first · KEV, EPSS, exploits · free"
 
 
-def metadata(kv_id: str, bot_token: str, admin_id: str = "") -> dict:
+def metadata(kv_id: str, bot_token: str, admin_id: str = "", channel: str = "") -> dict:
     meta = {
         "main_module": "bot.js",
         "compatibility_date": "2025-01-01",
@@ -68,6 +68,8 @@ def metadata(kv_id: str, bot_token: str, admin_id: str = "") -> dict:
     }
     if re.fullmatch(r"-?\d{1,20}", admin_id or ""):
         meta["bindings"].append({"type": "plain_text", "name": "ADMIN_ID", "text": admin_id})
+    if re.fullmatch(r"@\w{5,32}|-100\d{5,20}", channel or ""):  # where approved drafts are posted
+        meta["bindings"].append({"type": "plain_text", "name": "CHANNEL_ID", "text": channel})
     return meta
 
 
@@ -112,7 +114,7 @@ def main() -> int:
 
     js = (ROOT / "worker/bot.js").read_bytes()
     body, ctype = multipart([
-        ("metadata", "metadata.json", "application/json", json.dumps(metadata(kv, bot, os.environ.get("TELEGRAM_ADMIN_ID", "").strip())).encode()),
+        ("metadata", "metadata.json", "application/json", json.dumps(metadata(kv, bot, os.environ.get("TELEGRAM_ADMIN_ID", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip())).encode()),
         ("bot.js", "bot.js", "application/javascript+module", js),
     ])
     call(f"{a}/workers/scripts/{SCRIPT}", tok, "PUT", body, ctype)

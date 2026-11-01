@@ -27,6 +27,7 @@ from build_site import SITE_URL, facts, load_index, priority, priority_reason
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import digest  # noqa: E402
+import drafts  # noqa: E402
 import digest_cards as cards  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,6 +179,11 @@ def send_dm(token: str, chat: str, text: str, markup: dict) -> tuple[bool, int]:
 
 DAILY_HOUR = 5  # the first refresh at or after 05:00 UTC (the 06:17 run, ~09:45 Tehran) sends daily summaries
 MAX_QUEUE = 40
+
+
+def worth_a_draft(r: list) -> bool:
+    """Only the rare ones become a channel draft for the owner: on CISA KEV and CVSS 9+."""
+    return bool(r[4]) and float(r[3] or 0) >= 9
 
 
 def is_critical(r: list) -> bool:
@@ -375,8 +381,9 @@ def main() -> int:
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = args.chat.strip() or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not args.dry_run and (not token or not chat):
+    # The channel never gets automatic posts: very serious CVEs go to the owner as a draft (see drafts.py).
+    chat = args.chat.strip() or drafts.admin_chat()
+    if not args.dry_run and not token:
         print("Telegram is not configured; skipping.")
         return 0
 
@@ -395,6 +402,13 @@ def main() -> int:
     new.sort(key=lambda r: (bool(r[4]), r[5] or 0), reverse=True)
     if args.sample > 0:
         new = new[: args.sample]
+    everyone = new  # watchlists still hear about every newly patch-now CVE
+    new = [r for r in new if worth_a_draft(r)] if args.sample <= 0 else new
+    if not new and everyone:
+        print(f"{len(everyone)} newly urgent, none worth a channel draft (KEV + CVSS 9+)")
+        if not args.dry_run:
+            send_watch_dms(everyone, ctx, token, dry=False, crit=crit, rows=rows)
+        return 0
     if not new:
         print("Nothing newly urgent.")
         if args.sample <= 0:  # watchers who also want new critical CVEs, and today's daily summaries
@@ -416,21 +430,24 @@ def main() -> int:
             print(f"Banner skipped: {type(exc).__name__}")
     if args.dry_run:
         if args.sample <= 0:
-            send_watch_dms(new, ctx, token, dry=True, crit=crit, rows=rows)
+            send_watch_dms(everyone, ctx, token, dry=True, crit=crit, rows=rows)
         print(caption(new, ctx) if card else message(new, ctx))
         print(f"Banner: {card or 'not rendered'}")
         return 0
     ok = False
-    if card:
-        ok = digest.tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption(new, ctx), "parse_mode": "HTML",
-                                                 "reply_markup": alert_buttons(new)},
-                            photo=card)
-    if not ok:  # no banner (or the photo was rejected): plain text, exactly as before
-        ok = digest.tg_call("sendMessage", token, {"chat_id": chat, "text": message(new, ctx), "parse_mode": "HTML",
-                                                   "disable_web_page_preview": True, "reply_markup": alert_buttons(new)})
-    print(f"Announced {len(new)} CVEs" if ok else "Telegram rejected the message")
+    markup = drafts.draft_markup(alert_buttons(new)) if not args.chat.strip() else alert_buttons(new)
+    if not chat:
+        print("No TELEGRAM_ADMIN_ID: channel draft skipped")
+    else:
+        if card:
+            ok = digest.tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption(new, ctx), "parse_mode": "HTML",
+                                                     "reply_markup": markup}, photo=card)
+        if not ok:  # no banner (or the photo was rejected): plain text, exactly as before
+            ok = digest.tg_call("sendMessage", token, {"chat_id": chat, "text": message(new, ctx), "parse_mode": "HTML",
+                                                       "disable_web_page_preview": True, "reply_markup": markup})
+        print(f"Drafted {len(new)} CVEs for the owner" if ok else "Telegram rejected the draft")
     if args.sample <= 0:
-        send_watch_dms(new, ctx, token, dry=False, crit=crit, rows=rows)
+        send_watch_dms(everyone, ctx, token, dry=False, crit=crit, rows=rows)
     return 0
 
 

@@ -661,11 +661,11 @@ def cve_org_status(cid: str) -> str:
 
 # ---------------------------------------------------------------- telegram
 def telegram_alerts(doc: dict, prev: dict) -> int:
-    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat or not prev:  # no previous state -> never flood the channel on first run
+    # Never posts to the channel: a new P0 early warning becomes a draft in the owner's DM (Post / Skip buttons).
+    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
+    if not token or not re.fullmatch(r"\d{1,20}", chat) or not prev:  # no previous state -> never flood on first run
         return 0
     old_keys = {e.get("key") for e in prev.get("emerging") or [] if isinstance(e, dict)}
-    old_kev = set(prev.get("kev") or []) | {r[0] for r in prev.get("cves") or [] if isinstance(r, list) and r[4]}
     lines = []
     for e in doc["emerging"]:
         if e["key"] in old_keys or e["level"] != "p0":
@@ -674,14 +674,13 @@ def telegram_alerts(doc: dict, prev: dict) -> int:
         src = ", ".join(s["n"] for s in e["sources"][:4])
         lines.append(f"🚨 <b>Early warning: {html.escape(e['name'])}</b>\n{html.escape(e['title'])}\n"
                      f"{html.escape(ids) + chr(10) if ids else ''}<i>{html.escape(' · '.join(e['signals']))} — {html.escape(src)}</i>")
-    kev_now = [c for c in doc["kev"] if c not in old_kev] + [r[0] for r in doc["cves"] if r[4] and r[0] not in old_kev]
-    if kev_now:
-        lines.append("🔴 <b>Now on CISA KEV</b>\n" + "\n".join(f'<a href="{SITE_URL}cve/{c}">{c}</a>' for c in kev_now[:8]))
-    if not lines:
+    if not lines:  # KEV additions are not posted on their own any more (the site and watchlists cover them)
         return 0
-    text = "\n\n".join(lines[:6]) + f"\n\n{SITE_URL}"
+    text = "\n\n".join(lines[:4]) + f"\n\n\U0001F310 <a href=\"{SITE_URL}\">SubZer0</a> \u00b7 \U0001F4E3 @RootAccessClub"
+    markup = {"inline_keyboard": [[{"text": "\U0001F4E4 Post to channel", "callback_data": "P", "style": "success"},
+                                   {"text": "\u2715 Skip", "callback_data": "X"}]]}
     body = urllib.parse.urlencode({"chat_id": chat, "text": text[:3900], "parse_mode": "HTML",
-                                   "disable_web_page_preview": "true"}).encode()
+                                   "disable_web_page_preview": "true", "reply_markup": json.dumps(markup)}).encode()
     try:
         req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, method="POST")
         with urllib.request.urlopen(req, timeout=20) as resp:

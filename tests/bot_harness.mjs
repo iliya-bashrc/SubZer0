@@ -219,4 +219,37 @@ assert.match(c[0].body.text, /No version data/);
 for (const x of [...buttons(c[0])]) if (x.callback_data) assert.ok(Buffer.byteLength(x.callback_data) <= 64);
 c = await run(dm('nginx'));
 assert.ok(!/Affected/.test(c[0].body.text)); // plain word without version is still a search
+// owner drafts: only the owner can post; Post copies to CHANNEL_ID without the Post/Skip row
+const draftMsg = { message_id: 50, chat: { id: 42, type: 'private' }, caption: 'CVE-2026-1 alert', caption_entities: [{ type: 'bold', offset: 0, length: 10 }], photo: [{}],
+  reply_markup: { inline_keyboard: [[{ text: 'open', url: 'https://x' }], [{ text: '📤 Post to channel', callback_data: 'P' }, { text: '✕ Skip', callback_data: 'X' }]] } };
+const otap = (data, from) => ({ callback_query: { id: 'q', data, from: { id: from }, message: draftMsg } });
+c = await run(otap('P', 7));
+assert.match(c[0].body.text, /Only the channel owner/);
+assert.ok(!c.some(x => x.method === 'copyMessage'));
+c = await run(otap('P', 42));
+assert.match(c.at(-1).body.text, /CHANNEL_ID is not set/); // not configured: nothing posted
+env.CHANNEL_ID = '@RootAccessClub';
+c = await run(otap('P', 42));
+const cp = c.find(x => x.method === 'copyMessage');
+assert.equal(cp.body.chat_id, '@RootAccessClub');
+assert.deepEqual(cp.body.reply_markup.inline_keyboard, [[{ text: 'open', url: 'https://x' }]]);
+assert.ok(c.some(x => x.method === 'editMessageReplyMarkup'));
+c = await run(otap('X', 42));
+assert.ok(!c.some(x => x.method === 'copyMessage'));
+assert.equal(c.at(-1).body.reply_markup.inline_keyboard[0][0].text, '✕ Skipped');
+// reply to a draft with a note: note on top, entities shifted
+c = await run({ message: { chat: { id: 42, type: 'private' }, from: { id: 42 }, text: 'My take', reply_to_message: draftMsg } });
+const cn = c.find(x => x.method === 'copyMessage');
+assert.equal(cn.body.caption, 'My take\n\nCVE-2026-1 alert');
+assert.equal(cn.body.caption_entities[0].offset, 9);
+assert.match(c.at(-1).body.text, /with your note/);
+// someone else replying to a draft is just a normal message
+c = await run({ message: { chat: { id: 7, type: 'private' }, from: { id: 7 }, text: 'hi there', reply_to_message: draftMsg } });
+assert.ok(!c.some(x => x.method === 'copyMessage'));
+const textDraft = { ...draftMsg, photo: undefined, caption: undefined, text: 'Early warning', entities: [{ type: 'bold', offset: 0, length: 5 }] };
+c = await run({ message: { chat: { id: 42, type: 'private' }, from: { id: 42 }, text: 'Heads up', reply_to_message: textDraft } });
+const sm = c.find(x => x.method === 'sendMessage' && x.body.chat_id === '@RootAccessClub');
+assert.equal(sm.body.text, 'Heads up\n\nEarly warning');
+assert.equal(sm.body.entities[0].offset, 10);
+delete env.CHANNEL_ID;
 console.log('bot harness ok');

@@ -7,7 +7,9 @@
  * (scripts/notify_telegram.py) reads them and DMs matches. Groups: admins manage a group watchlist (same "w:<chat>"),
  * and "g:<chat>" marks a group that wants the morning brief (scripts/digest.py forwards the daily channel post there).
  *
- * Bindings: KV (namespace), BOT_TOKEN (secret), WEBHOOK_SECRET (secret), SITE (plain text), ADMIN_ID (optional).
+ * Bindings: KV (namespace), BOT_TOKEN (secret), WEBHOOK_SECRET (secret), SITE (plain text), ADMIN_ID (optional),
+ * CHANNEL_ID (optional). Automation never posts to the channel: it DMs the owner drafts with 📤 Post / ✕ Skip
+ * buttons, and the bot copies a draft to CHANNEL_ID only when the owner taps Post or replies to it with a note.
  */
 const CVE_RE = /\bCVE-\d{4}-\d{4,}\b/i;
 const MAX_WATCH = 10;
@@ -127,6 +129,7 @@ async function handle(update, env) {
   const m = text.match(/^\/([a-z_]+)(?:@\w+)?\s*(.*)$/i);
   const cmd = m ? m[1].toLowerCase() : '', arg = m ? m[2].trim() : text;
   if (!m && !priv) return; // in groups only answer explicit commands
+  if (priv && msg.reply_to_message && isOwner(env, msg.from) && isDraft(msg.reply_to_message)) return publish(env, msg.reply_to_message, msg);
   const lim = limited(chat);
   if (lim === 1) return send(env, chat, { text: 'Slow down a little — try again in a minute.' });
   if (lim) return;
@@ -174,6 +177,12 @@ async function onTap(q, env) {
   const priv = msg.chat.type === 'private';
   const [op, rest = ''] = [data.slice(0, data.indexOf(':') < 0 ? data.length : data.indexOf(':')), data.includes(':') ? data.slice(data.indexOf(':') + 1) : ''];
   if (op === 'noop') return answer();
+  if ((op === 'P' || op === 'X') && priv && !rest) {
+    if (!isOwner(env, q.from)) return answer('Only the channel owner can do this.', true);
+    if (op === 'X') { await answer('Skipped'); return tg(env, 'editMessageReplyMarkup', { chat_id: chat, message_id: msg.message_id, reply_markup: kb([[cb('✕ Skipped', 'noop')]]) }); }
+    const r = await publish(env, msg, null);
+    return answer(r.ok ? '📤 Posted to the channel' : r.why, !r.ok);
+  }
   if (!priv && 'aArSMG'.includes(op) && op && !(await isAdmin(env, chat, q.from))) return answer('Only group admins can change this.', true);
   if (op === 'G' && !priv && (rest === 'on' || rest === 'off')) {
     await setBrief(env, chat, rest === 'on', msg.chat.title);
@@ -519,6 +528,39 @@ async function onMember(u, env) {
   }
 }
 
+/* ---------- owner drafts -> channel (nothing is posted without the owner) ---------- */
+const isOwner = (env, from) => !!(env.ADMIN_ID && from && String(from.id) === String(env.ADMIN_ID));
+const draftRows = m => ((m && m.reply_markup && m.reply_markup.inline_keyboard) || []);
+const isDraft = m => draftRows(m).some(r => r.some(x => x.callback_data === 'P'));
+const shift = (ents, by) => (ents || []).map(e => ({ ...e, offset: e.offset + by }));
+async function publish(env, draft, noteMsg) {
+  const done = async (ok, why) => { if (noteMsg) await send(env, draft.chat.id, { text: ok ? '📤 Posted to the channel with your note.' : esc(why) }); return { ok, why }; };
+  if (!env.CHANNEL_ID) return done(false, 'CHANNEL_ID is not set: add the TELEGRAM_CHAT_ID secret and redeploy the bot.');
+  if (!isDraft(draft)) return done(false, 'This draft was already handled.');
+  const rows = draftRows(draft).map(r => r.filter(x => !x.callback_data)).filter(r => r.length);
+  const markup = rows.length ? { inline_keyboard: rows } : undefined;
+  const note = noteMsg ? String(noteMsg.text || '').trim() : '';
+  if (noteMsg && !note) return done(false, 'Reply with text to add a note.');
+  const add = note ? note.length + 2 : 0, ents = noteMsg ? (noteMsg.entities || []) : [];
+  let r;
+  if (!note) r = await tg(env, 'copyMessage', { chat_id: env.CHANNEL_ID, from_chat_id: draft.chat.id, message_id: draft.message_id, ...(markup ? { reply_markup: markup } : {}) });
+  else if (draft.photo) {
+    const caption = note + '\n\n' + (draft.caption || '');
+    if (caption.length > 1024) return done(false, `Note too long for a photo post: keep it under ${1022 - (draft.caption || '').length} characters.`);
+    r = await tg(env, 'copyMessage', { chat_id: env.CHANNEL_ID, from_chat_id: draft.chat.id, message_id: draft.message_id, caption,
+      caption_entities: [...ents, ...shift(draft.caption_entities, add)], ...(markup ? { reply_markup: markup } : {}) });
+  } else {
+    const text = note + '\n\n' + (draft.text || '');
+    if (text.length > 4096) return done(false, 'Note too long.');
+    r = await tg(env, 'sendMessage', { chat_id: env.CHANNEL_ID, text, entities: [...ents, ...shift(draft.entities, add)], link_preview_options: { is_disabled: true }, ...(markup ? { reply_markup: markup } : {}) });
+  }
+  if (!r.ok) return done(false, 'Telegram refused the post: ' + clip(r.desc, 120));
+  const id = r.result && r.result.message_id, ch = String(env.CHANNEL_ID);
+  const seen = id && ch.startsWith('@') ? link('✅ Posted · open', `https://t.me/${ch.slice(1)}/${id}`) : cb('✅ Posted', 'noop');
+  await tg(env, 'editMessageReplyMarkup', { chat_id: draft.chat.id, message_id: draft.message_id, reply_markup: kb([[seen]]) });
+  return done(true);
+}
+
 /* ---------- inline mode: @SubZer0Robot CVE-2026-… in any chat ---------- */
 async function onInline(q, env) {
   const text = String(q.query || '').trim().slice(0, 64);
@@ -548,7 +590,7 @@ async function tg(env, method, body, retry = true) {
   const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (r.ok) { if (method !== 'getChatMember') return { ok: true }; try { return { ok: true, result: (await r.json()).result }; } catch { return { ok: false }; } }
+  if (r.ok) { try { return { ok: true, result: (await r.json()).result }; } catch { return { ok: true }; } }
   let j = {};
   try { j = await r.json(); } catch { /* not json */ }
   const wait = j.parameters && j.parameters.retry_after;

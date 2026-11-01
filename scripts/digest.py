@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_site as bs  # noqa: E402
 import digest_cards as cards  # noqa: E402
+import drafts  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE_URL = bs.SITE_URL
@@ -349,8 +350,8 @@ def brief_groups(cf_token: str, account: str) -> tuple[str | None, list[str]]:
 
 
 def share_with_groups(token: str, channel: str, message_id, text: str, groups=None, call=None) -> int:
-    """Forward the daily channel post to every subscribed group ("Forwarded from" links back to the channel);
-    fall back to a copy when forwarding is refused. Groups that removed the bot (403) are forgotten."""
+    """Send the daily brief to every subscribed group. With a channel message_id it is forwarded instead
+    (with a copy as fallback when forwarding is refused). Groups that removed the bot (403) are forgotten."""
     call = call or tg_result
     cf_token, account = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(), os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
     ns = None
@@ -402,8 +403,10 @@ def main() -> int:
     kev_map, ctx["titles"] = shard_facts(args.snapshot, manifest, d["dates"])
     ctx["names"] = {**early_cve_names(edoc), **kev_map}
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = args.chat.strip() or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    dry = args.dry_run or not token or not chat
+    preview = args.chat.strip()
+    # Nothing goes to the channel automatically: the weekly recap is a draft for the owner, the daily goes to groups.
+    chat = preview or drafts.admin_chat()
+    dry = args.dry_run or not token or (mode == "weekly" and not chat)
 
     if mode == "daily":
         text = daily_text(d, ctx)
@@ -413,12 +416,13 @@ def main() -> int:
         if dry:
             print(text)
             return 0
-        res = tg_result("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML",
-                                               "disable_web_page_preview": True, "reply_markup": daily_buttons()})
-        print("digest: daily posted" if res is not None else "digest: daily FAILED")
-        if res is not None and not args.chat.strip():  # the real channel post, not a private preview
-            share_with_groups(token, chat, res.get("message_id"), text)
-        return 0 if res is not None else 1
+        if preview:
+            res = tg_result("sendMessage", token, {"chat_id": preview, "text": text, "parse_mode": "HTML",
+                                                   "disable_web_page_preview": True, "reply_markup": daily_buttons()})
+            print("digest: daily preview sent" if res is not None else "digest: daily preview FAILED")
+            return 0 if res is not None else 1
+        share_with_groups(token, "", None, text)  # ☀️ morning brief: groups that asked for it, never the channel
+        return 0
 
     early = early_names(edoc)
     data = card_data(d, ctx, manifest, edoc)
@@ -436,6 +440,7 @@ def main() -> int:
             if not dry:
                 ok_all &= tg_call("sendPhoto", token, {"chat_id": chat, "caption": f"Theme preview: {t}"}, photo=out)
         return 0 if ok_all else 1
+    buttons_ = week_buttons() if preview else drafts.draft_markup(week_buttons())
     theme, markup = card_html(data, args.theme)
     have_card = render_card(markup, card)
     print(f"digest: week {data['week']} theme {theme}")
@@ -444,11 +449,11 @@ def main() -> int:
         print(f"digest: card {'rendered at ' + str(card) if have_card else 'not rendered'}")
         return 0
     if have_card:
-        ok = tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption, "parse_mode": "HTML", "reply_markup": week_buttons()}, photo=card)
+        ok = tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption, "parse_mode": "HTML", "reply_markup": buttons_}, photo=card)
     else:
         ok = tg_call("sendMessage", token, {"chat_id": chat, "text": caption, "parse_mode": "HTML",
-                                            "disable_web_page_preview": True, "reply_markup": week_buttons()})
-    print("digest: weekly posted" if ok else "digest: weekly FAILED")
+                                            "disable_web_page_preview": True, "reply_markup": buttons_})
+    print("digest: weekly drafted for the owner" if ok else "digest: weekly FAILED")
     return 0 if ok else 1
 
 
