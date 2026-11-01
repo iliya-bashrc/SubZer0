@@ -177,7 +177,7 @@ flowchart LR
 - **Fail-closed ingestion** — if a core feed is down, the last good snapshot stays live. A failed intel source keeps its last good data.
 - **Atomic publish** — a broken run can never leave the live site half-updated.
 - **Feeds** — RSS of *patch now* CVEs at [`/feed.xml`](https://iliya-bashrc.github.io/SubZer0/feed.xml) and a small JSON summary at [`/api/latest.json`](https://iliya-bashrc.github.io/SubZer0/api/latest.json).
-- **Telegram alerts** — CVEs that just became *patch now* get posted after each refresh (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` secrets; without them the step is a no-op).
+- **Telegram (owner-approved)** — automation never posts to the channel by itself. Very serious CVEs (CISA KEV + CVSS 9+), P0 early warnings and the Saturday weekly card arrive as drafts in the owner's DM (`TELEGRAM_ADMIN_ID`) with 📤 *Post to channel* / ✕ *Skip*; replying to a draft with a note posts it with the note on top. The daily brief goes only to groups that asked for it.
 - **Telegram bot** — [@SubZer0Robot](https://t.me/SubZer0Robot) runs on a Cloudflare Worker (`worker/bot.js`): `/cve <id>`, `/top`, and `/watch <product>` for a DM when that product gets a *patch now* CVE. It reads the same published files (`api/cve/<id>.json`, `api/latest.json`), so it never disagrees with the site.
 - **Bot in groups** — add [@SubZer0Robot](https://t.me/SubZer0Robot?startgroup=brief) to a team group: admins send `/daily on` for a ☀️ morning brief (the daily channel post, forwarded ~10:00 Tehran, skipped on quiet days) and `/watch <product>` for a shared group watchlist. Everyone can use `/top`, `/check`, `/cve`.
 - **Offline** — a service worker keeps the app shell and the last verified snapshot.

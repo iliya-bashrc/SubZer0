@@ -1,4 +1,6 @@
+import os
 import sys
+from unittest import mock
 import unittest
 from pathlib import Path
 
@@ -49,6 +51,29 @@ class CveApiTests(unittest.TestCase):
         self.assertTrue(out["url"].endswith("cve/CVE-2026-1111"))
 
 
+class DraftTests(unittest.TestCase):
+    def test_drafts_keep_channel_buttons_and_add_post_skip(self):
+        import drafts
+        m = drafts.draft_markup({"inline_keyboard": [[{"text": "a", "url": "https://x"}]]})
+        self.assertEqual(m["inline_keyboard"][0][0]["url"], "https://x")
+        self.assertEqual([b["callback_data"] for b in m["inline_keyboard"][-1]], ["P", "X"])
+        with mock.patch.dict(os.environ, {"TELEGRAM_ADMIN_ID": "42"}):
+            self.assertEqual(drafts.admin_chat(), "42")
+        with mock.patch.dict(os.environ, {"TELEGRAM_ADMIN_ID": "@someone"}):
+            self.assertEqual(drafts.admin_chat(), "")
+
+    def test_only_kev_and_cvss9_become_drafts(self):
+        import notify_telegram as nt
+        self.assertTrue(nt.worth_a_draft(["C", "t", "critical", 9.8, True]))
+        self.assertFalse(nt.worth_a_draft(["C", "t", "critical", 9.8, False]))
+        self.assertFalse(nt.worth_a_draft(["C", "t", "high", 8.6, True]))
+
+    def test_no_workflow_posts_to_the_channel_directly(self):
+        for wf in ("update-snapshot.yml", "deploy.yml", "digest.yml"):
+            src = (ROOT / ".github/workflows" / wf).read_text(encoding="utf-8")
+            self.assertNotIn("TELEGRAM_CHAT_ID", src, wf)
+
+
 class GroupAlertTests(unittest.TestCase):
     def test_group_alerts_use_links_not_mini_app_buttons(self):
         import notify_telegram as nt
@@ -87,6 +112,9 @@ class DeployTests(unittest.TestCase):
         admin = {b["name"]: b["text"] for b in deploy_bot.metadata("kvid", "123:abc", "4242")["bindings"] if b["type"] == "plain_text"}
         self.assertEqual(admin["ADMIN_ID"], "4242")
         self.assertNotIn("ADMIN_ID", {b["name"] for b in deploy_bot.metadata("kvid", "123:abc", "not-an-id")["bindings"]})
+        ch = {b["name"]: b["text"] for b in deploy_bot.metadata("kvid", "1:a", "", "@RootAccessClub")["bindings"] if b["type"] == "plain_text"}
+        self.assertEqual(ch["CHANNEL_ID"], "@RootAccessClub")
+        self.assertNotIn("CHANNEL_ID", {b["name"] for b in deploy_bot.metadata("kvid", "1:a", "", "bad id")["bindings"]})
         cmds = [c for c, _d in deploy_bot.COMMANDS]
         self.assertIn("week", cmds)
         js = (ROOT / "worker/bot.js").read_text(encoding="utf-8")
