@@ -1,0 +1,458 @@
+diff --git a/README.md b/README.md
+index a59dc2fd..3a44bcf2 100644
+--- a/README.md
++++ b/README.md
+@@ -177,7 +177,7 @@ flowchart LR
+ - **Fail-closed ingestion** — if a core feed is down, the last good snapshot stays live. A failed intel source keeps its last good data.
+ - **Atomic publish** — a broken run can never leave the live site half-updated.
+ - **Feeds** — RSS of *patch now* CVEs at [`/feed.xml`](https://iliya-bashrc.github.io/SubZer0/feed.xml) and a small JSON summary at [`/api/latest.json`](https://iliya-bashrc.github.io/SubZer0/api/latest.json).
+-- **Telegram alerts** — CVEs that just became *patch now* get posted after each refresh (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` secrets; without them the step is a no-op).
++- **Telegram (owner-approved)** — automation never posts to the channel by itself. Very serious CVEs (CISA KEV + CVSS 9+), P0 early warnings and the Saturday weekly card arrive as drafts in the owner's DM (`TELEGRAM_ADMIN_ID`) with 📤 *Post to channel* / ✕ *Skip*; replying to a draft with a note posts it with the note on top. The daily brief goes only to groups that asked for it.
+ - **Telegram bot** — [@SubZer0Robot](https://t.me/SubZer0Robot) runs on a Cloudflare Worker (`worker/bot.js`): `/cve <id>`, `/top`, and `/watch <product>` for a DM when that product gets a *patch now* CVE. It reads the same published files (`api/cve/<id>.json`, `api/latest.json`), so it never disagrees with the site.
+ - **Bot in groups** — add [@SubZer0Robot](https://t.me/SubZer0Robot?startgroup=brief) to a team group: admins send `/daily on` for a ☀️ morning brief (the daily channel post, forwarded ~10:00 Tehran, skipped on quiet days) and `/watch <product>` for a shared group watchlist. Everyone can use `/top`, `/check`, `/cve`.
+ - **Offline** — a service worker keeps the app shell and the last verified snapshot.
+diff --git a/scripts/deploy_bot.py b/scripts/deploy_bot.py
+index ca1e0297..729d96ac 100644
+--- a/scripts/deploy_bot.py
++++ b/scripts/deploy_bot.py
+@@ -55,7 +55,7 @@ DESCRIPTION = ("What to patch first, in your chat. SubZer0 ranks every new CVE b
+ SHORT = "CVE alerts ranked by what to patch first · KEV, EPSS, exploits · free"
+ 
+ 
+-def metadata(kv_id: str, bot_token: str, admin_id: str = "") -> dict:
++def metadata(kv_id: str, bot_token: str, admin_id: str = "", channel: str = "") -> dict:
+     meta = {
+         "main_module": "bot.js",
+         "compatibility_date": "2025-01-01",
+@@ -68,6 +68,8 @@ def metadata(kv_id: str, bot_token: str, admin_id: str = "") -> dict:
+     }
+     if re.fullmatch(r"-?\d{1,20}", admin_id or ""):
+         meta["bindings"].append({"type": "plain_text", "name": "ADMIN_ID", "text": admin_id})
++    if re.fullmatch(r"@\w{5,32}|-100\d{5,20}", channel or ""):  # where approved drafts are posted
++        meta["bindings"].append({"type": "plain_text", "name": "CHANNEL_ID", "text": channel})
+     return meta
+ 
+ 
+@@ -112,7 +114,7 @@ def main() -> int:
+ 
+     js = (ROOT / "worker/bot.js").read_bytes()
+     body, ctype = multipart([
+-        ("metadata", "metadata.json", "application/json", json.dumps(metadata(kv, bot, os.environ.get("TELEGRAM_ADMIN_ID", "").strip())).encode()),
++        ("metadata", "metadata.json", "application/json", json.dumps(metadata(kv, bot, os.environ.get("TELEGRAM_ADMIN_ID", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip())).encode()),
+         ("bot.js", "bot.js", "application/javascript+module", js),
+     ])
+     call(f"{a}/workers/scripts/{SCRIPT}", tok, "PUT", body, ctype)
+diff --git a/scripts/digest.py b/scripts/digest.py
+index a5c0496b..b915533e 100644
+--- a/scripts/digest.py
++++ b/scripts/digest.py
+@@ -28,6 +28,7 @@ from pathlib import Path
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+ import build_site as bs  # noqa: E402
+ import digest_cards as cards  # noqa: E402
++import drafts  # noqa: E402
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ SITE_URL = bs.SITE_URL
+@@ -349,8 +350,8 @@ def brief_groups(cf_token: str, account: str) -> tuple[str | None, list[str]]:
+ 
+ 
+ def share_with_groups(token: str, channel: str, message_id, text: str, groups=None, call=None) -> int:
+-    """Forward the daily channel post to every subscribed group ("Forwarded from" links back to the channel);
+-    fall back to a copy when forwarding is refused. Groups that removed the bot (403) are forgotten."""
++    """Send the daily brief to every subscribed group. With a channel message_id it is forwarded instead
++    (with a copy as fallback when forwarding is refused). Groups that removed the bot (403) are forgotten."""
+     call = call or tg_result
+     cf_token, account = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(), os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+     ns = None
+@@ -402,8 +403,10 @@ def main() -> int:
+     kev_map, ctx["titles"] = shard_facts(args.snapshot, manifest, d["dates"])
+     ctx["names"] = {**early_cve_names(edoc), **kev_map}
+     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+-    chat = args.chat.strip() or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+-    dry = args.dry_run or not token or not chat
++    preview = args.chat.strip()
++    # Nothing goes to the channel automatically: the weekly recap is a draft for the owner, the daily goes to groups.
++    chat = preview or drafts.admin_chat()
++    dry = args.dry_run or not token or (mode == "weekly" and not chat)
+ 
+     if mode == "daily":
+         text = daily_text(d, ctx)
+@@ -413,12 +416,13 @@ def main() -> int:
+         if dry:
+             print(text)
+             return 0
+-        res = tg_result("sendMessage", token, {"chat_id": chat, "text": text, "parse_mode": "HTML",
+-                                               "disable_web_page_preview": True, "reply_markup": daily_buttons()})
+-        print("digest: daily posted" if res is not None else "digest: daily FAILED")
+-        if res is not None and not args.chat.strip():  # the real channel post, not a private preview
+-            share_with_groups(token, chat, res.get("message_id"), text)
+-        return 0 if res is not None else 1
++        if preview:
++            res = tg_result("sendMessage", token, {"chat_id": preview, "text": text, "parse_mode": "HTML",
++                                                   "disable_web_page_preview": True, "reply_markup": daily_buttons()})
++            print("digest: daily preview sent" if res is not None else "digest: daily preview FAILED")
++            return 0 if res is not None else 1
++        share_with_groups(token, "", None, text)  # ☀️ morning brief: groups that asked for it, never the channel
++        return 0
+ 
+     early = early_names(edoc)
+     data = card_data(d, ctx, manifest, edoc)
+@@ -436,6 +440,7 @@ def main() -> int:
+             if not dry:
+                 ok_all &= tg_call("sendPhoto", token, {"chat_id": chat, "caption": f"Theme preview: {t}"}, photo=out)
+         return 0 if ok_all else 1
++    buttons_ = week_buttons() if preview else drafts.draft_markup(week_buttons())
+     theme, markup = card_html(data, args.theme)
+     have_card = render_card(markup, card)
+     print(f"digest: week {data['week']} theme {theme}")
+@@ -444,11 +449,11 @@ def main() -> int:
+         print(f"digest: card {'rendered at ' + str(card) if have_card else 'not rendered'}")
+         return 0
+     if have_card:
+-        ok = tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption, "parse_mode": "HTML", "reply_markup": week_buttons()}, photo=card)
++        ok = tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption, "parse_mode": "HTML", "reply_markup": buttons_}, photo=card)
+     else:
+         ok = tg_call("sendMessage", token, {"chat_id": chat, "text": caption, "parse_mode": "HTML",
+-                                            "disable_web_page_preview": True, "reply_markup": week_buttons()})
+-    print("digest: weekly posted" if ok else "digest: weekly FAILED")
++                                            "disable_web_page_preview": True, "reply_markup": buttons_})
++    print("digest: weekly drafted for the owner" if ok else "digest: weekly FAILED")
+     return 0 if ok else 1
+ 
+ 
+diff --git a/scripts/drafts.py b/scripts/drafts.py
+new file mode 100644
+index 00000000..851740e9
+--- /dev/null
++++ b/scripts/drafts.py
+@@ -0,0 +1,27 @@
++"""Channel posts are drafts now: automation never posts to @RootAccessClub by itself.
++
++Each would-be channel post goes to the owner's DM (TELEGRAM_ADMIN_ID) with two extra buttons:
++"📤 Post to channel" and "✕ Skip". The bot (worker/bot.js) copies the draft to the channel only when
++the owner taps Post, or when the owner replies to the draft with a note (posted on top of the draft).
++Without TELEGRAM_ADMIN_ID nothing is sent anywhere.
++"""
++from __future__ import annotations
++
++import os
++import re
++
++POST, SKIP = "P", "X"  # callback_data handled by worker/bot.js (owner only)
++
++
++def admin_chat() -> str:
++    """The owner's chat id, or "" when TELEGRAM_ADMIN_ID is not set (then drafts are skipped)."""
++    v = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
++    return v if re.fullmatch(r"\d{1,20}", v) else ""
++
++
++def draft_markup(markup: dict | None) -> dict:
++    """The channel buttons (kept as-is for the real post) plus the owner-only Post / Skip row."""
++    rows = [list(r) for r in (markup or {}).get("inline_keyboard") or [] if r]
++    rows.append([{"text": "\U0001F4E4 Post to channel", "callback_data": POST, "style": "success"},
++                 {"text": "\u2715 Skip", "callback_data": SKIP}])
++    return {"inline_keyboard": rows}
+diff --git a/scripts/early_warning.py b/scripts/early_warning.py
+index 2ae6154e..56b184df 100644
+--- a/scripts/early_warning.py
++++ b/scripts/early_warning.py
+@@ -661,11 +661,11 @@ def cve_org_status(cid: str) -> str:
+ 
+ # ---------------------------------------------------------------- telegram
+ def telegram_alerts(doc: dict, prev: dict) -> int:
+-    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
+-    if not token or not chat or not prev:  # no previous state -> never flood the channel on first run
++    # Never posts to the channel: a new P0 early warning becomes a draft in the owner's DM (Post / Skip buttons).
++    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
++    if not token or not re.fullmatch(r"\d{1,20}", chat) or not prev:  # no previous state -> never flood on first run
+         return 0
+     old_keys = {e.get("key") for e in prev.get("emerging") or [] if isinstance(e, dict)}
+-    old_kev = set(prev.get("kev") or []) | {r[0] for r in prev.get("cves") or [] if isinstance(r, list) and r[4]}
+     lines = []
+     for e in doc["emerging"]:
+         if e["key"] in old_keys or e["level"] != "p0":
+@@ -674,14 +674,13 @@ def telegram_alerts(doc: dict, prev: dict) -> int:
+         src = ", ".join(s["n"] for s in e["sources"][:4])
+         lines.append(f"🚨 <b>Early warning: {html.escape(e['name'])}</b>\n{html.escape(e['title'])}\n"
+                      f"{html.escape(ids) + chr(10) if ids else ''}<i>{html.escape(' · '.join(e['signals']))} — {html.escape(src)}</i>")
+-    kev_now = [c for c in doc["kev"] if c not in old_kev] + [r[0] for r in doc["cves"] if r[4] and r[0] not in old_kev]
+-    if kev_now:
+-        lines.append("🔴 <b>Now on CISA KEV</b>\n" + "\n".join(f'<a href="{SITE_URL}cve/{c}">{c}</a>' for c in kev_now[:8]))
+-    if not lines:
++    if not lines:  # KEV additions are not posted on their own any more (the site and watchlists cover them)
+         return 0
+-    text = "\n\n".join(lines[:6]) + f"\n\n{SITE_URL}"
++    text = "\n\n".join(lines[:4]) + f"\n\n\U0001F310 <a href=\"{SITE_URL}\">SubZer0</a> \u00b7 \U0001F4E3 @RootAccessClub"
++    markup = {"inline_keyboard": [[{"text": "\U0001F4E4 Post to channel", "callback_data": "P", "style": "success"},
++                                   {"text": "\u2715 Skip", "callback_data": "X"}]]}
+     body = urllib.parse.urlencode({"chat_id": chat, "text": text[:3900], "parse_mode": "HTML",
+-                                   "disable_web_page_preview": "true"}).encode()
++                                   "disable_web_page_preview": "true", "reply_markup": json.dumps(markup)}).encode()
+     try:
+         req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, method="POST")
+         with urllib.request.urlopen(req, timeout=20) as resp:
+diff --git a/scripts/notify_telegram.py b/scripts/notify_telegram.py
+index f1dc9441..daaf89c4 100644
+--- a/scripts/notify_telegram.py
++++ b/scripts/notify_telegram.py
+@@ -27,6 +27,7 @@ from build_site import SITE_URL, facts, load_index, priority, priority_reason
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+ import digest  # noqa: E402
++import drafts  # noqa: E402
+ import digest_cards as cards  # noqa: E402
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+@@ -180,6 +181,11 @@ DAILY_HOUR = 5  # the first refresh at or after 05:00 UTC (the 06:17 run, ~09:45
+ MAX_QUEUE = 40
+ 
+ 
++def worth_a_draft(r: list) -> bool:
++    """Only the rare ones become a channel draft for the owner: on CISA KEV and CVSS 9+."""
++    return bool(r[4]) and float(r[3] or 0) >= 9
++
++
+ def is_critical(r: list) -> bool:
+     return r[2] == "critical" or float(r[3] or 0) >= 9
+ 
+@@ -375,8 +381,9 @@ def main() -> int:
+     args = parser.parse_args()
+ 
+     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+-    chat = args.chat.strip() or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+-    if not args.dry_run and (not token or not chat):
++    # The channel never gets automatic posts: very serious CVEs go to the owner as a draft (see drafts.py).
++    chat = args.chat.strip() or drafts.admin_chat()
++    if not args.dry_run and not token:
+         print("Telegram is not configured; skipping.")
+         return 0
+ 
+@@ -395,6 +402,13 @@ def main() -> int:
+     new.sort(key=lambda r: (bool(r[4]), r[5] or 0), reverse=True)
+     if args.sample > 0:
+         new = new[: args.sample]
++    everyone = new  # watchlists still hear about every newly patch-now CVE
++    new = [r for r in new if worth_a_draft(r)] if args.sample <= 0 else new
++    if not new and everyone:
++        print(f"{len(everyone)} newly urgent, none worth a channel draft (KEV + CVSS 9+)")
++        if not args.dry_run:
++            send_watch_dms(everyone, ctx, token, dry=False, crit=crit, rows=rows)
++        return 0
+     if not new:
+         print("Nothing newly urgent.")
+         if args.sample <= 0:  # watchers who also want new critical CVEs, and today's daily summaries
+@@ -416,21 +430,24 @@ def main() -> int:
+             print(f"Banner skipped: {type(exc).__name__}")
+     if args.dry_run:
+         if args.sample <= 0:
+-            send_watch_dms(new, ctx, token, dry=True, crit=crit, rows=rows)
++            send_watch_dms(everyone, ctx, token, dry=True, crit=crit, rows=rows)
+         print(caption(new, ctx) if card else message(new, ctx))
+         print(f"Banner: {card or 'not rendered'}")
+         return 0
+     ok = False
+-    if card:
+-        ok = digest.tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption(new, ctx), "parse_mode": "HTML",
+-                                                 "reply_markup": alert_buttons(new)},
+-                            photo=card)
+-    if not ok:  # no banner (or the photo was rejected): plain text, exactly as before
+-        ok = digest.tg_call("sendMessage", token, {"chat_id": chat, "text": message(new, ctx), "parse_mode": "HTML",
+-                                                   "disable_web_page_preview": True, "reply_markup": alert_buttons(new)})
+-    print(f"Announced {len(new)} CVEs" if ok else "Telegram rejected the message")
++    markup = drafts.draft_markup(alert_buttons(new)) if not args.chat.strip() else alert_buttons(new)
++    if not chat:
++        print("No TELEGRAM_ADMIN_ID: channel draft skipped")
++    else:
++        if card:
++            ok = digest.tg_call("sendPhoto", token, {"chat_id": chat, "caption": caption(new, ctx), "parse_mode": "HTML",
++                                                     "reply_markup": markup}, photo=card)
++        if not ok:  # no banner (or the photo was rejected): plain text, exactly as before
++            ok = digest.tg_call("sendMessage", token, {"chat_id": chat, "text": message(new, ctx), "parse_mode": "HTML",
++                                                       "disable_web_page_preview": True, "reply_markup": markup})
++        print(f"Drafted {len(new)} CVEs for the owner" if ok else "Telegram rejected the draft")
+     if args.sample <= 0:
+-        send_watch_dms(new, ctx, token, dry=False, crit=crit, rows=rows)
++        send_watch_dms(everyone, ctx, token, dry=False, crit=crit, rows=rows)
+     return 0
+ 
+ 
+diff --git a/tests/bot_harness.mjs b/tests/bot_harness.mjs
+index 31a3d6fd..5593eedb 100644
+--- a/tests/bot_harness.mjs
++++ b/tests/bot_harness.mjs
+@@ -219,4 +219,37 @@ assert.match(c[0].body.text, /No version data/);
+ for (const x of [...buttons(c[0])]) if (x.callback_data) assert.ok(Buffer.byteLength(x.callback_data) <= 64);
+ c = await run(dm('nginx'));
+ assert.ok(!/Affected/.test(c[0].body.text)); // plain word without version is still a search
++// owner drafts: only the owner can post; Post copies to CHANNEL_ID without the Post/Skip row
++const draftMsg = { message_id: 50, chat: { id: 42, type: 'private' }, caption: 'CVE-2026-1 alert', caption_entities: [{ type: 'bold', offset: 0, length: 10 }], photo: [{}],
++  reply_markup: { inline_keyboard: [[{ text: 'open', url: 'https://x' }], [{ text: '📤 Post to channel', callback_data: 'P' }, { text: '✕ Skip', callback_data: 'X' }]] } };
++const otap = (data, from) => ({ callback_query: { id: 'q', data, from: { id: from }, message: draftMsg } });
++c = await run(otap('P', 7));
++assert.match(c[0].body.text, /Only the channel owner/);
++assert.ok(!c.some(x => x.method === 'copyMessage'));
++c = await run(otap('P', 42));
++assert.match(c.at(-1).body.text, /CHANNEL_ID is not set/); // not configured: nothing posted
++env.CHANNEL_ID = '@RootAccessClub';
++c = await run(otap('P', 42));
++const cp = c.find(x => x.method === 'copyMessage');
++assert.equal(cp.body.chat_id, '@RootAccessClub');
++assert.deepEqual(cp.body.reply_markup.inline_keyboard, [[{ text: 'open', url: 'https://x' }]]);
++assert.ok(c.some(x => x.method === 'editMessageReplyMarkup'));
++c = await run(otap('X', 42));
++assert.ok(!c.some(x => x.method === 'copyMessage'));
++assert.equal(c.at(-1).body.reply_markup.inline_keyboard[0][0].text, '✕ Skipped');
++// reply to a draft with a note: note on top, entities shifted
++c = await run({ message: { chat: { id: 42, type: 'private' }, from: { id: 42 }, text: 'My take', reply_to_message: draftMsg } });
++const cn = c.find(x => x.method === 'copyMessage');
++assert.equal(cn.body.caption, 'My take\n\nCVE-2026-1 alert');
++assert.equal(cn.body.caption_entities[0].offset, 9);
++assert.match(c.at(-1).body.text, /with your note/);
++// someone else replying to a draft is just a normal message
++c = await run({ message: { chat: { id: 7, type: 'private' }, from: { id: 7 }, text: 'hi there', reply_to_message: draftMsg } });
++assert.ok(!c.some(x => x.method === 'copyMessage'));
++const textDraft = { ...draftMsg, photo: undefined, caption: undefined, text: 'Early warning', entities: [{ type: 'bold', offset: 0, length: 5 }] };
++c = await run({ message: { chat: { id: 42, type: 'private' }, from: { id: 42 }, text: 'Heads up', reply_to_message: textDraft } });
++const sm = c.find(x => x.method === 'sendMessage' && x.body.chat_id === '@RootAccessClub');
++assert.equal(sm.body.text, 'Heads up\n\nEarly warning');
++assert.equal(sm.body.entities[0].offset, 10);
++delete env.CHANNEL_ID;
+ console.log('bot harness ok');
+diff --git a/tests/test_bot.py b/tests/test_bot.py
+index 3db09111..3db9d7d3 100644
+--- a/tests/test_bot.py
++++ b/tests/test_bot.py
+@@ -1,4 +1,6 @@
++import os
+ import sys
++from unittest import mock
+ import unittest
+ from pathlib import Path
+ 
+@@ -49,6 +51,29 @@ class CveApiTests(unittest.TestCase):
+         self.assertTrue(out["url"].endswith("cve/CVE-2026-1111"))
+ 
+ 
++class DraftTests(unittest.TestCase):
++    def test_drafts_keep_channel_buttons_and_add_post_skip(self):
++        import drafts
++        m = drafts.draft_markup({"inline_keyboard": [[{"text": "a", "url": "https://x"}]]})
++        self.assertEqual(m["inline_keyboard"][0][0]["url"], "https://x")
++        self.assertEqual([b["callback_data"] for b in m["inline_keyboard"][-1]], ["P", "X"])
++        with mock.patch.dict(os.environ, {"TELEGRAM_ADMIN_ID": "42"}):
++            self.assertEqual(drafts.admin_chat(), "42")
++        with mock.patch.dict(os.environ, {"TELEGRAM_ADMIN_ID": "@someone"}):
++            self.assertEqual(drafts.admin_chat(), "")
++
++    def test_only_kev_and_cvss9_become_drafts(self):
++        import notify_telegram as nt
++        self.assertTrue(nt.worth_a_draft(["C", "t", "critical", 9.8, True]))
++        self.assertFalse(nt.worth_a_draft(["C", "t", "critical", 9.8, False]))
++        self.assertFalse(nt.worth_a_draft(["C", "t", "high", 8.6, True]))
++
++    def test_no_workflow_posts_to_the_channel_directly(self):
++        for wf in ("update-snapshot.yml", "deploy.yml", "digest.yml"):
++            src = (ROOT / ".github/workflows" / wf).read_text(encoding="utf-8")
++            self.assertNotIn("TELEGRAM_CHAT_ID", src, wf)
++
++
+ class GroupAlertTests(unittest.TestCase):
+     def test_group_alerts_use_links_not_mini_app_buttons(self):
+         import notify_telegram as nt
+@@ -87,6 +112,9 @@ class DeployTests(unittest.TestCase):
+         admin = {b["name"]: b["text"] for b in deploy_bot.metadata("kvid", "123:abc", "4242")["bindings"] if b["type"] == "plain_text"}
+         self.assertEqual(admin["ADMIN_ID"], "4242")
+         self.assertNotIn("ADMIN_ID", {b["name"] for b in deploy_bot.metadata("kvid", "123:abc", "not-an-id")["bindings"]})
++        ch = {b["name"]: b["text"] for b in deploy_bot.metadata("kvid", "1:a", "", "@RootAccessClub")["bindings"] if b["type"] == "plain_text"}
++        self.assertEqual(ch["CHANNEL_ID"], "@RootAccessClub")
++        self.assertNotIn("CHANNEL_ID", {b["name"] for b in deploy_bot.metadata("kvid", "1:a", "", "bad id")["bindings"]})
+         cmds = [c for c, _d in deploy_bot.COMMANDS]
+         self.assertIn("week", cmds)
+         js = (ROOT / "worker/bot.js").read_text(encoding="utf-8")
+diff --git a/worker/bot.js b/worker/bot.js
+index a3e72183..f4ba4de7 100644
+--- a/worker/bot.js
++++ b/worker/bot.js
+@@ -7,7 +7,9 @@
+  * (scripts/notify_telegram.py) reads them and DMs matches. Groups: admins manage a group watchlist (same "w:<chat>"),
+  * and "g:<chat>" marks a group that wants the morning brief (scripts/digest.py forwards the daily channel post there).
+  *
+- * Bindings: KV (namespace), BOT_TOKEN (secret), WEBHOOK_SECRET (secret), SITE (plain text), ADMIN_ID (optional).
++ * Bindings: KV (namespace), BOT_TOKEN (secret), WEBHOOK_SECRET (secret), SITE (plain text), ADMIN_ID (optional),
++ * CHANNEL_ID (optional). Automation never posts to the channel: it DMs the owner drafts with 📤 Post / ✕ Skip
++ * buttons, and the bot copies a draft to CHANNEL_ID only when the owner taps Post or replies to it with a note.
+  */
+ const CVE_RE = /\bCVE-\d{4}-\d{4,}\b/i;
+ const MAX_WATCH = 10;
+@@ -127,6 +129,7 @@ async function handle(update, env) {
+   const m = text.match(/^\/([a-z_]+)(?:@\w+)?\s*(.*)$/i);
+   const cmd = m ? m[1].toLowerCase() : '', arg = m ? m[2].trim() : text;
+   if (!m && !priv) return; // in groups only answer explicit commands
++  if (priv && msg.reply_to_message && isOwner(env, msg.from) && isDraft(msg.reply_to_message)) return publish(env, msg.reply_to_message, msg);
+   const lim = limited(chat);
+   if (lim === 1) return send(env, chat, { text: 'Slow down a little — try again in a minute.' });
+   if (lim) return;
+@@ -174,6 +177,12 @@ async function onTap(q, env) {
+   const priv = msg.chat.type === 'private';
+   const [op, rest = ''] = [data.slice(0, data.indexOf(':') < 0 ? data.length : data.indexOf(':')), data.includes(':') ? data.slice(data.indexOf(':') + 1) : ''];
+   if (op === 'noop') return answer();
++  if ((op === 'P' || op === 'X') && priv && !rest) {
++    if (!isOwner(env, q.from)) return answer('Only the channel owner can do this.', true);
++    if (op === 'X') { await answer('Skipped'); return tg(env, 'editMessageReplyMarkup', { chat_id: chat, message_id: msg.message_id, reply_markup: kb([[cb('✕ Skipped', 'noop')]]) }); }
++    const r = await publish(env, msg, null);
++    return answer(r.ok ? '📤 Posted to the channel' : r.why, !r.ok);
++  }
+   if (!priv && 'aArSMG'.includes(op) && op && !(await isAdmin(env, chat, q.from))) return answer('Only group admins can change this.', true);
+   if (op === 'G' && !priv && (rest === 'on' || rest === 'off')) {
+     await setBrief(env, chat, rest === 'on', msg.chat.title);
+@@ -519,6 +528,39 @@ async function onMember(u, env) {
+   }
+ }
+ 
++/* ---------- owner drafts -> channel (nothing is posted without the owner) ---------- */
++const isOwner = (env, from) => !!(env.ADMIN_ID && from && String(from.id) === String(env.ADMIN_ID));
++const draftRows = m => ((m && m.reply_markup && m.reply_markup.inline_keyboard) || []);
++const isDraft = m => draftRows(m).some(r => r.some(x => x.callback_data === 'P'));
++const shift = (ents, by) => (ents || []).map(e => ({ ...e, offset: e.offset + by }));
++async function publish(env, draft, noteMsg) {
++  const done = async (ok, why) => { if (noteMsg) await send(env, draft.chat.id, { text: ok ? '📤 Posted to the channel with your note.' : esc(why) }); return { ok, why }; };
++  if (!env.CHANNEL_ID) return done(false, 'CHANNEL_ID is not set: add the TELEGRAM_CHAT_ID secret and redeploy the bot.');
++  if (!isDraft(draft)) return done(false, 'This draft was already handled.');
++  const rows = draftRows(draft).map(r => r.filter(x => !x.callback_data)).filter(r => r.length);
++  const markup = rows.length ? { inline_keyboard: rows } : undefined;
++  const note = noteMsg ? String(noteMsg.text || '').trim() : '';
++  if (noteMsg && !note) return done(false, 'Reply with text to add a note.');
++  const add = note ? note.length + 2 : 0, ents = noteMsg ? (noteMsg.entities || []) : [];
++  let r;
++  if (!note) r = await tg(env, 'copyMessage', { chat_id: env.CHANNEL_ID, from_chat_id: draft.chat.id, message_id: draft.message_id, ...(markup ? { reply_markup: markup } : {}) });
++  else if (draft.photo) {
++    const caption = note + '\n\n' + (draft.caption || '');
++    if (caption.length > 1024) return done(false, `Note too long for a photo post: keep it under ${1022 - (draft.caption || '').length} characters.`);
++    r = await tg(env, 'copyMessage', { chat_id: env.CHANNEL_ID, from_chat_id: draft.chat.id, message_id: draft.message_id, caption,
++      caption_entities: [...ents, ...shift(draft.caption_entities, add)], ...(markup ? { reply_markup: markup } : {}) });
++  } else {
++    const text = note + '\n\n' + (draft.text || '');
++    if (text.length > 4096) return done(false, 'Note too long.');
++    r = await tg(env, 'sendMessage', { chat_id: env.CHANNEL_ID, text, entities: [...ents, ...shift(draft.entities, add)], link_preview_options: { is_disabled: true }, ...(markup ? { reply_markup: markup } : {}) });
++  }
++  if (!r.ok) return done(false, 'Telegram refused the post: ' + clip(r.desc, 120));
++  const id = r.result && r.result.message_id, ch = String(env.CHANNEL_ID);
++  const seen = id && ch.startsWith('@') ? link('✅ Posted · open', `https://t.me/${ch.slice(1)}/${id}`) : cb('✅ Posted', 'noop');
++  await tg(env, 'editMessageReplyMarkup', { chat_id: draft.chat.id, message_id: draft.message_id, reply_markup: kb([[seen]]) });
++  return done(true);
++}
++
+ /* ---------- inline mode: @SubZer0Robot CVE-2026-… in any chat ---------- */
+ async function onInline(q, env) {
+   const text = String(q.query || '').trim().slice(0, 64);
+@@ -548,7 +590,7 @@ async function tg(env, method, body, retry = true) {
+   const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+   });
+-  if (r.ok) { if (method !== 'getChatMember') return { ok: true }; try { return { ok: true, result: (await r.json()).result }; } catch { return { ok: false }; } }
++  if (r.ok) { try { return { ok: true, result: (await r.json()).result }; } catch { return { ok: true }; } }
+   let j = {};
+   try { j = await r.json(); } catch { /* not json */ }
+   const wait = j.parameters && j.parameters.retry_after;
